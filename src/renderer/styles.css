@@ -1,0 +1,2478 @@
+@import 'tailwindcss';
+@source "../**/*.{ts,tsx}";
+
+/* ---------- shadcn design tokens (dark) ---------- */
+
+:root {
+  --background: #080d16;
+  --foreground: #e8eef8;
+  --card: #0d1726;
+  --card-foreground: #e8eef8;
+  --popover: #111b2c;
+  --popover-foreground: #e8eef8;
+  --primary: #5148e8;
+  --primary-foreground: #ffffff;
+  --secondary: #111b2c;
+  --secondary-foreground: #e8eef8;
+  --muted: #111b2c;
+  --muted-foreground: #7d8da6;
+  --accent: #1d2c47;
+  --accent-foreground: #ffffff;
+  --destructive: #f87171;
+  --destructive-foreground: #1b0708;
+  --border: #1d2d45;
+  --input: #273b58;
+  --ring: #6d66f5;
+  --radius: 0.875rem;
+
+  /* ClipForge extras */
+  --panel: #0d1726;
+  --panel-deep: #0a111d;
+  --elevated: #111b2c;
+  --input-bg: #0b1322;
+  --text-dim: #7d8da6;
+  --text-soft: #9aaac1;
+  --accent-bright: #6d66f5;
+  --accent-soft: #a5a0ff;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --sidebar-width: 264px;
+  /* Floors for the centre column. `--timeline-max` is the tallest the timeline card
+     realistically gets (its trim row wraps to a second line in a narrow centre
+     column), and `--preview-min` is how far the preview above it may be squeezed to
+     pay for that. Together they are what the main grid reserves, so a short window
+     scrolls instead of letting the two panes paint over each other. The preview's
+     floor is deliberately low: it is the pane that can afford to shrink, and the
+     frozen alternative — a tall floor — is what made the panes overlap. */
+  --preview-min: 140px;
+  --timeline-max: 272px;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-bg: var(--input-bg);
+  --color-ring: var(--ring);
+  --color-panel: var(--panel);
+  --color-elevated: var(--elevated);
+  --color-soft: var(--text-soft);
+  --color-dim: var(--text-dim);
+  --color-brand: var(--accent-bright);
+  --color-brand-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ---------- base ---------- */
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  html {
+    /* One number sizes the whole app. The Tailwind primitives put their type,
+       padding and control heights in rem, and the hand-written rules below do the
+       same, so on a small screen everything — text, buttons, fields — tightens up
+       together instead of overflowing. It only ever shrinks: above ~1440px the
+       clamp is pinned at the 16px the sheet was designed against. */
+    font-size: clamp(13.5px, 0.55vw + 8px, 16px);
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  ::selection {
+    background: rgb(109 102 245 / 0.4);
+  }
+
+  button:focus-visible,
+  [role='tab']:focus-visible,
+  [role='slider']:focus-visible,
+  [role='checkbox']:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #22334d;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2f4a71;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ---------- shell ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  height: 100vh;
+  /* The window is frameless, so this hairline is the only edge it has. Inset:
+     a real border would eat into the 100vh the layout is sized against. */
+  box-shadow: inset 0 0 0 1px #16233a;
+}
+
+.app.no-sidebar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ---------- frameless chrome ---------- */
+
+/* With no OS frame the app draws its own drag regions: the top row of each column
+   and the strip under it. Every control inside opts back out, so the gaps between
+   them are what grab the window and the controls still take their own clicks. */
+.sidebar,
+.topbar,
+.media-line,
+.settings-head {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.sidebar button,
+.sidebar a,
+.topbar input,
+.topbar button,
+.topbar a,
+.settings-head button,
+.settings-head a,
+.window-controls {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  flex: 0 0 auto;
+}
+
+.window-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.window-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.window-btn:hover {
+  background: #16233a;
+  border-color: #24354f;
+  color: var(--foreground);
+}
+
+.window-btn:active {
+  background: #1d2c47;
+}
+
+/* The one destructive control in the chrome reads the same everywhere. */
+.window-btn.close:hover {
+  background: #d13438;
+  border-color: #e2565a;
+  color: #fff;
+}
+
+/* Fullscreen has no window to move or close, so the controls step aside and the
+   drag regions stop swallowing the pointer. */
+.app.fullscreen .window-controls {
+  display: none;
+}
+
+.app.fullscreen .sidebar,
+.app.fullscreen .topbar,
+.app.fullscreen .media-line,
+.app.fullscreen .settings-head {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.sidebar {
+  background: var(--panel-deep);
+  border-right: 1px solid var(--border);
+  padding: 20px 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px 24px;
+  min-width: 0;
+}
+
+.brand-mark {
+  display: block;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  /* The artwork is trimmed to its own edge, so the mark is a little larger than the
+     tile it replaced: the transparent corners give it the same optical weight. */
+  object-fit: contain;
+}
+
+.brand-text {
+  min-width: 0;
+}
+
+.brand-name {
+  font-size: 1.1875rem;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+/* Wraps rather than truncates: the tagline is the only place the app explains
+   itself up here, and "The All-in-One GIF & Video Stu…" explains nothing. */
+.brand-sub {
+  color: #5e6f8a;
+  font-size: 0.71875rem;
+  line-height: 1.35;
+}
+
+.nav-label {
+  color: #5f708c;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 1.3px;
+  padding: 4px 10px 8px;
+}
+
+.nav-item {
+  justify-content: flex-start;
+  gap: 12px;
+  height: 46px;
+  width: 100%;
+  padding: 0 14px;
+  border-radius: 11px;
+  color: var(--text-soft);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.nav-item:hover {
+  background: #131e31;
+  color: #eef2ff;
+}
+
+.nav-item.active {
+  background: #221f5e;
+  border: 1px solid #4c47b8;
+  color: #fff;
+}
+
+.nav-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.version-card {
+  background: var(--elevated);
+  border: 1px solid #1f3049;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.version-card strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.tagline {
+  color: #5e6f8a;
+  line-height: 1.5;
+  padding: 0 8px;
+  font-size: 0.78125rem;
+}
+
+/* ---------- workspace ---------- */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 26px 20px;
+  min-width: 0;
+  min-height: 0;
+  /* Short windows — and windows with a session or install card in the flow — cannot
+     fit the preview, the timeline and the log at once. The workspace scrolls rather
+     than letting the panes' minimum heights paint over one another. */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Nothing in the workspace may shrink: when it does not fit, it scrolls. */
+  flex: 0 0 auto;
+}
+
+.url-input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  background: var(--elevated);
+  border: 1px solid var(--input);
+  border-radius: 12px;
+  padding: 0 18px;
+  outline: none;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.url-input:focus {
+  border-color: var(--accent-bright);
+  background: #131e31;
+}
+
+.media-line {
+  color: var(--text-dim);
+  flex: 0 0 auto;
+  min-height: 20px;
+  font-size: 0.84375rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 20px;
+  flex: 1;
+  /* Reserve both columns' minimums. `min-height: min-content` would do it, except
+     that the inspector reports its whole scrollable content as its minimum, which
+     would leave the panel unbounded and its pinned action unreachable. */
+  min-height: calc(var(--preview-min) + 18px + var(--timeline-max));
+}
+
+.center-column {
+  display: grid;
+  /* The first row may grow but never shrink below the preview's floor, so the pane
+     and the timeline cannot overlap however tall the window is. */
+  grid-template-rows: minmax(var(--preview-min), 1fr) auto;
+  gap: 18px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.right-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------- preview ---------- */
+
+.preview-panel {
+  position: relative;
+  background: #060a12;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--preview-min);
+}
+
+.preview-panel video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.preview-panel:fullscreen {
+  border: none;
+  border-radius: 0;
+  background: #000;
+}
+
+.preview-empty {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 40px 28px;
+  line-height: 1.6;
+}
+
+.preview-empty strong {
+  display: block;
+  color: var(--foreground);
+  font-size: 1.125rem;
+  margin-bottom: 10px;
+}
+
+.preview-shortcuts {
+  display: block;
+  margin-top: 18px;
+  color: #55657f;
+  font-size: 0.78125rem;
+}
+
+.preview-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  height: 52px;
+  padding: 0 26px;
+  border-radius: 999px;
+  border: 1px solid rgb(160 155 255 / 0.5);
+  background: rgb(16 24 40 / 0.82);
+  gap: 9px;
+}
+
+.preview-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  background: linear-gradient(to top, rgb(4 8 14 / 0.95), rgb(4 8 14 / 0.55) 60%, rgb(4 8 14 / 0));
+}
+
+.preview-time {
+  color: #cbd8ea;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+
+.scrub {
+  flex: 1;
+  min-width: 60px;
+}
+
+.preview-note {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  background: rgb(15 23 42 / 0.9);
+  border: 1px solid #33415c;
+  border-radius: 999px;
+  padding: 7px 15px;
+  color: #cbd8ea;
+  font-size: 0.78125rem;
+}
+
+.preview-note.loop {
+  left: auto;
+  right: 16px;
+  color: #c7c2ff;
+  border-color: #4e46a4;
+}
+
+/* ---------- timeline ---------- */
+
+.timeline {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eyebrow {
+  color: #7182a1;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.track {
+  position: relative;
+  height: 72px;
+  border-radius: 10px;
+  background-color: #0a1220;
+  background-size: 100% 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+  border: 1px solid var(--border);
+  /* Not hidden: the trim handles are centred on their cut position, so clipping
+     the box would slice them in half exactly at 0 and at the clip end. The
+     background and the shade round their own corners instead. */
+  cursor: crosshair;
+}
+
+.track.disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.track.building {
+  animation: track-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes track-pulse {
+  0%,
+  100% {
+    background-color: #0a1220;
+  }
+  50% {
+    background-color: #101c30;
+  }
+}
+
+.track-shade {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgb(6 10 18 / 0.62);
+  pointer-events: none;
+}
+
+.track-band {
+  /* Draggable: grabbing the middle slides the whole selection. */
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 8px;
+  border-left: 2px solid var(--accent-soft);
+  border-right: 2px solid var(--accent-soft);
+  background: rgb(81 72 232 / 0.22);
+  box-shadow: inset 0 0 0 1px rgb(109 102 245 / 0.35);
+  cursor: grab;
+  touch-action: none;
+}
+
+.track-band:active {
+  cursor: grabbing;
+}
+
+/* Layer order inside the track: shade, selection, playhead, handles. */
+.track-playhead {
+  z-index: 1;
+}
+
+.track-handle {
+  z-index: 2;
+}
+
+.band-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgb(9 14 24 / 0.6);
+  border: 1px solid rgb(109 102 245 / 0.5);
+  color: #cfd6ff;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+
+.band-grip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.track:hover .band-grip,
+.track.dragging .band-grip {
+  opacity: 1;
+}
+
+.track-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+  margin-left: -12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.track-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 18px;
+  border-radius: 8px;
+  border: 2px solid #fff;
+  background: linear-gradient(180deg, var(--accent-bright), #5148e8);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.5);
+}
+
+.track-handle:hover::before,
+.track-handle.active::before {
+  background: linear-gradient(180deg, #8b85ff, var(--accent-bright));
+  border-color: #fff;
+  box-shadow: 0 0 0 4px rgb(109 102 245 / 0.25), 0 2px 10px rgb(0 0 0 / 0.5);
+}
+
+.track-handle:focus-visible::before {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.track-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  padding: 0;
+  border: 0;
+  background: #fff;
+  opacity: 0.85;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.track-playhead::before {
+  /* Wider grab target than the hairline that is actually drawn. */
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  right: -8px;
+}
+
+.track-playhead.active {
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.45);
+  opacity: 1;
+}
+
+.track-hover {
+  pointer-events: none;
+  position: absolute;
+  bottom: 6px;
+  transform: translateX(-50%);
+  background: rgb(8 13 22 / 0.92);
+  border: 1px solid var(--input);
+  border-radius: 7px;
+  padding: 3px 9px;
+  font-size: 0.71875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-soft);
+}
+
+.track-hint {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: #8fa0bd;
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+/* Ruler under the track. The ticks are absolutely positioned by percentage, so this
+   has to be their containing block — otherwise they resolve against the page and
+   drift sideways — and it clips, since the first and last labels hang half a label
+   past the track and would otherwise make the window scroll. */
+.track-ticks {
+  position: relative;
+  height: 18px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+}
+
+.trim-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.field-label {
+  color: var(--text-dim);
+}
+
+.time-input {
+  width: 124px;
+  height: 38px;
+  text-align: center;
+  background: var(--input-bg);
+  border: 1px solid var(--input);
+  border-radius: 10px;
+  padding: 0 10px;
+  outline: none;
+  font-size: 0.84375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-input:focus {
+  border-color: var(--accent-bright);
+}
+
+.trim-spacer {
+  flex: 1;
+}
+
+.duration-chip {
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.duration-chip.warn {
+  color: var(--warning);
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+/* ---------- install card ---------- */
+
+.install-card {
+  background: #2a2110;
+  border: 1px solid #72531b;
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 14px;
+}
+
+.install-card.is-ready {
+  background: #10231b;
+  border-color: #246b42;
+}
+
+.install-card.has-error {
+  background: #2a1616;
+  border-color: #7f2b2b;
+}
+
+.install-card.compact {
+  background: var(--panel-deep);
+  border-color: var(--input);
+}
+
+.install-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.install-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.install-heading strong {
+  color: #f5d999;
+}
+
+.install-card.is-ready .install-heading strong {
+  color: #86efac;
+}
+
+.install-card.has-error .install-heading strong {
+  color: #fecaca;
+}
+
+.install-card.compact .install-heading strong {
+  color: var(--foreground);
+}
+
+.install-sub {
+  color: #a9987a;
+  font-size: 0.78125rem;
+}
+
+.install-card.compact .install-sub {
+  color: var(--text-dim);
+}
+
+.install-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.install-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.install-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: rgb(8 13 22 / 0.42);
+  font-size: 0.8125rem;
+}
+
+.install-row .install-bar {
+  grid-column: 1 / -1;
+  display: block;
+  height: 3px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.08);
+  overflow: hidden;
+}
+
+.install-row .install-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-bright);
+  transition: width 180ms ease;
+}
+
+.install-row .install-error {
+  grid-column: 1 / -1;
+  color: #fecaca;
+  font-size: 0.71875rem;
+  word-break: break-word;
+}
+
+.install-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install-phase {
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.install-bytes {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 96px;
+  text-align: right;
+}
+
+.install-row.done .install-phase {
+  color: #86efac;
+}
+
+.install-row.failed .install-phase {
+  color: #fecaca;
+}
+
+.install-row.cancelled .install-phase {
+  color: var(--text-dim);
+}
+
+.install-row.downloading .install-phase,
+.install-row.installing .install-phase,
+.install-row.extracting .install-phase,
+.install-row.verifying .install-phase,
+.install-row.resolving .install-phase {
+  color: #c7c2ff;
+}
+
+/* ---------- output box ---------- */
+
+.output-box {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.output-stage {
+  position: relative;
+  background: #060a12;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  min-height: 200px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.output-stage img,
+.output-stage video {
+  width: 100%;
+  height: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #000;
+}
+
+.output-empty {
+  color: var(--text-dim);
+  text-align: center;
+  padding: 48px 26px;
+  line-height: 1.6;
+}
+
+.output-empty strong {
+  display: block;
+  color: var(--foreground);
+  margin-bottom: 4px;
+}
+
+/* ---------- activity ---------- */
+
+.activity-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--input-bg);
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.activity-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.activity-count {
+  color: #55657f;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-head .link-btn:first-of-type {
+  margin-left: auto;
+}
+
+.activity {
+  padding: 0 16px 14px;
+  height: 96px;
+  overflow-y: auto;
+  color: #7f92ad;
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.78125rem;
+  line-height: 1.55;
+  user-select: text;
+}
+
+.activity-empty {
+  color: #55657f;
+}
+
+.activity-line {
+  display: flex;
+  gap: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.activity-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-time {
+  color: #46566e;
+  flex: 0 0 auto;
+}
+
+.activity-line.error {
+  color: #f7a3a3;
+}
+
+.activity-line.done {
+  color: #7fd6a2;
+}
+
+/* ---------- settings ---------- */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px 32px 96px;
+  overflow-y: auto;
+  min-height: 0;
+  height: 100vh;
+}
+
+.settings-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 940px;
+  width: 100%;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.card p {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.dep-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #16202f;
+}
+
+.dep-row:last-of-type {
+  border-bottom: none;
+}
+
+.dep-name {
+  font-weight: 600;
+  min-width: 74px;
+}
+
+.dep-version {
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+  min-width: 145px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dep-path {
+  color: var(--text-dim);
+  margin-left: auto;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text-soft);
+}
+
+.kv span:last-child {
+  color: var(--foreground);
+  text-align: right;
+}
+
+.error-text {
+  color: var(--destructive);
+}
+
+.settings-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  background: rgb(13 23 38 / 0.96);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(6px);
+  max-width: 940px;
+}
+
+.settings-bar .primary-action {
+  margin-left: auto;
+}
+
+.settings-bar.dirty {
+  border-color: #4e46a4;
+}
+
+/* ---------- export panel controls ---------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.field-hint {
+  color: var(--text-dim);
+  font-size: 0.78125rem;
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.field-hint.warn {
+  color: var(--warning);
+}
+
+.num-input {
+  width: 76px;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--input-bg);
+  border: 1px solid var(--input);
+  border-radius: 9px;
+  color: var(--foreground);
+  font-size: 0.84375rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.num-input:focus {
+  border-color: var(--accent-bright);
+  outline: none;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.check-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.check-row strong {
+  font-size: 0.84375rem;
+  font-weight: 600;
+}
+
+.check-row em {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.section-toggle {
+  justify-content: flex-start;
+  gap: 9px;
+  color: var(--text-soft);
+  padding-left: 2px;
+}
+
+.section-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.advanced-block {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgb(11 19 34 / 0.55);
+}
+
+.crop-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* The panel is taller than a short window. Rather than pinning the action row as a
+   sticky overlay (which let the last field slide underneath it), the panel is split
+   into a scrolling body and a footer that is a real flex row — so the primary action
+   is always visible and nothing is ever hidden behind it. */
+.export-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 20px 10px;
+  scrollbar-gutter: stable;
+}
+
+.export-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px 22px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.preset-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preset-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ---------- export panel sections ---------- */
+
+/* A titled group of controls. The heading plus the hairline between groups is what
+   keeps a long panel readable as a few decisions at a glance. */
+.panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-section:last-of-type {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.panel-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-section-head svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: var(--accent-soft);
+}
+
+.panel-section-head h4 {
+  margin: 0;
+  font-size: 0.90625rem;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+}
+
+.estimate-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgb(17 27 44 / 0.55);
+}
+
+.estimate-value {
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.estimate-measure {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgb(11 19 34 / 0.7);
+}
+
+.progress-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 0.78125rem;
+}
+
+.progress-meta span:first-child {
+  color: var(--text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.78125rem;
+}
+
+.step-list li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #5f708c;
+}
+
+.step-list li::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  border: 1px solid #33445f;
+  flex: 0 0 auto;
+}
+
+.step-list li.done {
+  color: var(--text-soft);
+}
+
+.step-list li.done::before {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.step-list li.active {
+  color: #fff;
+  font-weight: 600;
+}
+
+.step-list li.active::before {
+  background: var(--accent-bright);
+  border-color: var(--accent-soft);
+  box-shadow: 0 0 0 3px rgb(109 102 245 / 0.25);
+}
+
+.btn-quiet {
+  color: var(--text-dim);
+}
+
+.btn-quiet:hover {
+  color: var(--foreground);
+}
+
+/* ---------- status area ---------- */
+
+.status-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.status-pill {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.notice {
+  color: var(--accent-soft);
+  font-size: 0.78125rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: notice-in 160ms ease;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+/* ---------- timeline extras ---------- */
+
+.timeline-meta {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.78125rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.trim-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.trim-hint-alt {
+  color: #5b6b85;
+  font-size: 0.71875rem;
+}
+
+.tick {
+  position: absolute;
+  transform: translateX(-50%);
+  color: #5f708c;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.track-hover-card {
+  position: absolute;
+  bottom: 88px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--input);
+  background: rgb(6 10 18 / 0.94);
+  box-shadow: 0 10px 28px rgb(2 6 14 / 0.6);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hover-shot {
+  border-radius: 5px;
+  background-repeat: no-repeat;
+}
+
+.track-hover-frame {
+  pointer-events: none;
+  position: absolute;
+  bottom: 6px;
+  transform: translateX(-50%);
+  color: #5f708c;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.track-snap {
+  pointer-events: none;
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgb(9 14 24 / 0.86);
+  border: 1px solid rgb(109 102 245 / 0.45);
+  color: #cfd6ff;
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.track-snap.free {
+  border-color: var(--input);
+  color: var(--text-dim);
+}
+
+/* ---------- preview crop + loading ---------- */
+
+/* Sits over the letterboxed picture area, so crop percentages map to the frame. */
+.crop-layer {
+  position: absolute;
+  touch-action: none;
+  overflow: hidden;
+}
+
+.crop-box {
+  position: absolute;
+  border: 1px solid rgb(255 255 255 / 0.9);
+  box-shadow: 0 0 0 9999px rgb(4 8 14 / 0.55);
+  cursor: move;
+}
+
+.crop-size {
+  position: absolute;
+  top: -20px;
+  left: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgb(9 14 24 / 0.9);
+  color: #e6ebf7;
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.crop-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  background: var(--accent-bright);
+  border-radius: 3px;
+}
+
+.crop-handle.nw {
+  top: -7px;
+  left: -7px;
+  cursor: nwse-resize;
+}
+
+.crop-handle.ne {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+
+.crop-handle.sw {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
+}
+
+.crop-handle.se {
+  bottom: -7px;
+  right: -7px;
+  cursor: nwse-resize;
+}
+
+.preview-skeleton {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  overflow: hidden;
+  background: #0a1220;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.skeleton-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgb(109 102 245 / 0.16) 50%, transparent 80%);
+  animation: shimmer 1.4s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.preview-skeleton-text {
+  position: relative;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+}
+
+.volume {
+  width: 68px;
+  flex: 0 0 auto;
+  accent-color: var(--accent-bright);
+  cursor: pointer;
+}
+
+/* ---------- drop zone ---------- */
+
+.drop-zone {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgb(6 10 18 / 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.drop-zone-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 520px;
+  padding: 52px 44px;
+  border: 2px dashed var(--accent-soft);
+  border-radius: 20px;
+  background: rgb(15 23 40 / 0.92);
+  text-align: center;
+  box-shadow: 0 24px 60px rgb(2 6 14 / 0.6);
+}
+
+.drop-zone-inner svg {
+  width: 34px;
+  height: 34px;
+  color: var(--accent-soft);
+}
+
+.drop-zone-inner strong {
+  font-size: 1.125rem;
+}
+
+.drop-zone-inner span {
+  color: var(--text-dim);
+  font-size: 0.84375rem;
+}
+
+/* ---------- guide cards ---------- */
+
+.guide-card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid rgb(109 102 245 / 0.4);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgb(28 26 78 / 0.75), rgb(13 23 38 / 0.9));
+}
+
+.guide-card.error {
+  border-color: rgb(248 113 113 / 0.45);
+  background: linear-gradient(135deg, rgb(66 24 30 / 0.7), rgb(13 23 38 / 0.9));
+}
+
+/* A downloaded update waiting on a restart is good news, so it reads green. */
+.guide-card.ready {
+  border-color: rgb(74 222 128 / 0.45);
+  background: linear-gradient(135deg, rgb(15 46 33 / 0.7), rgb(13 23 38 / 0.9));
+}
+
+.update-status {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.guide-head strong {
+  font-size: 0.96875rem;
+}
+
+.guide-head .btn-quiet {
+  margin-left: auto;
+}
+
+.guide-body {
+  color: var(--text-soft);
+  font-size: 0.84375rem;
+  line-height: 1.6;
+}
+
+.guide-line {
+  margin: 0;
+}
+
+.guide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.guide-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.guide-steps li span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.guide-steps strong {
+  font-size: 0.84375rem;
+}
+
+.guide-steps em {
+  color: var(--text-dim);
+  font-size: 0.78125rem;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.guide-index {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* ---------- error card ---------- */
+
+.error-card {
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  gap: 13px;
+  padding: 16px 18px;
+  border: 1px solid rgb(248 113 113 / 0.45);
+  border-radius: var(--radius);
+  background: rgb(58 20 26 / 0.55);
+}
+
+.error-card > svg {
+  flex: 0 0 auto;
+  width: 19px;
+  height: 19px;
+  margin-top: 1px;
+  color: var(--destructive);
+}
+
+.error-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.error-body strong {
+  display: block;
+  font-size: 0.84375rem;
+  margin-bottom: 4px;
+}
+
+.error-body p {
+  margin: 0;
+  color: #f2c4c4;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.error-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* ---------- toast ---------- */
+
+.toast {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  max-width: 480px;
+  padding: 16px 18px;
+  border: 1px solid #2b4a37;
+  border-radius: var(--radius);
+  background: rgb(13 26 24 / 0.97);
+  box-shadow: 0 18px 44px rgb(2 6 14 / 0.65);
+  animation: toast-in 180ms ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.toast > svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  color: var(--success);
+}
+
+.toast-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.toast-body strong {
+  font-size: 0.84375rem;
+}
+
+.toast-body span {
+  color: var(--text-soft);
+  font-size: 0.78125rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* ---------- shortcut sheet ---------- */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  background: rgb(4 8 14 / 0.7);
+}
+
+.sheet {
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 22px 24px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 26px 70px rgb(2 6 14 / 0.7);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.sheet-head strong {
+  font-size: 1.0625rem;
+}
+
+.sheet-head .btn-quiet {
+  margin-left: auto;
+}
+
+.sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sheet-list li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 0.84375rem;
+  color: var(--text-soft);
+}
+
+.sheet-list kbd {
+  flex: 0 0 148px;
+  padding: 6px 10px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* ---------- activity log extras ---------- */
+
+.activity-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: #4d5f7d;
+}
+
+.activity-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.activity-line.done .activity-icon {
+  color: var(--success);
+}
+
+.activity-line.warn .activity-icon {
+  color: var(--warning);
+}
+
+.activity-line.error .activity-icon {
+  color: var(--destructive);
+}
+
+.activity-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgb(251 191 36 / 0.4);
+  border-radius: 999px;
+  background: rgb(60 44 12 / 0.6);
+  color: var(--warning);
+  font-size: 0.71875rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.activity-flag svg {
+  width: 11px;
+  height: 11px;
+}
+
+.activity-filters {
+  display: flex;
+  gap: 8px;
+  padding: 6px 16px 10px;
+}
+
+.filter-chip {
+  height: 28px;
+  padding: 0 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.filter-chip:hover {
+  color: var(--foreground);
+  border-color: var(--input);
+}
+
+.filter-chip.on {
+  background: var(--accent);
+  border-color: var(--accent-bright);
+  color: #fff;
+}
+
+.btn-label {
+  white-space: nowrap;
+}
+
+/* ---------- output panel extras ---------- */
+
+.optimised-note {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 16px;
+  border: 1px solid #24402f;
+  border-radius: 12px;
+  background: rgb(15 32 24 / 0.6);
+  color: var(--text-soft);
+  font-size: 0.78125rem;
+  line-height: 1.45;
+}
+
+.drag-out {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px dashed var(--input);
+  border-radius: 12px;
+  background: rgb(11 19 34 / 0.6);
+  color: var(--text-soft);
+  cursor: grab;
+}
+
+.drag-out:hover {
+  border-color: var(--accent-bright);
+  color: var(--foreground);
+}
+
+.drag-out:active {
+  cursor: grabbing;
+}
+
+.drag-out svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.drag-out-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drag-out em {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.71875rem;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+/* ---------- media tools list (Settings → Media tools) ---------- */
+
+.tool-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Hairlines instead of a box per row: four tools read as one compact block. */
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 16px;
+  background: rgb(11 19 34 / 0.45);
+}
+
+.tool-row + .tool-row {
+  border-top: 1px solid var(--border);
+}
+
+.tool-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #43536b;
+}
+
+.tool-row.ok .tool-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgb(74 222 128 / 0.14);
+}
+
+.tool-row.missing .tool-dot {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px rgb(251 191 36 / 0.14);
+}
+
+.tool-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84375rem;
+  font-weight: 600;
+}
+
+.tool-version {
+  margin-right: auto;
+  color: var(--text-dim);
+  font-size: 0.78125rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-folder {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 16px;
+  font-size: 0.78125rem;
+}
+
+.tool-folder-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  /* Long Windows paths keep their meaningful tail visible when they do not fit. */
+  text-align: left;
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1400px) {
+  :root {
+    /* The narrower centre column wraps the timeline's trim row onto a second line,
+       so the preview gives a little more of itself back before the workspace has to
+       start scrolling. */
+    --preview-min: 180px;
+  }
+
+  .main {
+    grid-template-columns: minmax(0, 1fr) 356px;
+  }
+
+  /* The transport row runs out of room before the preview does. The volume
+     slider is the one control there that duplicates another: the mute toggle
+     beside it stays, so the bar never spills past the pane's edge. */
+  .volume {
+    display: none;
+  }
+}
+
+/* Once the inspector takes its share of a smaller window, the trim row has no room
+   for the two-line hint beside the buttons: the hint would wrap onto a line of its
+   own and make the whole centre column taller than the window. The buttons matter
+   more, so the hint only appears where the row genuinely has space for it. */
+@media (max-width: 1560px) {
+  .trim-hint {
+    display: none;
+  }
+}
+
+/* Narrower time codes keep the trim row on one line here, which is what holds the
+   timeline to the height the main grid reserved for it. */
+@media (max-width: 1360px) {
+  .time-input {
+    width: 112px;
+  }
+}
+
+/* The sidebar never disappears: on a narrow window it becomes a permanent icon
+   rail so Home and Settings stay reachable while the workspace keeps its width.
+   The labels stay out of the way at every pointer position — the rail is the
+   sidebar at this size, not a collapsed state that expands under the cursor —
+   and the nav tooltips are what name each row. */
+@media (max-width: 1180px) {
+  .app {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .sidebar .nav-text,
+  .sidebar .nav-label,
+  .sidebar .brand-text,
+  .sidebar .sidebar-footer {
+    display: none;
+  }
+
+  .sidebar .brand {
+    justify-content: center;
+    padding: 4px 0 14px;
+  }
+
+  .sidebar .nav-item {
+    justify-content: center;
+    padding: 0;
+    position: relative;
+  }
+
+  /* In the rail there is no room for the count badge beside the icon, so it
+     becomes a small corner pip instead of squeezing the row. */
+  .sidebar .nav-item .ml-auto {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    margin-left: 0;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    font-size: 0.5625rem;
+  }
+}
+
+@media (max-width: 1080px) {
+  /* Stacked, the two panes are rows of one column. `max-content` keeps each row at
+     the height its content actually needs: an `auto` row is allowed to shrink to
+     the items' minimum, and both items carry `min-height: 0` for the side-by-side
+     case, so the timeline used to paint over the top of the panel. */
+  .main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content;
+    /* Stacked, the workspace scrolls, so nothing here may shrink to fit it: a flex
+       item that shrinks drops below its own content and the panes then paint over
+       the log underneath. Content sizing is the honest answer — the panel's height
+       varies with the window, so a fixed floor cannot stand in for it. */
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+
+  .center-column {
+    grid-template-rows: minmax(var(--preview-min), 40vh) auto;
+    min-height: 0;
+  }
+
+  /* The inspector keeps its own bounded scroll box with its pinned action rather
+     than stretching into one long page: on a small screen the thing worth pinning
+     is still the thing you press to export. */
+  .right-panel {
+    height: min(620px, 70vh);
+  }
+
+  /* Stacked, width is the scarce dimension. The top bar's labels go first: every
+     one of those buttons already carries a tooltip and an aria-label, and the URL
+     field is what actually needs the room. */
+  .workspace {
+    padding: 16px 18px 16px;
+    gap: 14px;
+  }
+
+  .topbar .btn-label {
+    display: none;
+  }
+
+  .window-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .preview-controls {
+    padding: 10px 14px;
+    gap: 8px;
+  }
+}
+
+/* A 1080p laptop at 125% scaling leaves a 1536x816 work area, so the inspector is
+   ~50px shorter than the 900px most numbers are measured at. Without this the crop
+   control — the one control worth reaching without scrolling — sat just below the
+   fold. The log is the pane that can give the space back. */
+@media (max-height: 880px) {
+  :root {
+    --timeline-max: 264px;
+  }
+
+  .activity {
+    height: 88px;
+  }
+
+  .workspace {
+    padding: 18px 22px 16px;
+    gap: 16px;
+  }
+
+  .timeline {
+    gap: 10px;
+  }
+}
+
+@media (max-height: 780px) {
+  :root {
+    --preview-min: 160px;
+    --timeline-max: 256px;
+  }
+
+  .activity {
+    height: 80px;
+  }
+
+  /* A short pane has to drop the least useful line of the empty state rather than
+     clip it. */
+  .preview-empty {
+    padding: 22px 24px;
+  }
+
+  .preview-empty strong {
+    font-size: 1rem;
+    margin-bottom: 6px;
+  }
+
+  .preview-shortcuts {
+    display: none;
+  }
+}
+
+/* At the app's minimum height the roomy rhythm above would leave the timeline and
+   the inspector fighting over nothing, so the few blocks that can give space back
+   do: the log, the timeline and the inspector's own padding. */
+@media (max-height: 720px) {
+  :root {
+    --preview-min: 150px;
+    --timeline-max: 248px;
+  }
+
+  .activity {
+    height: 56px;
+  }
+
+  .timeline {
+    padding: 14px 16px 12px;
+    gap: 10px;
+  }
+
+  .track {
+    height: 60px;
+  }
+
+  .export-scroll {
+    padding: 14px 16px 8px;
+  }
+
+  .panel-section {
+    gap: 12px;
+    padding-bottom: 14px;
+  }
+
+  .export-footer {
+    gap: 10px;
+    padding: 12px 16px 16px;
+  }
+
+  /* Height is the scarce dimension here, so cap the fluid scale a little lower
+     than the width rule would have it — but never *above* it, or a narrow, short
+     window would grow its type as it shrinks. */
+  html {
+    font-size: min(15px, clamp(13.5px, 0.55vw + 8px, 16px));
+  }
+}

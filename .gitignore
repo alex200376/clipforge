@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+
+# Editor/agent scratch state, not part of the app.
+.freebuff/
+.shots/
+.probe-*.mjs
+# The CDP-driven UI harness. Promote it into tests/ behind an npm script before
+# committing it; until then it stays local scratch.
+.verify-ui.mjs
+resources/bin/*.exe
+resources/bin/*.dll
+*.log
+.DS_Store
