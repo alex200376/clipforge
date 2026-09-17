@@ -114,10 +114,13 @@ release.bat check               # preflight only: repo, version, token, nothing 
 | `COMMIT_MSG="..."` | override the generated commit message |
 
 A GitHub token is required to publish: either `GH_TOKEN` in the environment, or
-`gh auth login` once and the script reuses `gh auth token`. The first run in a folder
-that is not a git repository yet needs `REPO=owner/name`; from there it creates the
-repository with the GitHub CLI when available (private unless `PUBLIC=1`) or adds the
-remote so the first push can land.
+`gh auth login` once and the script reuses `gh auth token`.
+
+Releases are published to [`alex200376/clipforge`](https://github.com/alex200376/clipforge/releases),
+which is the repository the packaged `resources/app-update.yml` points at. On a folder
+with no `origin` remote yet, pass `REPO=owner/name` and the script creates the
+repository with the GitHub CLI when available (private unless `PUBLIC=1`), falling back
+to a plain remote when `gh` is missing or the repository already exists.
 
 How the pieces fit together:
 
