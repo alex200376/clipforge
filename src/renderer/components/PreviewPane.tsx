@@ -7,6 +7,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import type { CropSpec, PreviewSource } from '../../shared/types'
 import { formatTime } from '../format'
 import { useI18n } from '../i18n'
+import { dragRegion, frameBounds, insetBounds } from '../regionMath'
+import type { RegionBounds, RegionDragMode } from '../regionMath'
 
 interface Props {
   preview: PreviewSource | null
@@ -16,6 +18,11 @@ interface Props {
   cropEnabled: boolean
   aspect: number | null
   onCropChange: (crop: CropSpec) => void
+  /** Logo boxes to paint out, already clamped into the frame. */
+  watermarks: CropSpec[]
+  activeRegion: number
+  onActiveRegion: (index: number) => void
+  onWatermarkChange: (index: number, region: CropSpec) => void
   preparing: boolean
   videoRef: RefObject<HTMLVideoElement>
   playing: boolean
@@ -30,11 +37,48 @@ interface Props {
   onTimeUpdate: (seconds: number) => void
 }
 
-type CropDrag = { mode: 'move' | 'nw' | 'ne' | 'sw' | 'se'; startX: number; startY: number; start: CropSpec }
+/** `crop` addresses the crop box; a number addresses that logo region. */
+type DragTarget = 'crop' | number
 
+type RegionDrag = { id: DragTarget; mode: RegionDragMode; startX: number; startY: number; start: CropSpec }
+
+/** Smallest box a pointer drag is allowed to leave behind. What the filter
+ *  itself insists on is a separate rule, in `shared/mediaArgs`. */
 const MIN_CROP = 32
+const MIN_LOGO_BOX = 8
 
-const evenSize = (value: number): number => Math.max(2, Math.floor(value / 2) * 2)
+interface BoxProps {
+  region: CropSpec
+  source: { width: number; height: number }
+  prefix: 'crop' | 'wm'
+  label: string
+  /** Marks the region the panel is editing, so several boxes stay tellable apart. */
+  active?: boolean
+  onPointerDown: (mode: RegionDragMode) => (event: React.PointerEvent) => void
+}
+
+/** One draggable rectangle over the picture; used by both editors. */
+function RegionBox({ region, source, prefix, label, active = false, onPointerDown }: BoxProps): JSX.Element {
+  const width = Math.max(1, source.width)
+  const height = Math.max(1, source.height)
+  return (
+    <div
+      className={`${prefix}-box${active ? ' active' : ''}`}
+      style={{
+        left: `${(region.x / width) * 100}%`,
+        top: `${(region.y / height) * 100}%`,
+        width: `${(region.width / width) * 100}%`,
+        height: `${(region.height / height) * 100}%`
+      }}
+      onPointerDown={onPointerDown('move')}
+    >
+      <span className={`${prefix}-size`}>{label}</span>
+      {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
+        <span key={corner} className={`${prefix}-handle ${corner}`} onPointerDown={onPointerDown(corner)} />
+      ))}
+    </div>
+  )
+}
 
 export function PreviewPane({
   preview,
@@ -43,6 +87,10 @@ export function PreviewPane({
   cropEnabled,
   aspect,
   onCropChange,
+  watermarks,
+  activeRegion,
+  onActiveRegion,
+  onWatermarkChange,
   preparing,
   videoRef,
   playing,
@@ -58,7 +106,7 @@ export function PreviewPane({
 }: Props): JSX.Element {
   const { t } = useI18n()
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const dragRef = useRef<CropDrag | null>(null)
+  const dragRef = useRef<RegionDrag | null>(null)
   const [volume, setVolume] = useState(1)
   const [muted, setMuted] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
@@ -128,71 +176,54 @@ export function PreviewPane({
     else void panel.requestFullscreen().catch(() => undefined)
   }
 
-  const onCropPointerDown = (mode: CropDrag['mode']) => (event: React.PointerEvent) => {
-    if (!crop || !source || !picture) return
+  /** Geometry the box being dragged has to respect. */
+  const boundsFor = useCallback(
+    (id: DragTarget): { bounds: RegionBounds; min: number; even: boolean } =>
+      id === 'crop'
+        ? { bounds: frameBounds(source?.width ?? 0, source?.height ?? 0), min: MIN_CROP, even: true }
+        : // Logos stay a pixel inside the frame: `delogo` rebuilds the box from
+          // the picture just outside it and refuses a box on the very edge.
+          { bounds: insetBounds(source?.width ?? 0, source?.height ?? 0, 1), min: MIN_LOGO_BOX, even: false },
+    [source]
+  )
+
+  const startDrag = (id: DragTarget, region: CropSpec | null) => (mode: RegionDragMode) => (event: React.PointerEvent) => {
+    if (!region || !source || !picture) return
     event.stopPropagation()
     event.preventDefault()
-    const handle = event.currentTarget as HTMLElement
-    handle.setPointerCapture(event.pointerId)
-    dragRef.current = { mode, startX: event.clientX, startY: event.clientY, start: crop }
+    if (typeof id === 'number') onActiveRegion(id)
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    dragRef.current = { id, mode, startX: event.clientX, startY: event.clientY, start: region }
   }
 
-  const onCropPointerMove = useCallback(
+  const onPointerMove = useCallback(
     (event: React.PointerEvent) => {
       const active = dragRef.current
       if (!active || !source || !picture) return
       const scale = picture.scale > 0 ? picture.scale : 1
       const dx = (event.clientX - active.startX) / scale
       const dy = (event.clientY - active.startY) / scale
-      const { start } = active
-
-      if (active.mode === 'move') {
-        onCropChange({
-          x: Math.round(Math.max(0, Math.min(source.width - start.width, start.x + dx))),
-          y: Math.round(Math.max(0, Math.min(source.height - start.height, start.y + dy))),
-          width: start.width,
-          height: start.height
-        })
-        return
-      }
-
-      // Corner drags resize around the opposite corner, honouring the aspect lock.
-      let width = active.mode === 'nw' || active.mode === 'sw' ? start.width - dx : start.width + dx
-      let height = active.mode === 'nw' || active.mode === 'ne' ? start.height - dy : start.height + dy
-      width = Math.max(MIN_CROP, width)
-      height = Math.max(MIN_CROP, height)
-      if (aspect) {
-        // The larger movement wins, so the box tracks the pointer naturally.
-        if (Math.abs(dx) > Math.abs(dy)) height = width / aspect
-        else width = height * aspect
-      }
-      const maxWidth = source.width - (active.mode === 'nw' || active.mode === 'sw' ? start.x + start.width : start.x)
-      const maxHeight = source.height - (active.mode === 'nw' || active.mode === 'ne' ? start.y + start.height : start.y)
-      width = Math.min(width, Math.max(MIN_CROP, maxWidth))
-      height = Math.min(height, Math.max(MIN_CROP, maxHeight))
-      if (aspect) {
-        const fitted = Math.min(width, height * aspect)
-        width = fitted
-        height = fitted / aspect
-      }
-
-      const x = active.mode === 'nw' || active.mode === 'sw' ? start.x + start.width - width : start.x
-      const y = active.mode === 'nw' || active.mode === 'ne' ? start.y + start.height - height : start.y
-      onCropChange({
-        x: Math.round(Math.max(0, x)),
-        y: Math.round(Math.max(0, y)),
-        width: evenSize(width),
-        height: evenSize(height)
+      const geometry = boundsFor(active.id)
+      const next = dragRegion(active.start, active.mode, dx, dy, {
+        bounds: geometry.bounds,
+        min: geometry.min,
+        // Only the crop box takes an aspect lock; a logo is whatever shape the
+        // watermark happens to be.
+        aspect: active.id === 'crop' ? aspect : null,
+        even: geometry.even
       })
+      if (active.id === 'crop') onCropChange(next)
+      else onWatermarkChange(active.id, next)
     },
-    [aspect, onCropChange, picture, source]
+    [aspect, boundsFor, onCropChange, onWatermarkChange, picture, source]
   )
 
-  const endCropDrag = (): void => {
+  const endDrag = (): void => {
     dragRef.current = null
   }
 
   const showCrop = cropEnabled && crop !== null && picture !== null
+  const showWatermarks = picture !== null && source !== null
 
   return (
     <div className="preview-panel" ref={panelRef}>
@@ -215,43 +246,52 @@ export function PreviewPane({
             </Button>
           )}
 
-          {preview.partial && <div className="preview-note">{t('preview.partial')}</div>}
           {loop && <div className="preview-note loop">{t('preview.loopOn')}</div>}
 
           {showCrop && picture && (
             <div
               className="crop-layer"
-              style={{
-                left: picture.left,
-                top: picture.top,
-                width: picture.width,
-                height: picture.height
-              }}
-              onPointerMove={onCropPointerMove}
-              onPointerUp={endCropDrag}
-              onPointerCancel={endCropDrag}
+              style={{ left: picture.left, top: picture.top, width: picture.width, height: picture.height }}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
             >
-              <div
-                className="crop-box"
-                style={{
-                  left: `${(crop.x / (source?.width ?? 1)) * 100}%`,
-                  top: `${(crop.y / (source?.height ?? 1)) * 100}%`,
-                  width: `${(crop.width / (source?.width ?? 1)) * 100}%`,
-                  height: `${(crop.height / (source?.height ?? 1)) * 100}%`
-                }}
-                onPointerDown={onCropPointerDown('move')}
-              >
-                <span className="crop-size">
-                  {t('crop.size', { width: crop.width, height: crop.height })}
-                </span>
-                {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
-                  <span
-                    key={corner}
-                    className={`crop-handle ${corner}`}
-                    onPointerDown={onCropPointerDown(corner)}
-                  />
-                ))}
-              </div>
+              <RegionBox
+                region={crop}
+                source={source!}
+                prefix="crop"
+                label={t('crop.size', { width: crop.width, height: crop.height })}
+                onPointerDown={startDrag('crop', crop)}
+              />
+            </div>
+          )}
+
+          {/* The logo boxes are shown over the untouched preview: the removal
+              itself is an export-time filter, and the box is what says where it
+              will be applied. */}
+          {showWatermarks && watermarks.length > 0 && (
+            <div
+              className="wm-layer"
+              style={{ left: picture.left, top: picture.top, width: picture.width, height: picture.height }}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+            >
+              {watermarks.map((region, index) => (
+                <RegionBox
+                  key={index}
+                  region={region}
+                  source={source!}
+                  prefix="wm"
+                  active={index === activeRegion}
+                  label={t('watermark.regionLabel', {
+                    index: index + 1,
+                    width: region.width,
+                    height: region.height
+                  })}
+                  onPointerDown={startDrag(index, region)}
+                />
+              ))}
             </div>
           )}
 
@@ -356,7 +396,7 @@ export function PreviewPane({
         </div>
       ) : (
         <div className="preview-empty">
-          <Crop className="size-6 text-[#4d5f7d]" />
+          <Crop className="size-6 text-[var(--text-ghost)]" />
           <strong>{t('preview.empty.title')}</strong>
           {t('preview.empty.body')}
           <br />

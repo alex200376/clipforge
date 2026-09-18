@@ -2,8 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { errorPayload, errorMessage } from '../shared/errors'
 import { estimateAnimatedBytes, fitToBudget, outputDimensions } from '../shared/estimate'
-import { FILMSTRIP_FRAMES, centeredCrop, normalizeCrop, outputDuration } from '../shared/mediaArgs'
+import { AI_FEATHER } from '../shared/aiWindow'
+import {
+  FILMSTRIP_FRAMES,
+  MAX_WATERMARKS,
+  centeredCrop,
+  normalizeCrop,
+  normalizeWatermarks,
+  outputDuration
+} from '../shared/mediaArgs'
+import { isRemoteUrl } from '../shared/sources'
+import { findWatermarks, onAiNote, runAiRemoval } from './ai/client'
 import type {
+  AiAssets,
   AppSettings,
   BinaryName,
   CropSpec,
@@ -19,10 +30,14 @@ import type {
   ToolVersion,
   UpdateState,
   VideoSize,
+  WatermarkEngine,
+  WatermarkRegion,
   WindowState
 } from '../shared/types'
 import { ActivityLog } from './components/ActivityLog'
 import { ExportPanel } from './components/ExportPanel'
+import { planSteps } from './progress'
+import { useExportProgress } from './useProgress'
 import { InstallCard } from './components/InstallCard'
 import type { InstallSummary } from './components/InstallCard'
 import { DropZone, ErrorCard, Onboarding, SessionPrompt, ShortcutSheet, Toast } from './components/Overlays'
@@ -41,6 +56,7 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { TooltipProvider } from './components/ui/tooltip'
 import { clockTime, formatBytes, formatTime } from './format'
 import { codedFailureMessage, localizedError, stageLabel, useI18n } from './i18n'
+import { adoptProbe } from './sourceAdoption'
 import type {
   BudgetChoice,
   ErrorNotice,
@@ -51,12 +67,14 @@ import type {
   Page,
   PresetId,
   Status,
-  Summary
+  Summary,
+  WatermarkCorner
 } from './types'
 
 const DEFAULT_SETTINGS: AppSettings = {
   outputDir: '',
   language: 'en',
+  theme: 'midnight',
   autoCleanup: true,
   defaultEngine: 'gifski',
   defaultFps: 24,
@@ -82,6 +100,12 @@ export function App({ initialSettings }: Props): JSX.Element {
 
   const [page, setPage] = useState<Page>('home')
   const [settings, setSettings] = useState<AppSettings>(seed)
+
+  // One attribute on the root flips the whole sheet: every colour in styles.css is a
+  // token, and each theme block restates the palette behind that attribute.
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme
+  }, [settings.theme])
   const [defaultDir, setDefaultDir] = useState('')
   const [dependencies, setDependencies] = useState<DependencyState[]>([])
   const [versions, setVersions] = useState<ToolVersion[]>([])
@@ -118,10 +142,21 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [aspect, setAspect] = useState<number | null>(null)
   const [cropBusy, setCropBusy] = useState(false)
 
+  const [watermarkOn, setWatermarkOn] = useState(false)
+  const [watermarks, setWatermarks] = useState<WatermarkRegion[]>([])
+  const [activeRegion, setActiveRegion] = useState(0)
+  const [watermarkEngine, setWatermarkEngine] = useState<WatermarkEngine>('delogo')
+  const [aiAssetsState, setAiAssetsState] = useState<AiAssets | null>(null)
+  const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null)
+  /** What the AI pass is doing while it has no frames to count, e.g. reading weights. */
+  const [phaseNote, setPhaseNote] = useState<string | null>(null)
+  const [detectBusy, setDetectBusy] = useState(false)
+
   const [status, setStatus] = useState<Status>({ text: t('status.ready'), kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<JobProgress | null>(null)
   const [jobStart, setJobStart] = useState<number | null>(null)
+
   const [installProgress, setInstallProgress] = useState<InstallProgressEvent | null>(null)
   const [installSummary, setInstallSummary] = useState<InstallSummary | null>(null)
   const [logs, setLogs] = useState<LogEntryList>([])
@@ -260,9 +295,13 @@ export function App({ initialSettings }: Props): JSX.Element {
       try {
         const session = await window.clipforge.loadSession()
         // Only worth offering when it was not the tail end of an earlier session
-        // in this same run.
-        if (session.source && session.source.path && !sessionSource.current) {
+        // in this same run, and only when the source can still be opened: a
+        // remembered path is often a temp file that has since been cleaned up.
+        if (session.source && session.source.path && session.available && !sessionSource.current) {
           setSessionName(session.source.name)
+        } else if (session.source && !session.available) {
+          pushLog(t('session.gone', { name: session.source.name }))
+          void window.clipforge.clearSession().catch(() => undefined)
         }
       } catch {
         setSessionName(null)
@@ -430,28 +469,14 @@ export function App({ initialSettings }: Props): JSX.Element {
       setCrop(null)
       setCropEnabled(false)
       setAspect(null)
+      setWatermarkOn(false)
+      setWatermarks([])
+      setActiveRegion(0)
       setCalibration(1)
       setMeasured(null)
       setSessionName(null)
     },
     []
-  )
-
-  const loadFilePath = useCallback(
-    async (filePath: string) => {
-      setBusy(true)
-      setStatus({ text: t('status.readingMedia'), kind: 'busy' })
-      try {
-        const info = await window.clipforge.probeMedia(filePath)
-        loadMedia({ ...info }, 'file')
-        pushLog(`${info.name} (${formatTime(info.duration)})`)
-      } catch (error) {
-        failWith(error, () => void loadFilePath(filePath))
-      } finally {
-        setBusy(false)
-      }
-    },
-    [failWith, loadMedia, pushLog, t]
   )
 
   const resolveUrl = useCallback(
@@ -470,7 +495,7 @@ export function App({ initialSettings }: Props): JSX.Element {
             path: metadata.webpageUrl,
             name: metadata.title,
             duration: metadata.duration,
-            fps: 0,
+            fps: metadata.fps,
             hasAudio: true,
             width: metadata.width,
             height: metadata.height
@@ -485,6 +510,39 @@ export function App({ initialSettings }: Props): JSX.Element {
       }
     },
     [fail, failWith, loadMedia, pushLog, t]
+  )
+
+  const loadFilePath = useCallback(
+    async (filePath: string) => {
+      // A link can arrive here as a file path: a dragged link shows up in
+      // `dataTransfer.files` as a virtual file whose "path" is the URL itself,
+      // and a remembered session may hold one too. Probing it as a file either
+      // fails with a raw ffprobe error or quietly fetches it over HTTP, and every
+      // export after that tries to seek inside a network stream.
+      if (isRemoteUrl(filePath)) {
+        void resolveUrl(filePath)
+        return
+      }
+      setBusy(true)
+      setStatus({ text: t('status.readingMedia'), kind: 'busy' })
+      try {
+        const info = await window.clipforge.probeMedia(filePath)
+        loadMedia({ ...info }, 'file')
+        pushLog(`${info.name} (${formatTime(info.duration)})`)
+      } catch (error) {
+        // Nothing to retry when the file is simply gone; the remember prompt wins.
+        if (errorPayload(error).code === 'source-missing') {
+          void window.clipforge.clearSession().catch(() => undefined)
+          setSessionName(null)
+          fail(error)
+          return
+        }
+        failWith(error, () => void loadFilePath(filePath))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [fail, failWith, loadMedia, pushLog, resolveUrl, t]
   )
 
   // Any new source triggers a preview (remuxing when Chromium cannot play it)
@@ -503,10 +561,14 @@ export function App({ initialSettings }: Props): JSX.Element {
         setPreview(next)
         setStatus({ text: t('status.ready'), kind: 'idle' })
 
-        const effectiveDuration = source.duration > 0 ? source.duration : next.duration
-        if (source.duration <= 0 && effectiveDuration > 0) {
-          setSource((previous) => (previous ? { ...previous, duration: effectiveDuration } : previous))
-          setRange({ start: 0, end: effectiveDuration })
+        // The probe fills in whatever the import could not report - for a direct
+        // video link that is the frame size and often the frame rate too, and
+        // crop, watermark and frame stepping all depend on both.
+        const patch = adoptProbe(source, next)
+        const effectiveDuration = patch?.duration ?? source.duration
+        if (patch) {
+          setSource((previous) => (previous ? { ...previous, ...patch } : previous))
+          if (patch.duration !== undefined) setRange({ start: 0, end: patch.duration })
         }
 
         const strip = await window.clipforge.buildFilmstrip({
@@ -674,6 +736,58 @@ export function App({ initialSettings }: Props): JSX.Element {
 
   const isGif = mode === 'gif'
   const activeCrop = cropEnabled ? crop : null
+  /** Clamped against the real frame size, so the preview cannot promise a box
+   *  the export will refuse: `delogo` outside the frame fails the job. */
+  const activeWatermarks = useMemo(
+    () => (watermarkOn ? normalizeWatermarks(watermarks, source?.width ?? 0, source?.height ?? 0) : []),
+    [source, watermarkOn, watermarks]
+  )
+
+  /**
+   * The steps an export will perform, and how far it has got through them. Derived
+   * here rather than inside the panel so the window's taskbar fill and the panel's
+   * bar are always the same measurement.
+   */
+  const exportSteps = useMemo(
+    () =>
+      planSteps({
+        mode,
+        format,
+        engine,
+        ai: watermarkEngine === 'ai' && activeWatermarks.length > 0
+      }),
+    [mode, format, engine, watermarkEngine, activeWatermarks.length]
+  )
+
+  const exportView = useExportProgress({
+    steps: exportSteps,
+    // Only an export may drive the progress card: the filmstrip publishes on the same
+    // channel, and without this gate a finished thumbnail job parks a frozen bar in
+    // the panel for the rest of the session.
+    progress: busy ? progress : null,
+    ai: busy ? aiProgress : null,
+    startedAt: busy ? jobStart : null,
+    running: busy
+  })
+
+  /** Frames the detectors get to look at. More than this buys little: a watermark
+   *  is stationary, so a handful of samples already proves where it is. */
+  const DETECT_SAMPLES = 8
+
+  /** The worker's own remarks (the CPU fallback, a layout it did not expect) belong
+   *  in the activity log rather than in a console nobody reads. */
+  useEffect(() => {
+    onAiNote((text) => pushLog(text, 'raw'))
+  }, [pushLog])
+
+  useEffect(() => {
+    void window.clipforge
+      .aiAssets()
+      .then(setAiAssetsState)
+      .catch(() => undefined)
+  }, [])
+
+  const aiAvailable = Boolean(aiAssetsState?.lama && aiAssetsState.detector && aiAssetsState.runtime)
 
   /** Frame size the encoders will actually produce, before any budget fitting. */
   const outputFrame = useMemo(() => {
@@ -749,9 +863,59 @@ export function App({ initialSettings }: Props): JSX.Element {
     const expected = estimate.bytes
     setBusy(true)
     setProgress(null)
+    setPhaseNote(null)
     setJobStart(Date.now())
     setStatus({ text: t('status.working'), kind: 'busy' })
     try {
+      // AI removal runs before the encode, because the export has to read a clip whose
+      // marked areas are already painted. Progress goes through the same status line
+      // and activity log as every other stage.
+      let aiToken: string | undefined
+      if (watermarkEngine === 'ai' && activeWatermarks.length > 0) {
+        if (!(source.fps > 0)) {
+          throw new Error(t('watermark.noFps'))
+        }
+        const assets = aiAssetsState ?? (await window.clipforge.aiAssets())
+        setAiAssetsState(assets)
+        const prepared = await runAiRemoval(
+          {
+            source: preview?.url ?? source.path,
+            isUrl: false,
+            start: range.start,
+            duration: range.end - range.start,
+            fps: source.fps,
+            regions: activeWatermarks,
+            width: source.width,
+            height: source.height
+          },
+          AI_FEATHER,
+          {
+            onInpaint: (done, total) => {
+              setAiProgress({ done, total })
+              setStatus({ text: t('watermark.painting', { done, total }), kind: 'busy' })
+            },
+            onNote: (text) => {
+              // Kept as well as logged: the progress card shows it, because this is
+              // the only account of what the AI pass is doing while it reports no
+              // frames - reading the weights, or warming up a runtime.
+              setPhaseNote(text)
+              pushLog(text, 'raw')
+            },
+            // The cut reports a percentage; the wait behind it reports nothing. Keeping
+            // the cut's final 100% on screen through that wait is what looked like a
+            // hang, so it goes away the moment the cut is done.
+            onPhase: (phase) => {
+              if (phase === 'loading') setProgress(null)
+            }
+          },
+          assets
+        )
+        await window.clipforge.aiComposite({ token: prepared.token })
+        setAiProgress(null)
+        aiToken = prepared.token
+        pushLog(t('watermark.aiReady'), 'done')
+      }
+
       const result: ExportResult = isGif
         ? await window.clipforge.exportGif({
             source: source.path,
@@ -765,13 +929,16 @@ export function App({ initialSettings }: Props): JSX.Element {
             outputDir: settings.outputDir,
             format,
             crop: normalizeCrop(activeCrop, source.width, source.height),
+            watermarks: activeWatermarks,
+            watermarkEngine,
+            aiToken,
             speed,
             boomerang,
             optimize: optimize && format === 'gif'
           })
         : await window.clipforge.exportVideo({
             source: source.path,
-            isUrl: false,
+            isUrl: source.kind === 'url',
             start: range.start,
             end: range.end,
             mute,
@@ -779,6 +946,9 @@ export function App({ initialSettings }: Props): JSX.Element {
             targetBytes: size === '10mb' ? 10 * 1024 * 1024 : size === '25mb' ? 25 * 1024 * 1024 : null,
             outputDir: settings.outputDir,
             crop: normalizeCrop(activeCrop, source.width, source.height),
+            watermarks: activeWatermarks,
+            watermarkEngine,
+            aiToken,
             speed,
             boomerang,
             encoder
@@ -834,6 +1004,10 @@ export function App({ initialSettings }: Props): JSX.Element {
     quality,
     format,
     activeCrop,
+    activeWatermarks,
+    watermarkEngine,
+    aiAssetsState,
+    preview,
     speed,
     boomerang,
     optimize,
@@ -857,10 +1031,12 @@ export function App({ initialSettings }: Props): JSX.Element {
     void window.clipforge.setTaskbarProgress(null)
   }, [])
 
-  // The taskbar mirrors export progress so a long job can run in the background.
+  // The taskbar mirrors export progress so a long job can run in the background. It
+  // reports the same export-wide number the panel shows, so a stage change cannot
+  // leave the two disagreeing.
   useEffect(() => {
-    void window.clipforge.setTaskbarProgress(busy && progress ? progress.percent / 100 : null)
-  }, [busy, progress])
+    void window.clipforge.setTaskbarProgress(busy ? exportView.overall / 100 : null)
+  }, [busy, exportView.overall])
 
   const installTools = useCallback(
     async (targets?: BinaryName[]) => {
@@ -998,6 +1174,156 @@ export function App({ initialSettings }: Props): JSX.Element {
       setCropBusy(false)
     }
   }, [failWith, preview, pushLog, range, source, t])
+
+  /**
+   * Looks for a watermark and marks what it finds.
+   *
+   * Both detectors run over the same handful of sampled frames, and the boxes come
+   * back for review rather than being applied blind - detection is a shortcut for the
+   * dragging, not a replacement for looking.
+   */
+  const detectWatermarks = useCallback(async () => {
+    if (!source || source.width <= 0 || source.height <= 0) {
+      fail(t('watermark.unknownSize'))
+      return
+    }
+    setDetectBusy(true)
+    setStatus({ text: t('watermark.detecting'), kind: 'busy' })
+    try {
+      const assets = aiAssetsState ?? (await window.clipforge.aiAssets())
+      setAiAssetsState(assets)
+      const candidates = await findWatermarks(
+        {
+          // The prepared preview is an ordinary local file showing the same picture,
+          // which is what both the sampler and a downloaded link need.
+          source: preview?.url ?? source.path,
+          isUrl: false,
+          start: range.start,
+          duration: Math.max(0.5, range.end - range.start),
+          width: source.width,
+          height: source.height,
+          samples: DETECT_SAMPLES
+        },
+        MAX_WATERMARKS,
+        assets,
+        (text) => pushLog(text, 'raw')
+      )
+      if (candidates.length === 0) {
+        pushLog(t('watermark.detectNone'), 'raw')
+      } else {
+        const boxes = normalizeWatermarks(
+          candidates.map((candidate) => candidate.box),
+          source.width,
+          source.height
+        )
+        if (boxes.length > 0) {
+          setWatermarks(boxes)
+          setWatermarkOn(true)
+          setActiveRegion(0)
+          pushLog(
+            t('watermark.detectFound', {
+              count: boxes.length,
+              score: Math.round((candidates[0]?.score ?? 0) * 100),
+              // Which of the two found it is worth saying: the model's box is tight on
+              // the mark, the motion analysis can only imply one from still pixels, and
+              // knowing which one spoke is how a wrong box gets judged quickly.
+              method:
+                candidates[0]?.source === 'model'
+                  ? t('watermark.detectBy.model')
+                  : t('watermark.detectBy.motion')
+            }),
+            'done'
+          )
+        } else {
+          pushLog(t('watermark.detectNone'), 'raw')
+        }
+      }
+      setStatus({ text: t('status.ready'), kind: 'idle' })
+    } catch (error) {
+      failWith(error, () => void detectWatermarks())
+    } finally {
+      setDetectBusy(false)
+    }
+  }, [aiAssetsState, fail, failWith, preview, pushLog, range, source, t])
+
+  /**
+   * A logo-sized default box for a corner, with a margin around it: `delogo`
+   * rebuilds the box from the picture just outside it, so a box flush with a
+   * watermark leaves it nothing to work from.
+   */
+  const watermarkBox = useCallback(
+    (corner: WatermarkCorner, index: number): WatermarkRegion | null => {
+      if (!source || source.width <= 0 || source.height <= 0) return null
+      const width = Math.max(24, Math.round(source.width * 0.28))
+      const height = Math.max(16, Math.round(source.height * 0.12))
+      // Each extra region is nudged inwards so it does not land on the last one.
+      const margin =
+        Math.max(4, Math.round(Math.min(source.width, source.height) * 0.02)) + Math.min(index, 3) * 8
+      const west = corner === 'tl' || corner === 'bl'
+      const top = corner === 'tl' || corner === 'tr'
+      return {
+        x: west ? margin : source.width - width - margin,
+        y: top ? margin : source.height - height - margin,
+        width,
+        height
+      }
+    },
+    [source]
+  )
+
+  const placeWatermark = useCallback(
+    (corner: WatermarkCorner) => {
+      const box = watermarkBox(corner, 0)
+      if (!box) return
+      setWatermarkOn(true)
+      setWatermarks([box])
+      setActiveRegion(0)
+    },
+    [watermarkBox]
+  )
+
+  const toggleWatermarks = useCallback(
+    (value: boolean) => {
+      setWatermarkOn(value)
+      // Switching it on with nothing marked would leave an empty state and no
+      // way in, so the first region is placed bottom-right where logos live.
+      if (value && watermarks.length === 0) {
+        const box = watermarkBox('br', 0)
+        if (box) {
+          setWatermarks([box])
+          setActiveRegion(0)
+        }
+      }
+    },
+    [watermarkBox, watermarks.length]
+  )
+
+  const addWatermark = useCallback(() => {
+    if (watermarks.length >= MAX_WATERMARKS) {
+      showNotice(t('watermark.limit', { max: MAX_WATERMARKS }))
+      return
+    }
+    const corners: WatermarkCorner[] = ['tl', 'tr', 'bl', 'br']
+    const box = watermarkBox(corners[watermarks.length % corners.length]!, watermarks.length)
+    if (!box) return
+    setWatermarks([...watermarks, box])
+    setActiveRegion(watermarks.length)
+  }, [showNotice, t, watermarks, watermarkBox])
+
+  const removeWatermark = useCallback(
+    (index: number) => {
+      const remaining = watermarks.filter((_, position) => position !== index)
+      setWatermarks(remaining)
+      setActiveRegion((current) =>
+        Math.min(current > index ? current - 1 : current, Math.max(0, remaining.length - 1))
+      )
+    },
+    [watermarks]
+  )
+
+  const changeWatermark = useCallback((index: number, region: WatermarkRegion) => {
+    setWatermarks((previous) => previous.map((entry, position) => (position === index ? region : entry)))
+  }, [])
 
   const applyPreset = useCallback(
     (preset: PresetId) => {
@@ -1138,8 +1464,13 @@ export function App({ initialSettings }: Props): JSX.Element {
                 <SessionPrompt
                   name={sessionName}
                   onResume={() => {
+                    setSessionName(null)
                     void window.clipforge.loadSession().then((session) => {
-                      if (session.source) void loadFilePath(session.source.path)
+                      if (!session.source || !session.available) return
+                      // A remembered link is resolved again through yt-dlp; only a
+                      // remembered file goes to the local probe.
+                      if (session.source.kind === 'url') void resolveUrl(session.source.path)
+                      else void loadFilePath(session.source.path)
                     })
                   }}
                   onDismiss={() => setSessionName(null)}
@@ -1161,6 +1492,10 @@ export function App({ initialSettings }: Props): JSX.Element {
                     cropEnabled={cropEnabled}
                     aspect={aspect}
                     onCropChange={setCrop}
+                    watermarks={activeWatermarks}
+                    activeRegion={activeRegion}
+                    onActiveRegion={setActiveRegion}
+                    onWatermarkChange={changeWatermark}
                     preparing={preparing}
                     videoRef={videoRef}
                     playing={playing}
@@ -1237,6 +1572,19 @@ export function App({ initialSettings }: Props): JSX.Element {
                       cropKnown={Boolean(source && source.width > 0)}
                       aspect={aspect}
                       onAspect={applyCropAspect}
+                      watermarkOn={watermarkOn}
+                      onWatermarkOn={toggleWatermarks}
+                      watermarks={activeWatermarks}
+                      activeRegion={activeRegion}
+                      onActiveRegion={setActiveRegion}
+                      onWatermarkCorner={placeWatermark}
+                      onAddWatermark={addWatermark}
+                      onRemoveWatermark={removeWatermark}
+                      watermarkEngine={watermarkEngine}
+                      onWatermarkEngine={setWatermarkEngine}
+                      onDetectWatermark={() => void detectWatermarks()}
+                      detectBusy={detectBusy}
+                      aiAvailable={aiAvailable}
                       mute={mute}
                       onMute={setMute}
                       loudnorm={loudnorm}
@@ -1246,12 +1594,8 @@ export function App({ initialSettings }: Props): JSX.Element {
                       encoder={encoder}
                       onEncoder={setEncoder}
                       hardware={hardware}
-                      // Only an export may drive the progress card: the filmstrip
-                      // publishes on the same channel, and without this gate a
-                      // finished thumbnail job parks a frozen "Filmstrip" bar in the
-                      // panel for the rest of the session.
-                      progress={busy ? progress : null}
-                      jobStart={busy ? jobStart : null}
+                      view={busy ? exportView : null}
+                      phaseNote={busy ? phaseNote : null}
                       busy={busy}
                       hasSource={source !== null}
                       onExport={() => void runExport()}
@@ -1283,7 +1627,6 @@ export function App({ initialSettings }: Props): JSX.Element {
           toast={toast}
           onClose={() => setToast(null)}
           onReveal={(filePath) => void window.clipforge.revealInFolder(filePath)}
-          onOpenFolder={() => void window.clipforge.openOutputFolder()}
         />
       </div>
     </TooltipProvider>

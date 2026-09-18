@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 
+import { ClipForgeError } from '../shared/errors'
+import { isRemoteUrl } from '../shared/sources'
 import type { MediaInfo } from '../shared/types'
 import { findBinary, missingBinaryError } from './binaries'
 
@@ -49,6 +52,15 @@ function runFfprobe(ffprobe: string, target: string): Promise<string> {
 }
 
 export async function probeLocalFile(filePath: string): Promise<MediaInfo> {
+  // A link handed to ffprobe either fails with a raw ENOENT or, worse, silently
+  // fetches over HTTP and reports a remote stream as a local file. The URL path
+  // exists for links, so say so instead of guessing.
+  if (isRemoteUrl(filePath)) {
+    throw new ClipForgeError('remote-source', 'That is a web link, not a local file.')
+  }
+  if (!existsSync(filePath)) {
+    throw new ClipForgeError('source-missing', `${filePath} is no longer on disk.`)
+  }
   const ffprobe = findBinary('ffprobe')
   if (!ffprobe) throw missingBinaryError('ffprobe')
   const payload = JSON.parse(await runFfprobe(ffprobe, filePath)) as ProbePayload

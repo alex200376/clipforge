@@ -29,6 +29,87 @@ const TARGETS = [
 
 const GIFSKI_RELEASES = 'https://api.github.com/repos/ImageOptim/gifski/releases/latest'
 
+const MODELS_DESTINATION = path.join(ROOT, 'resources', 'models')
+const ORT_DESTINATION = path.join(ROOT, 'resources', 'ort')
+
+/**
+ * The AI weights are shipped inside the installer rather than fetched on first use,
+ * so they are downloaded and checksummed here - at build time, where a failure is a
+ * failed build instead of a broken export on a user's machine.
+ *
+ * Both files are pinned by sha256: a resumed download of a 208 MB model is exactly
+ * the case where a truncated file would otherwise go unnoticed until inference
+ * produced nonsense.
+ */
+const MODELS = [
+  {
+    name: 'lama_fp32.onnx',
+    url: 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx',
+    sha256: '1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6',
+    about: 'LaMa inpainting (apache-2.0)'
+  },
+  {
+    name: 'watermark-detector.onnx',
+    url: 'https://huggingface.co/ayan4m1/Watermark-Detection-YOLO11-ONNX/resolve/main/onnx/model.onnx',
+    sha256: 'f3638870eedb2ac4ea202d25da35ac2ae520ba33d572479d1d9cfc671aaa253e',
+    about: 'YOLO11 watermark detector (AGPL-3.0 weights, attributed in README)'
+  }
+]
+
+/**
+ * The runtime's own files, copied out of node_modules so the app can serve them.
+ *
+ * `ort.webgpu.min.mjs` is the runtime's API as an ES module, and it is loaded from the
+ * app at run time rather than bundled into it. It has to be: the runtime starts its
+ * worker threads with `new Worker(new URL(import.meta.url))` - asking for *its own*
+ * module - so if a bundler folds it into the app's chunk, every thread boots the app's
+ * script instead, never answers, and a multi-threaded load waits forever. Loaded from
+ * the folder it ships in, its own URL is the file, and the wasm binary next to it is
+ * found the same way.
+ */
+const ORT_FILES = ['ort.webgpu.min.mjs', 'ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']
+
+async function sha256Of(file) {
+  const { createHash } = await import('node:crypto')
+  const { createReadStream } = await import('node:fs')
+  const hash = createHash('sha256')
+  await new Promise((resolve, reject) => {
+    createReadStream(file)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('error', reject)
+      .on('end', resolve)
+  })
+  return hash.digest('hex')
+}
+
+async function prepareModels() {
+  mkdirSync(MODELS_DESTINATION, { recursive: true })
+  for (const model of MODELS) {
+    const target = path.join(MODELS_DESTINATION, model.name)
+    if (existsSync(target) && (await sha256Of(target)) === model.sha256) {
+      console.log(`${model.name}: already present and verified, skipping.`)
+      continue
+    }
+    console.log(`${model.name}: downloading ${model.about}…`)
+    rmSync(target, { force: true })
+    await download(model.url, target)
+    const digest = await sha256Of(target)
+    if (digest !== model.sha256) {
+      rmSync(target, { force: true })
+      throw new Error(`${model.name} did not match its checksum (got ${digest})`)
+    }
+    console.log(`${model.name}: ready (${Math.round(statSync(target).size / 1048576)} MB, verified)`)
+  }
+
+  mkdirSync(ORT_DESTINATION, { recursive: true })
+  for (const file of ORT_FILES) {
+    const source = path.join(ROOT, 'node_modules', 'onnxruntime-web', 'dist', file)
+    if (!existsSync(source)) throw new Error(`${file} is missing from node_modules - run npm install first`)
+    copyFileSync(source, path.join(ORT_DESTINATION, file))
+  }
+  console.log(`onnxruntime: copied ${ORT_FILES.length} runtime files for packaging.`)
+}
+
 /**
  * gifski stopped attaching Windows binaries to its GitHub releases after 1.32.0 and now
  * publishes the CLI zip on its own site (`win/gifski.exe` inside the archive). Resolve the
@@ -165,7 +246,8 @@ async function main() {
     console.log(`${target.name}: ready (${staged.map((file) => path.basename(file)).join(', ')})`)
   }
   rmSync(SCRATCH, { recursive: true, force: true })
-  console.log('\nresources/bin is ready for packaging.')
+  await prepareModels()
+  console.log('\nresources/bin, resources/models and resources/ort are ready for packaging.')
 }
 
 main().catch((error) => {

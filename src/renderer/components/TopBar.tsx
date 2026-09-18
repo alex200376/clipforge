@@ -60,7 +60,7 @@ export function TopBar({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button size="default" className="h-11" variant="secondary" onClick={onPaste} disabled={busy} aria-label={t('topbar.paste')}>
+          <Button size="default" className="h-10" variant="secondary" onClick={onPaste} disabled={busy} aria-label={t('topbar.paste')}>
             <ClipboardPaste />
             <span className="btn-label">{t('topbar.pasteLabel')}</span>
           </Button>
@@ -72,7 +72,7 @@ export function TopBar({
         <TooltipTrigger asChild>
           <Button
             size="default"
-            className="h-11"
+            className="h-10"
             variant="default"
             onClick={onParse}
             disabled={busy || url.trim().length === 0}
@@ -87,7 +87,7 @@ export function TopBar({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button size="default" className="h-11" variant="secondary" onClick={onPickFile} disabled={busy} aria-label={t('topbar.openFile')}>
+          <Button size="default" className="h-10" variant="secondary" onClick={onPickFile} disabled={busy} aria-label={t('topbar.openFile')}>
             <FilePlus2 />
             <span className="btn-label">{t('topbar.openFileLabel')}</span>
           </Button>
@@ -100,7 +100,7 @@ export function TopBar({
           <Button
             size="icon"
             variant="ghost"
-            className="btn-quiet size-11"
+            className="btn-quiet size-10"
             onClick={onShortcuts}
             aria-label={t('shortcuts.open')}
           >

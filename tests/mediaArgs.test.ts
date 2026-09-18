@@ -6,13 +6,14 @@ import {
   gifskiArgs,
   isProgressLine,
   paletteArgs,
+  parseGifskiFrames,
   parseProgressTime,
   parseYtDlpPercent,
   scaleFilter,
   targetSizeArgs,
   targetVideoBitrate,
   trimArgs,
-  ytdlpStreamArgs
+  ytdlpDownloadArgs
 } from '../src/shared/mediaArgs'
 
 const gifOptions = { start: 1.5, end: 5.25, fps: 24, width: 480, quality: 90 }
@@ -78,19 +79,41 @@ describe('progress parsing', () => {
     expect(parseYtDlpPercent('[download]  45.6% of 10.00MiB')).toBeCloseTo(45.6)
     expect(parseYtDlpPercent('[download] Destination: x.mp4')).toBeNull()
   })
-})
 
-describe('streaming and filmstrip', () => {
-  it('restricts yt-dlp to the selected section', () => {
-    const args = ytdlpStreamArgs('https://example.com/v', { start: 10, end: 20 })
-    expect(args).toContain('--download-sections')
-    expect(args).toContain('*10.000-20.000')
+  it('reads gifski frame counts, which is the only progress GIF building has', () => {
+    // gifski draws a bar and reprints it with carriage returns, so one line can hold
+    // several updates; the last count is the current one.
+    expect(parseGifskiFrames('Frame 12 / 240')).toEqual({ done: 12, total: 240 })
+    expect(parseGifskiFrames('\rFrame 1 / 240  #_.....  4s \r640KB GIF; Frame 200 / 240  ####  0s ')).toEqual({
+      done: 200,
+      total: 240
+    })
+    expect(parseGifskiFrames('gifski created out.gif')).toBeNull()
+    expect(parseGifskiFrames('Frame 0 / 0')).toBeNull()
+    // A bar that has redrawn past its total must not report more than 100%.
+    expect(parseGifskiFrames('Frame 250 / 240')).toEqual({ done: 240, total: 240 })
   })
 
-  it('streams the whole video when no section is given', () => {
-    const args = ytdlpStreamArgs('https://example.com/v')
+  it('keeps gifski’s bar and size reports out of the activity log', () => {
+    expect(isProgressLine('Frame 3 / 40')).toBe(true)
+    expect(isProgressLine('296KB GIF;')).toBe(true)
+    expect(isProgressLine('gifski error: no frames')).toBe(false)
+  })
+})
+
+describe('link download and filmstrip', () => {
+  it('writes a link to a real file rather than a pipe', () => {
+    const args = ytdlpDownloadArgs('https://example.com/v', 'C:\\tmp\\source.%(ext)s')
+    // Piping was the bug: a non-faststart MP4 cannot be read from stdin at all.
+    expect(args).not.toContain('-')
     expect(args).not.toContain('--download-sections')
+    expect(args[args.indexOf('-o') + 1]).toBe('C:\\tmp\\source.%(ext)s')
     expect(args[args.length - 1]).toBe('https://example.com/v')
+  })
+
+  it('prefers an mp4 so Chromium can play the download', () => {
+    const args = ytdlpDownloadArgs('https://example.com/v', 'out.%(ext)s')
+    expect(args[args.indexOf('-f') + 1]).toBe('best[ext=mp4]/best')
   })
 
   it('builds a single-row thumbnail strip', () => {

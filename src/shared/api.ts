@@ -1,4 +1,9 @@
 import type {
+  AiAssets,
+  AiDetectRequest,
+  AiDetectResult,
+  AiPrepareRequest,
+  AiPrepareResult,
   AppSettings,
   BinaryName,
   CropDetection,
@@ -57,6 +62,19 @@ export interface ClipForgeApi {
   resolveMetadata(url: string): Promise<UrlMetadata>
   exportGif(request: GifRequest): Promise<ExportResult>
   exportVideo(request: VideoRequest): Promise<ExportResult>
+  /**
+   * AI removal. The main process owns the files and the renderer owns the pixels, so
+   * these are the two ends of a pull loop: `aiPrepare` cuts the range and its
+   * windows out of the clip, `aiFrames`/`aiPatches` move batches of pictures back
+   * and forth while the worker paints, and `aiComposite` blends the result in.
+   */
+  aiAssets(): Promise<AiAssets>
+  aiPrepare(request: AiPrepareRequest): Promise<AiPrepareResult>
+  aiFrames(request: { token: string; index: number; from: number; count: number }): Promise<Uint8Array[]>
+  aiPatches(request: { token: string; index: number; from: number; patches: Uint8Array[] }): Promise<number>
+  aiComposite(request: { token: string }): Promise<string>
+  /** Frames for the detectors to look at, sampled across the range. */
+  aiSamples(request: AiDetectRequest): Promise<AiDetectResult>
   cancelJob(): Promise<void>
   dependencyStates(): Promise<DependencyState[]>
   installDependencies(names: BinaryName[]): Promise<InstallResult>
@@ -78,6 +96,8 @@ export interface ClipForgeApi {
   readClipboard(): Promise<string>
   loadSession(): Promise<SessionState>
   saveSession(state: SessionState): Promise<void>
+  /** Drops the remembered clip, e.g. once its file turns out to be gone. */
+  clearSession(): Promise<void>
   toggleWindowFullscreen(): Promise<boolean>
   /** The window is frameless, so these back the controls drawn in the top bar. */
   windowState(): Promise<WindowState>

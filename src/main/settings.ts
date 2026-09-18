@@ -1,11 +1,13 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
 import type { AppSettings, EncoderChoice, GifEngine, Language, OutputFormat, VideoSize } from '../shared/types'
+import { THEMES } from '../shared/types'
 import { defaultOutputDir, settingsPath } from './paths'
 
 const DEFAULTS: AppSettings = {
   outputDir: '',
   language: 'en',
+  theme: 'midnight',
   autoCleanup: true,
   defaultEngine: 'gifski',
   defaultFps: 24,
@@ -40,6 +42,7 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
   return {
     outputDir: typeof raw.outputDir === 'string' ? raw.outputDir : '',
     language: pick(raw.language, LANGUAGES, DEFAULTS.language),
+    theme: pick(raw.theme, [...THEMES], DEFAULTS.theme),
     autoCleanup: raw.autoCleanup !== false,
     defaultEngine: pick(raw.defaultEngine, ENGINES, DEFAULTS.defaultEngine),
     defaultFps: Number.isFinite(fps) ? Math.max(10, Math.min(30, Math.round(fps))) : DEFAULTS.defaultFps,

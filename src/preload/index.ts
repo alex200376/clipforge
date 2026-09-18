@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 import type { ClipForgeApi, CropRequest, InstallResult, NotifyRequest } from '../shared/api'
 import type {
+  AiAssets,
+  AiDetectRequest,
+  AiDetectResult,
+  AiPrepareRequest,
+  AiPrepareResult,
   AppSettings,
   BinaryName,
   CropDetection,
@@ -39,6 +44,14 @@ const api: ClipForgeApi = {
   resolveMetadata: (url: string) => ipcRenderer.invoke('clipforge:url:metadata', url) as Promise<UrlMetadata>,
   exportGif: (request: GifRequest) => ipcRenderer.invoke('clipforge:export:gif', request) as Promise<ExportResult>,
   exportVideo: (request: VideoRequest) => ipcRenderer.invoke('clipforge:export:video', request) as Promise<ExportResult>,
+  aiAssets: () => ipcRenderer.invoke('clipforge:ai:assets') as Promise<AiAssets>,
+  aiPrepare: (request: AiPrepareRequest) => ipcRenderer.invoke('clipforge:ai:prepare', request) as Promise<AiPrepareResult>,
+  aiFrames: (request: { token: string; index: number; from: number; count: number }) =>
+    ipcRenderer.invoke('clipforge:ai:frames', request) as Promise<Uint8Array[]>,
+  aiPatches: (request: { token: string; index: number; from: number; patches: Uint8Array[] }) =>
+    ipcRenderer.invoke('clipforge:ai:patches', request) as Promise<number>,
+  aiComposite: (request: { token: string }) => ipcRenderer.invoke('clipforge:ai:composite', request) as Promise<string>,
+  aiSamples: (request: AiDetectRequest) => ipcRenderer.invoke('clipforge:ai:samples', request) as Promise<AiDetectResult>,
   cancelJob: () => ipcRenderer.invoke('clipforge:job:cancel') as Promise<void>,
   dependencyStates: () => ipcRenderer.invoke('clipforge:deps:status') as Promise<DependencyState[]>,
   installDependencies: (names: BinaryName[]) =>
@@ -59,6 +72,7 @@ const api: ClipForgeApi = {
   readClipboard: () => ipcRenderer.invoke('clipforge:clipboard:text') as Promise<string>,
   loadSession: () => ipcRenderer.invoke('clipforge:session:load') as Promise<SessionState>,
   saveSession: (state: SessionState) => ipcRenderer.invoke('clipforge:session:save', state) as Promise<void>,
+  clearSession: () => ipcRenderer.invoke('clipforge:session:clear') as Promise<void>,
   toggleWindowFullscreen: () => ipcRenderer.invoke('clipforge:window:fullscreen') as Promise<boolean>,
   windowState: () => ipcRenderer.invoke('clipforge:window:state') as Promise<WindowState>,
   minimizeWindow: () => ipcRenderer.invoke('clipforge:window:minimize') as Promise<void>,

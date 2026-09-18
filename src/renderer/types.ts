@@ -60,6 +60,9 @@ export type BudgetChoice = 'off' | '8mb'
 
 export type PresetId = 'discord' | 'x' | 'slack' | 'wallpaper'
 
+/** Where a corner preset drops a logo box. */
+export type WatermarkCorner = 'tl' | 'tr' | 'bl' | 'br'
+
 export interface EstimateView {
   /** Rough size for the current settings; null until a clip is loaded. */
   bytes: number | null

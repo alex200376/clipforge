@@ -12,7 +12,8 @@ interface YtDlpPayload {
   /** Top-level width/height are only present on some sites; formats carry them too. */
   width?: number
   height?: number
-  formats?: Array<{ width?: number; height?: number }>
+  fps?: number
+  formats?: Array<{ width?: number; height?: number; fps?: number }>
   entries?: YtDlpPayload[]
 }
 
@@ -44,17 +45,18 @@ function run(url: string, onLog?: (line: string) => void): Promise<string> {
 }
 
 export async function resolveMetadata(url: string, onLog?: (line: string) => void): Promise<UrlMetadata> {
-  const raw = await run(url, onLog)
-  const parsed = JSON.parse(raw) as YtDlpPayload
+  const parsed = JSON.parse(await run(url, onLog)) as YtDlpPayload
   const entry = parsed.entries?.[0] ?? parsed
   // Without a frame size the crop overlay and the size estimate have nothing to
   // work from, so fall back to the largest declared format.
-  const largest = (entry.formats ?? []).reduce<{ width: number; height: number }>(
+  const largest = (entry.formats ?? []).reduce<{ width: number; height: number; fps: number }>(
     (best, format) => {
       const area = (format.width ?? 0) * (format.height ?? 0)
-      return area > best.width * best.height ? { width: format.width ?? 0, height: format.height ?? 0 } : best
+      return area > best.width * best.height
+        ? { width: format.width ?? 0, height: format.height ?? 0, fps: format.fps ?? 0 }
+        : best
     },
-    { width: 0, height: 0 }
+    { width: 0, height: 0, fps: 0 }
   )
   return {
     title: entry.title ?? 'Untitled',
@@ -62,6 +64,8 @@ export async function resolveMetadata(url: string, onLog?: (line: string) => voi
     thumbnail: entry.thumbnail ?? null,
     webpageUrl: entry.webpage_url ?? url,
     width: Number(entry.width ?? largest.width ?? 0),
-    height: Number(entry.height ?? largest.height ?? 0)
+    height: Number(entry.height ?? largest.height ?? 0),
+    /** 0 when the site does not report one; frame stepping then assumes 25fps. */
+    fps: Number(entry.fps ?? largest.fps ?? 0)
   }
 }

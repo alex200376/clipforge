@@ -1,6 +1,6 @@
 {
   "name": "clipforge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ClipForge — The All-in-One GIF & Video Studio",
   "private": true,
   "author": "ClipForge",
@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "prepare:binaries": "node scripts/prepare-binaries.mjs",
+    "check:models": "node scripts/check-models.mjs",
     "make:icon": "node scripts/make-icon.mjs",
     "dist": "npm run prepare:binaries && npm run build && electron-builder --win nsis",
     "release": "electron-builder --win nsis --publish always -c.publish.provider=github -c.publish.releaseType=release"
@@ -41,6 +42,7 @@
     "electron": "^33.3.1",
     "electron-builder": "^25.1.8",
     "lucide-react": "^1.46.0",
+    "onnxruntime-web": "^1.20.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwind-merge": "^3.7.0",

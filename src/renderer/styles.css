@@ -4,39 +4,96 @@
 /* ---------- shadcn design tokens (dark) ---------- */
 
 :root {
+  /* ---------- base palette (Midnight) ----------
+     A theme is a set of these; every colour in the sheet is one of them or derived
+     from one. Adding a theme means adding one block below and nothing else. */
   --background: #080d16;
-  --foreground: #e8eef8;
-  --card: #0d1726;
-  --card-foreground: #e8eef8;
-  --popover: #111b2c;
-  --popover-foreground: #e8eef8;
-  --primary: #5148e8;
-  --primary-foreground: #ffffff;
-  --secondary: #111b2c;
-  --secondary-foreground: #e8eef8;
-  --muted: #111b2c;
-  --muted-foreground: #7d8da6;
-  --accent: #1d2c47;
-  --accent-foreground: #ffffff;
-  --destructive: #f87171;
-  --destructive-foreground: #1b0708;
-  --border: #1d2d45;
-  --input: #273b58;
-  --ring: #6d66f5;
-  --radius: 0.875rem;
-
-  /* ClipForge extras */
   --panel: #0d1726;
   --panel-deep: #0a111d;
   --elevated: #111b2c;
   --input-bg: #0b1322;
-  --text-dim: #7d8da6;
+  --stage: #060a12;
+  --void: #000000;
+  --track: #0a1220;
+  --border: #1d2d45;
+  --input: #273b58;
+  --edge: #16233a;
+  --border-soft: #1f3049;
+  --border-strong: #24354f;
+  --border-brand: #4e46a4;
+  --surface-hover: #131e31;
+  --surface-nav-active: #221f5e;
+  --border-nav-active: #4c47b8;
+  --accent: #1d2c47;
+  --foreground: #e8eef8;
   --text-soft: #9aaac1;
+  --text-dim: #7d8da6;
+  --text-faint: #5f708c;
+  --text-meta: #5e6f8a;
+  --text-ghost: #55657f;
   --accent-bright: #6d66f5;
   --accent-soft: #a5a0ff;
+  --primary: #5148e8;
+  --ring: #6d66f5;
   --success: #4ade80;
   --warning: #fbbf24;
-  --sidebar-width: 264px;
+  --destructive: #f87171;
+  --destructive-foreground: #1b0708;
+  --danger-solid: #d13438;
+  --scrim: #02060e;
+  color-scheme: dark;
+
+  /* ---------- derived ----------
+     Computed from the base palette above, so each theme states only its palette.
+     Status colours mix toward `foreground`, which inverts in a light theme, so a
+     tint that reads on a dark panel also reads on a light one. */
+  --card: var(--panel);
+  --card-foreground: var(--foreground);
+  --popover: var(--elevated);
+  --popover-foreground: var(--foreground);
+  --secondary: var(--elevated);
+  --secondary-foreground: var(--foreground);
+  --muted: var(--elevated);
+  --muted-foreground: var(--text-dim);
+  --primary-foreground: var(--on-accent);
+  --accent-foreground: var(--on-accent);
+  --on-accent: #ffffff;
+
+  --rule: color-mix(in oklab, var(--border) 62%, transparent);
+  --border-note: color-mix(in oklab, var(--border) 60%, var(--foreground) 22%);
+  --border-bullet: color-mix(in oklab, var(--border) 64%, var(--foreground) 20%);
+  --border-success: color-mix(in oklab, var(--success) 40%, var(--panel));
+  --border-success-soft: color-mix(in oklab, var(--success) 26%, var(--panel));
+  --border-toast: color-mix(in oklab, var(--success) 32%, var(--panel));
+  --border-warning: color-mix(in oklab, var(--warning) 34%, var(--panel));
+  --border-danger: color-mix(in oklab, var(--destructive) 40%, var(--panel));
+  --border-danger-solid: color-mix(in oklab, var(--danger-solid) 62%, var(--foreground) 38%);
+  --surface-success-tint: color-mix(in oklab, var(--success) 14%, var(--panel));
+  --surface-warning-tint: color-mix(in oklab, var(--warning) 12%, var(--panel));
+  --surface-danger-tint: color-mix(in oklab, var(--destructive) 16%, var(--panel));
+  --surface-brand-tint: color-mix(in oklab, var(--accent-bright) 22%, var(--panel));
+  --track-busy: color-mix(in oklab, var(--track) 70%, var(--ring) 30%);
+  --dot-idle: color-mix(in oklab, var(--text-dim) 50%, var(--panel) 50%);
+  --control-focus: color-mix(in oklab, var(--input) 62%, var(--primary) 38%);
+  --control-focus-strong: color-mix(in oklab, var(--input) 38%, var(--primary) 62%);
+
+  /* Text ramp: each step is a mix, so a theme's text stays legible on its own
+     surfaces without restating a dozen near-identical greys. */
+  --text-strong: color-mix(in oklab, var(--foreground) 94%, var(--accent-soft) 6%);
+  --text-bright: color-mix(in oklab, var(--foreground) 84%, var(--accent-soft) 16%);
+  --text-mid: color-mix(in oklab, var(--text-dim) 76%, var(--foreground) 24%);
+  --text-eyebrow: color-mix(in oklab, var(--text-dim) 78%, var(--foreground) 22%);
+  --text-brand: color-mix(in oklab, var(--accent-bright) 58%, var(--foreground) 42%);
+  --text-success: color-mix(in oklab, var(--success) 74%, var(--foreground) 26%);
+  --text-danger: color-mix(in oklab, var(--destructive) 56%, var(--foreground) 44%);
+  --text-warning: color-mix(in oklab, var(--warning) 70%, var(--foreground) 30%);
+  --text-warning-muted: color-mix(in oklab, var(--warning) 46%, var(--text-dim) 54%);
+  --brand-top: color-mix(in oklab, var(--accent-bright) 74%, var(--foreground) 26%);
+
+  /* Layout constants that no theme should change. */
+  --radius: 0.875rem;
+  /* In rem, so the rail narrows with everything else on a small screen. */
+  --sidebar-width: 16rem;
   /* Floors for the centre column. `--timeline-max` is the tallest the timeline card
      realistically gets (its trim row wraps to a second line in a narrow centre
      column), and `--preview-min` is how far the preview above it may be squeezed to
@@ -44,9 +101,164 @@
      scrolls instead of letting the two panes paint over each other. The preview's
      floor is deliberately low: it is the pane that can afford to shrink, and the
      frozen alternative — a tall floor — is what made the panes overlap. */
-  --preview-min: 140px;
-  --timeline-max: 272px;
+  --preview-min: 130px;
+  --timeline-max: 196px;
+}
+
+/* ===== ClipForge themes ===== */
+
+/* Each block restates the whole palette, so a token can never leak from :root into a
+   theme and produce an untested combination. */
+[data-theme='graphite'] {
+  --background: #0f1113;
+  --panel: #16191c;
+  --panel-deep: #121517;
+  --elevated: #1d2126;
+  --input-bg: #14171a;
+  --stage: #090a0b;
+  --void: #000000;
+  --track: #0e1012;
+  --border: #2b3036;
+  --input: #3b424a;
+  --edge: #1b1f23;
+  --border-soft: #22272c;
+  --border-strong: #2f353c;
+  --border-brand: #1f5f7d;
+  --surface-hover: #1a2229;
+  --surface-nav-active: #0e3547;
+  --border-nav-active: #1f6f96;
+  --accent: #1b3a4a;
+  --foreground: #ebedef;
+  --text-soft: #a4aab2;
+  --text-dim: #838a93;
+  --text-faint: #656c75;
+  --text-meta: #626871;
+  --text-ghost: #585e66;
+  --accent-bright: #38bdf8;
+  --accent-soft: #a5e0fb;
+  --primary: #0369a1;
+  --ring: #38bdf8;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --destructive: #f87171;
+  --destructive-foreground: #1b0708;
+  --danger-solid: #d13438;
+  --scrim: #04070a;
   color-scheme: dark;
+}
+
+[data-theme='ember'] {
+  --background: #14110d;
+  --panel: #1c1813;
+  --panel-deep: #17130f;
+  --elevated: #241f18;
+  --input-bg: #1a1611;
+  --stage: #0e0b08;
+  --void: #000000;
+  --track: #131009;
+  --border: #342c22;
+  --input: #4a3e2f;
+  --edge: #221d16;
+  --border-soft: #2a241b;
+  --border-strong: #383024;
+  --border-brand: #8a4a1e;
+  --surface-hover: #2a231a;
+  --surface-nav-active: #4d2410;
+  --border-nav-active: #94531f;
+  --accent: #4a2a12;
+  --foreground: #f2ece1;
+  --text-soft: #b5a992;
+  --text-dim: #948972;
+  --text-faint: #756b57;
+  --text-meta: #726653;
+  --text-ghost: #665c4a;
+  --accent-bright: #f97316;
+  --accent-soft: #fdba74;
+  --primary: #c2410c;
+  --ring: #f97316;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --destructive: #f87171;
+  --destructive-foreground: #1b0708;
+  --danger-solid: #d13438;
+  --scrim: #0a0704;
+  color-scheme: dark;
+}
+
+[data-theme='aurora'] {
+  --background: #06120f;
+  --panel: #0c1b17;
+  --panel-deep: #091612;
+  --elevated: #11241f;
+  --input-bg: #0a1915;
+  --stage: #040d0b;
+  --void: #000000;
+  --track: #081411;
+  --border: #1d3a33;
+  --input: #2b5248;
+  --edge: #14302b;
+  --border-soft: #18332d;
+  --border-strong: #224239;
+  --border-brand: #176b62;
+  --surface-hover: #122a25;
+  --surface-nav-active: #0b3a35;
+  --border-nav-active: #1c7a70;
+  --accent: #123c37;
+  --foreground: #e4f2ed;
+  --text-soft: #98b7ae;
+  --text-dim: #7a9a90;
+  --text-faint: #5e7d74;
+  --text-meta: #5b7870;
+  --text-ghost: #527065;
+  --accent-bright: #2dd4bf;
+  --accent-soft: #99f6e4;
+  --primary: #0f766e;
+  --ring: #2dd4bf;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --destructive: #f87171;
+  --destructive-foreground: #1b0708;
+  --danger-solid: #d13438;
+  --scrim: #030b09;
+  color-scheme: dark;
+}
+
+[data-theme='daylight'] {
+  --background: #f5f7fa;
+  --panel: #ffffff;
+  --panel-deep: #eef1f5;
+  --elevated: #ffffff;
+  --input-bg: #ffffff;
+  --stage: #e3e7ee;
+  --void: #12151a;
+  --track: #dfe4eb;
+  --border: #d4dae3;
+  --input: #bfc7d4;
+  --edge: #c8cfda;
+  --border-soft: #cbd2dc;
+  --border-strong: #b7bfcc;
+  --border-brand: #a5b4fc;
+  --surface-hover: #eaeef5;
+  --surface-nav-active: #4f46e5;
+  --border-nav-active: #4338ca;
+  --accent: #4338ca;
+  --foreground: #161d27;
+  --text-soft: #4a5566;
+  --text-dim: #5b6675;
+  --text-faint: #737e8c;
+  --text-meta: #75808d;
+  --text-ghost: #8b95a3;
+  --accent-bright: #4f46e5;
+  --accent-soft: #6366f1;
+  --primary: #4f46e5;
+  --ring: #4f46e5;
+  --success: #16a34a;
+  --warning: #b45309;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --danger-solid: #d13438;
+  --scrim: #2a3240;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -103,8 +315,8 @@
        padding and control heights in rem, and the hand-written rules below do the
        same, so on a small screen everything — text, buttons, fields — tightens up
        together instead of overflowing. It only ever shrinks: above ~1440px the
-       clamp is pinned at the 16px the sheet was designed against. */
-    font-size: clamp(13.5px, 0.55vw + 8px, 16px);
+       clamp is pinned at 15px, the largest the sheet is designed against. */
+    font-size: clamp(13px, 0.5vw + 7px, 15px);
   }
 
   body {
@@ -118,7 +330,7 @@
   }
 
   ::selection {
-    background: rgb(109 102 245 / 0.4);
+    background: color-mix(in oklab, var(--ring) 40%, transparent);
   }
 
   button:focus-visible,
@@ -135,14 +347,14 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #22334d;
+    background: var(--control-focus);
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: content-box;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #2f4a71;
+    background: var(--control-focus-strong);
     background-clip: content-box;
   }
 
@@ -159,7 +371,7 @@
   height: 100vh;
   /* The window is frameless, so this hairline is the only edge it has. Inset:
      a real border would eat into the 100vh the layout is sized against. */
-  box-shadow: inset 0 0 0 1px #16233a;
+  box-shadow: inset 0 0 0 1px var(--edge);
 }
 
 .app.no-sidebar {
@@ -203,8 +415,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
@@ -219,20 +431,20 @@
 }
 
 .window-btn:hover {
-  background: #16233a;
-  border-color: #24354f;
+  background: var(--edge);
+  border-color: var(--border-strong);
   color: var(--foreground);
 }
 
 .window-btn:active {
-  background: #1d2c47;
+  background: var(--accent);
 }
 
 /* The one destructive control in the chrome reads the same everywhere. */
 .window-btn.close:hover {
-  background: #d13438;
-  border-color: #e2565a;
-  color: #fff;
+  background: var(--danger-solid);
+  border-color: var(--border-danger-solid);
+  color: var(--on-accent);
 }
 
 /* Fullscreen has no window to move or close, so the controls step aside and the
@@ -252,26 +464,26 @@
 .sidebar {
   background: var(--panel-deep);
   border-right: 1px solid var(--border);
-  padding: 20px 14px 18px;
+  padding: 16px 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-height: 0;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 8px 24px;
+  gap: 10px;
+  padding: 2px 8px 18px;
   min-width: 0;
 }
 
 .brand-mark {
   display: block;
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   /* The artwork is trimmed to its own edge, so the mark is a little larger than the
      tile it replaced: the transparent corners give it the same optical weight. */
   object-fit: contain;
@@ -282,7 +494,7 @@
 }
 
 .brand-name {
-  font-size: 1.1875rem;
+  font-size: 1.0625rem;
   font-weight: 700;
   letter-spacing: -0.3px;
 }
@@ -290,13 +502,15 @@
 /* Wraps rather than truncates: the tagline is the only place the app explains
    itself up here, and "The All-in-One GIF & Video Stu…" explains nothing. */
 .brand-sub {
-  color: #5e6f8a;
+  color: var(--text-meta);
   font-size: 0.71875rem;
   line-height: 1.35;
 }
 
 .nav-label {
-  color: #5f708c;
+  /* Section headings are small and uppercase, so they need the same 4.5:1 the rest of
+     the body text gets: `--text-faint` measured 3.8:1 on the sidebar. */
+  color: var(--text-dim);
   font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 1.3px;
@@ -305,25 +519,25 @@
 
 .nav-item {
   justify-content: flex-start;
-  gap: 12px;
-  height: 46px;
+  gap: 10px;
+  height: 40px;
   width: 100%;
-  padding: 0 14px;
-  border-radius: 11px;
+  padding: 0 12px;
+  border-radius: 9px;
   color: var(--text-soft);
   font-size: 0.875rem;
   font-weight: 600;
 }
 
 .nav-item:hover {
-  background: #131e31;
-  color: #eef2ff;
+  background: var(--surface-hover);
+  color: var(--text-strong);
 }
 
 .nav-item.active {
-  background: #221f5e;
-  border: 1px solid #4c47b8;
-  color: #fff;
+  background: var(--surface-nav-active);
+  border: 1px solid var(--border-nav-active);
+  color: var(--on-accent);
 }
 
 .nav-text {
@@ -342,7 +556,7 @@
 
 .version-card {
   background: var(--elevated);
-  border: 1px solid #1f3049;
+  border: 1px solid var(--border-soft);
   border-radius: 12px;
   padding: 14px 16px;
 }
@@ -353,7 +567,7 @@
 }
 
 .tagline {
-  color: #5e6f8a;
+  color: var(--text-meta);
   line-height: 1.5;
   padding: 0 8px;
   font-size: 0.78125rem;
@@ -364,8 +578,11 @@
 .workspace {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 22px 26px 20px;
+  gap: 14px;
+  /* No top padding: it moves onto .topbar, which is a drag region. Padding here
+     would be dead pixels at the very top of the window - the strip people aim at
+     to move a frameless window. */
+  padding: 0 20px 16px;
   min-width: 0;
   min-height: 0;
   /* Short windows — and windows with a session or install card in the flow — cannot
@@ -379,32 +596,38 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  /* The top edge gap belongs to the bar, so the whole strip above the controls is a
+     full-width grab handle rather than dead pixels. */
+  padding-top: 18px;
   /* Nothing in the workspace may shrink: when it does not fit, it scrolls. */
   flex: 0 0 auto;
 }
 
 .url-input {
-  flex: 1;
+  /* Grows, but does not eat the row: whatever it leaves becomes the drag gap between
+     the buttons and the window controls. */
+  flex: 2 1 320px;
   min-width: 0;
-  height: 44px;
+  /* In rem, so the field matches the top bar's buttons at every scale. */
+  height: 2.5rem;
   background: var(--elevated);
   border: 1px solid var(--input);
-  border-radius: 12px;
-  padding: 0 18px;
+  border-radius: 10px;
+  padding: 0 14px;
   outline: none;
   transition: border-color 120ms ease, background 120ms ease;
 }
 
 .url-input:focus {
   border-color: var(--accent-bright);
-  background: #131e31;
+  background: var(--surface-hover);
 }
 
 .media-line {
   color: var(--text-dim);
   flex: 0 0 auto;
-  min-height: 20px;
-  font-size: 0.84375rem;
+  min-height: 18px;
+  font-size: 0.8125rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -412,13 +635,13 @@
 
 .main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 400px;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 25rem;
+  gap: 14px;
   flex: 1;
   /* Reserve both columns' minimums. `min-height: min-content` would do it, except
      that the inspector reports its whole scrollable content as its minimum, which
      would leave the panel unbounded and its pinned action unreachable. */
-  min-height: calc(var(--preview-min) + 18px + var(--timeline-max));
+  min-height: calc(var(--preview-min) + 14px + var(--timeline-max));
 }
 
 .center-column {
@@ -426,7 +649,7 @@
   /* The first row may grow but never shrink below the preview's floor, so the pane
      and the timeline cannot overlap however tall the window is. */
   grid-template-rows: minmax(var(--preview-min), 1fr) auto;
-  gap: 18px;
+  gap: 14px;
   min-width: 0;
   min-height: 0;
 }
@@ -445,7 +668,7 @@
 
 .preview-panel {
   position: relative;
-  background: #060a12;
+  background: var(--stage);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
@@ -459,34 +682,34 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #000;
+  background: var(--void);
 }
 
 .preview-panel:fullscreen {
   border: none;
   border-radius: 0;
-  background: #000;
+  background: var(--void);
 }
 
 .preview-empty {
   text-align: center;
   color: var(--text-dim);
-  padding: 40px 28px;
-  line-height: 1.6;
+  padding: 26px 22px;
+  line-height: 1.55;
 }
 
 .preview-empty strong {
   display: block;
   color: var(--foreground);
-  font-size: 1.125rem;
-  margin-bottom: 10px;
+  font-size: 1rem;
+  margin-bottom: 8px;
 }
 
 .preview-shortcuts {
   display: block;
-  margin-top: 18px;
-  color: #55657f;
-  font-size: 0.78125rem;
+  margin-top: 14px;
+  color: var(--text-ghost);
+  font-size: 0.75rem;
 }
 
 .preview-center {
@@ -494,11 +717,11 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  height: 52px;
-  padding: 0 26px;
+  height: 3rem;
+  padding: 0 1.25rem;
   border-radius: 999px;
-  border: 1px solid rgb(160 155 255 / 0.5);
-  background: rgb(16 24 40 / 0.82);
+  border: 1px solid color-mix(in oklab, var(--accent-soft) 50%, transparent);
+  background: color-mix(in oklab, var(--panel) 82%, transparent);
   gap: 9px;
 }
 
@@ -509,16 +732,16 @@
   bottom: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 18px;
-  background: linear-gradient(to top, rgb(4 8 14 / 0.95), rgb(4 8 14 / 0.55) 60%, rgb(4 8 14 / 0));
+  gap: 8px;
+  padding: 10px 14px;
+  background: linear-gradient(to top, color-mix(in oklab, var(--scrim) 95%, transparent), color-mix(in oklab, var(--scrim) 55%, transparent) 60%, transparent);
 }
 
 .preview-time {
-  color: #cbd8ea;
+  color: var(--text-bright);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  font-size: 0.8125rem;
+  font-size: 0.78125rem;
 }
 
 .scrub {
@@ -528,21 +751,21 @@
 
 .preview-note {
   position: absolute;
-  top: 16px;
-  left: 16px;
-  background: rgb(15 23 42 / 0.9);
-  border: 1px solid #33415c;
+  top: 12px;
+  left: 12px;
+  background: color-mix(in oklab, var(--panel) 90%, transparent);
+  border: 1px solid var(--border-note);
   border-radius: 999px;
-  padding: 7px 15px;
-  color: #cbd8ea;
-  font-size: 0.78125rem;
+  padding: 5px 12px;
+  color: var(--text-bright);
+  font-size: 0.75rem;
 }
 
 .preview-note.loop {
   left: auto;
-  right: 16px;
-  color: #c7c2ff;
-  border-color: #4e46a4;
+  right: 12px;
+  color: var(--text-brand);
+  border-color: var(--border-brand);
 }
 
 /* ---------- timeline ---------- */
@@ -551,10 +774,10 @@
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px 14px;
+  padding: 12px 14px 10px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 9px;
 }
 
 .timeline-head {
@@ -565,7 +788,7 @@
 }
 
 .eyebrow {
-  color: #7182a1;
+  color: var(--text-eyebrow);
   font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 1.2px;
@@ -574,9 +797,9 @@
 
 .track {
   position: relative;
-  height: 72px;
-  border-radius: 10px;
-  background-color: #0a1220;
+  height: 48px;
+  border-radius: 8px;
+  background-color: var(--track);
   background-size: 100% 100%;
   background-position: center;
   background-repeat: no-repeat;
@@ -599,10 +822,10 @@
 @keyframes track-pulse {
   0%,
   100% {
-    background-color: #0a1220;
+    background-color: var(--track);
   }
   50% {
-    background-color: #101c30;
+    background-color: var(--track-busy);
   }
 }
 
@@ -610,7 +833,7 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: rgb(6 10 18 / 0.62);
+  background: color-mix(in oklab, var(--scrim) 62%, transparent);
   pointer-events: none;
 }
 
@@ -619,11 +842,11 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   border-left: 2px solid var(--accent-soft);
   border-right: 2px solid var(--accent-soft);
-  background: rgb(81 72 232 / 0.22);
-  box-shadow: inset 0 0 0 1px rgb(109 102 245 / 0.35);
+  background: color-mix(in oklab, var(--primary) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ring) 35%, transparent);
   cursor: grab;
   touch-action: none;
 }
@@ -646,23 +869,23 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 24px;
-  height: 28px;
+  width: 18px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 7px;
-  background: rgb(9 14 24 / 0.6);
-  border: 1px solid rgb(109 102 245 / 0.5);
-  color: #cfd6ff;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--panel) 60%, transparent);
+  border: 1px solid color-mix(in oklab, var(--ring) 50%, transparent);
+  color: var(--text-brand);
   opacity: 0;
   transition: opacity 120ms ease;
   pointer-events: none;
 }
 
 .band-grip svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .track:hover .band-grip,
@@ -674,8 +897,8 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 24px;
-  margin-left: -12px;
+  width: 20px;
+  margin-left: -10px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -690,18 +913,18 @@
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 18px;
-  border-radius: 8px;
-  border: 2px solid #fff;
-  background: linear-gradient(180deg, var(--accent-bright), #5148e8);
-  box-shadow: 0 2px 10px rgb(0 0 0 / 0.5);
+  width: 11px;
+  border-radius: 5px;
+  border: 2px solid var(--on-accent);
+  background: linear-gradient(180deg, var(--accent-bright), var(--primary));
+  box-shadow: 0 2px 10px color-mix(in oklab, var(--scrim) 50%, transparent);
 }
 
 .track-handle:hover::before,
 .track-handle.active::before {
-  background: linear-gradient(180deg, #8b85ff, var(--accent-bright));
-  border-color: #fff;
-  box-shadow: 0 0 0 4px rgb(109 102 245 / 0.25), 0 2px 10px rgb(0 0 0 / 0.5);
+  background: linear-gradient(180deg, var(--brand-top), var(--accent-bright));
+  border-color: var(--on-accent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--ring) 25%, transparent), 0 2px 10px color-mix(in oklab, var(--scrim) 50%, transparent);
 }
 
 .track-handle:focus-visible::before {
@@ -717,7 +940,7 @@
   margin-left: -1px;
   padding: 0;
   border: 0;
-  background: #fff;
+  background: var(--on-accent);
   opacity: 0.85;
   cursor: ew-resize;
   touch-action: none;
@@ -734,30 +957,30 @@
 }
 
 .track-playhead.active {
-  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.45);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--on-accent) 45%, transparent);
   opacity: 1;
 }
 
 .track-hover {
   pointer-events: none;
   position: absolute;
-  bottom: 6px;
+  bottom: 4px;
   transform: translateX(-50%);
-  background: rgb(8 13 22 / 0.92);
+  background: color-mix(in oklab, var(--background) 92%, transparent);
   border: 1px solid var(--input);
-  border-radius: 7px;
-  padding: 3px 9px;
-  font-size: 0.71875rem;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: var(--text-soft);
 }
 
 .track-hint {
   position: absolute;
-  top: 8px;
-  right: 10px;
-  color: #8fa0bd;
-  font-size: 0.75rem;
+  top: 6px;
+  right: 8px;
+  color: var(--text-mid);
+  font-size: 0.6875rem;
   pointer-events: none;
 }
 
@@ -767,17 +990,17 @@
    past the track and would otherwise make the window scroll. */
 .track-ticks {
   position: relative;
-  height: 18px;
+  height: 15px;
   overflow: hidden;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
 }
 
 .trim-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 9px;
   flex-wrap: wrap;
 }
 
@@ -786,15 +1009,15 @@
 }
 
 .time-input {
-  width: 124px;
-  height: 38px;
+  width: 108px;
+  height: 32px;
   text-align: center;
   background: var(--input-bg);
   border: 1px solid var(--input);
-  border-radius: 10px;
-  padding: 0 10px;
+  border-radius: 8px;
+  padding: 0 8px;
   outline: none;
-  font-size: 0.84375rem;
+  font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -822,8 +1045,8 @@
 /* ---------- install card ---------- */
 
 .install-card {
-  background: #2a2110;
-  border: 1px solid #72531b;
+  background: var(--surface-warning-tint);
+  border: 1px solid var(--border-warning);
   border-radius: 12px;
   padding: 18px 20px;
   display: flex;
@@ -833,13 +1056,13 @@
 }
 
 .install-card.is-ready {
-  background: #10231b;
-  border-color: #246b42;
+  background: var(--surface-success-tint);
+  border-color: var(--border-success);
 }
 
 .install-card.has-error {
-  background: #2a1616;
-  border-color: #7f2b2b;
+  background: var(--surface-danger-tint);
+  border-color: var(--border-danger);
 }
 
 .install-card.compact {
@@ -862,15 +1085,15 @@
 }
 
 .install-heading strong {
-  color: #f5d999;
+  color: var(--text-warning);
 }
 
 .install-card.is-ready .install-heading strong {
-  color: #86efac;
+  color: var(--text-success);
 }
 
 .install-card.has-error .install-heading strong {
-  color: #fecaca;
+  color: var(--text-danger);
 }
 
 .install-card.compact .install-heading strong {
@@ -878,7 +1101,7 @@
 }
 
 .install-sub {
-  color: #a9987a;
+  color: var(--text-warning-muted);
   font-size: 0.78125rem;
 }
 
@@ -910,7 +1133,7 @@
   gap: 6px 14px;
   padding: 11px 14px;
   border-radius: 10px;
-  background: rgb(8 13 22 / 0.42);
+  background: color-mix(in oklab, var(--background) 42%, transparent);
   font-size: 0.8125rem;
 }
 
@@ -919,7 +1142,7 @@
   display: block;
   height: 3px;
   border-radius: 999px;
-  background: rgb(255 255 255 / 0.08);
+  background: color-mix(in oklab, var(--on-accent) 8%, transparent);
   overflow: hidden;
 }
 
@@ -933,7 +1156,7 @@
 
 .install-row .install-error {
   grid-column: 1 / -1;
-  color: #fecaca;
+  color: var(--text-danger);
   font-size: 0.71875rem;
   word-break: break-word;
 }
@@ -960,11 +1183,11 @@
 }
 
 .install-row.done .install-phase {
-  color: #86efac;
+  color: var(--text-success);
 }
 
 .install-row.failed .install-phase {
-  color: #fecaca;
+  color: var(--text-danger);
 }
 
 .install-row.cancelled .install-phase {
@@ -976,7 +1199,7 @@
 .install-row.extracting .install-phase,
 .install-row.verifying .install-phase,
 .install-row.resolving .install-phase {
-  color: #c7c2ff;
+  color: var(--text-brand);
 }
 
 /* ---------- output box ---------- */
@@ -989,7 +1212,7 @@
 
 .output-stage {
   position: relative;
-  background: #060a12;
+  background: var(--stage);
   border: 1px solid var(--border);
   border-radius: 12px;
   min-height: 200px;
@@ -1004,7 +1227,7 @@
   height: 100%;
   max-height: 320px;
   object-fit: contain;
-  background: #000;
+  background: var(--void);
 }
 
 .output-empty {
@@ -1035,12 +1258,12 @@
 .activity-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
+  gap: 9px;
+  padding: 9px 14px;
 }
 
 .activity-count {
-  color: #55657f;
+  color: var(--text-ghost);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
@@ -1050,10 +1273,10 @@
 }
 
 .activity {
-  padding: 0 16px 14px;
-  height: 96px;
+  padding: 0 14px 12px;
+  height: 80px;
   overflow-y: auto;
-  color: #7f92ad;
+  color: var(--text-mid);
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 0.78125rem;
   line-height: 1.55;
@@ -1061,7 +1284,7 @@
 }
 
 .activity-empty {
-  color: #55657f;
+  color: var(--text-ghost);
 }
 
 .activity-line {
@@ -1077,34 +1300,48 @@
 }
 
 .activity-time {
-  color: #46566e;
+  color: var(--text-ghost);
   flex: 0 0 auto;
 }
 
 .activity-line.error {
-  color: #f7a3a3;
+  color: var(--text-danger);
 }
 
 .activity-line.done {
-  color: #7fd6a2;
+  color: var(--text-success);
 }
 
 /* ---------- settings ---------- */
 
+/* Three rows: a head that never moves, the cards, and the save bar.
+   Only the middle row scrolls, so the save bar can never paint over a card - a
+   sticky bar looks fine and hides content the moment the window is short, which
+   is exactly when a settings page has the most to show. */
 .settings {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 28px 32px 96px;
-  overflow-y: auto;
+  gap: 18px;
+  /* Top padding lives on the head, which is a drag region (see .workspace), and
+     bottom padding on the footer, which is why neither is here. */
+  padding: 0 32px;
+  overflow: hidden;
   min-height: 0;
   height: 100vh;
 }
 
 .settings-head {
+  /* Static, not sticky: the head is outside the scroller below, so the window
+     controls stay reachable without any pinning. */
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   gap: 14px;
+  padding-top: 28px;
+  /* Full-bleed so the cards cannot show through the gutters. */
+  margin: 0 -32px;
+  padding-inline: 32px;
+  background: var(--background);
 }
 
 .settings-body {
@@ -1113,16 +1350,87 @@
   gap: 20px;
   max-width: 940px;
   width: 100%;
+  /* The only scroller on the page. `overflow-x: hidden` because this is a
+     vertical list: a sideways scrollbar in it is always a stray scrollbar. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-bottom: 22px;
+  scrollbar-gutter: stable;
+}
+
+/* Label above control, the shape of every field on the page. */
+.setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Card headings carry an icon; it is what makes the tabs scannable rather than read. */
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-title svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+/* The swatch paints itself from the theme it previews: `data-theme` on the chip makes
+   that theme's block apply to its subtree, so the stripes come from the same tokens
+   the app uses and cannot drift the way a copy of the palette in JavaScript would. */
+.theme-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.theme-chip > i {
+  display: block;
+  height: 100%;
+}
+
+.theme-chip > i:nth-child(1) {
+  width: 42%;
+  background: var(--background);
+}
+
+.theme-chip > i:nth-child(2) {
+  width: 26%;
+  background: var(--panel);
+}
+
+.theme-chip > i:nth-child(3) {
+  width: 32%;
+  background: var(--accent-bright);
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 22px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 13px;
 }
 
 .card h3 {
@@ -1153,7 +1461,7 @@
   align-items: center;
   gap: 12px;
   padding: 12px 0;
-  border-bottom: 1px solid #16202f;
+  border-bottom: 1px solid var(--rule);
 }
 
 .dep-row:last-of-type {
@@ -1200,17 +1508,24 @@
   color: var(--destructive);
 }
 
+/* A real footer row, not an overlay: the hairline sits above the bar and the band
+   spans the window so cards scroll behind nothing. */
+.settings-foot {
+  flex: 0 0 auto;
+  margin: 0 -32px;
+  padding: 14px 32px 20px;
+  background: var(--background);
+  border-top: 1px solid var(--rule);
+}
+
 .settings-bar {
-  position: sticky;
-  bottom: 0;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 14px 20px;
-  background: rgb(13 23 38 / 0.96);
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  backdrop-filter: blur(6px);
   max-width: 940px;
 }
 
@@ -1219,7 +1534,7 @@
 }
 
 .settings-bar.dirty {
-  border-color: #4e46a4;
+  border-color: var(--border-brand);
 }
 
 /* ---------- export panel controls ---------- */
@@ -1227,7 +1542,7 @@
 .field {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .field-row {
@@ -1235,6 +1550,13 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+/* Add / remove a marked area, sitting on the label's line. */
+.region-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .field-hint {
@@ -1312,7 +1634,7 @@
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: rgb(11 19 34 / 0.55);
+  background: color-mix(in oklab, var(--elevated) 55%, transparent);
 }
 
 .crop-actions {
@@ -1328,8 +1650,11 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* A vertical control list; `overflow-x: hidden` keeps a subpixel of extra width
+     from raising a sideways scrollbar across the bottom of the panel. */
+  overflow-x: hidden;
   overscroll-behavior: contain;
-  padding: 20px 20px 10px;
+  padding: 14px 16px 12px;
   scrollbar-gutter: stable;
 }
 
@@ -1337,8 +1662,8 @@
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 20px 22px;
+  gap: 9px;
+  padding: 12px 16px 14px;
   border-top: 1px solid var(--border);
   background: var(--panel);
 }
@@ -1362,8 +1687,8 @@
 .panel-section {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding-bottom: 22px;
+  gap: 12px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1379,8 +1704,8 @@
 }
 
 .panel-section-head svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   flex: 0 0 auto;
   color: var(--accent-soft);
 }
@@ -1395,11 +1720,11 @@
 .estimate-card {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 18px 20px;
+  gap: 6px;
+  padding: 13px 15px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: rgb(17 27 44 / 0.55);
+  background: color-mix(in oklab, var(--panel) 55%, transparent);
 }
 
 .estimate-value {
@@ -1421,7 +1746,77 @@
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: rgb(11 19 34 / 0.7);
+  background: color-mix(in oklab, var(--elevated) 70%, transparent);
+}
+
+.progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.progress-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* What the running stage is doing inside its step ("Cutting window 1 of 1"): the step
+   label names the phase, this names the work. */
+.progress-subtitle {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.progress-percent {
+  color: var(--foreground);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * Steps whose tools report nothing - gifsicle, gifski's own size pass - sweep instead
+ * of filling: a bar parked at 0% for a minute is indistinguishable from a hang, which
+ * is the one thing a progress display must never say. The animation is what overrides
+ * the indicator's inline transform.
+ */
+.progress-indeterminate [data-slot='progress-indicator'] {
+  width: 38%;
+  flex: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--accent-bright) 70%, transparent) 45%,
+    var(--accent-bright) 55%,
+    transparent
+  );
+  animation: progress-sweep 1.5s ease-in-out infinite;
+}
+
+@keyframes progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(263%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-indeterminate [data-slot='progress-indicator'] {
+    width: 100%;
+    opacity: 0.4;
+    animation: none;
+    transform: none !important;
+  }
 }
 
 .progress-meta {
@@ -1454,7 +1849,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  color: #5f708c;
+  color: var(--text-faint);
 }
 
 .step-list li::before {
@@ -1462,7 +1857,7 @@
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  border: 1px solid #33445f;
+  border: 1px solid var(--border-bullet);
   flex: 0 0 auto;
 }
 
@@ -1476,14 +1871,36 @@
 }
 
 .step-list li.active {
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
 .step-list li.active::before {
   background: var(--accent-bright);
   border-color: var(--accent-soft);
-  box-shadow: 0 0 0 3px rgb(109 102 245 / 0.25);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent);
+}
+
+.step-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The per-step figure on the right: how long a finished step took, or how far the
+   running one is. */
+.step-note {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.step-list li.done .step-note,
+.step-list li.active .step-note {
+  color: inherit;
+  opacity: 0.72;
 }
 
 .btn-quiet {
@@ -1499,8 +1916,11 @@
 .status-area {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
-  margin-left: auto;
+  /* Takes the slack the URL field leaves. It is a plain div, so unlike the buttons
+     around it the whole area stays draggable - this is the bar's main grab handle. */
+  flex: 1 1 80px;
   min-width: 0;
 }
 
@@ -1530,7 +1950,7 @@
 .timeline-meta {
   margin-left: auto;
   color: var(--text-dim);
-  font-size: 0.78125rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1546,14 +1966,14 @@
 }
 
 .trim-hint-alt {
-  color: #5b6b85;
+  color: var(--text-meta);
   font-size: 0.71875rem;
 }
 
 .tick {
   position: absolute;
   transform: translateX(-50%);
-  color: #5f708c;
+  color: var(--text-faint);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1561,12 +1981,13 @@
 
 .track-hover-card {
   position: absolute;
-  bottom: 88px;
-  padding: 4px;
-  border-radius: 10px;
+  /* Clears the track it is drawn above, whatever height the track currently is. */
+  bottom: calc(100% + 16px);
+  padding: 3px;
+  border-radius: 8px;
   border: 1px solid var(--input);
-  background: rgb(6 10 18 / 0.94);
-  box-shadow: 0 10px 28px rgb(2 6 14 / 0.6);
+  background: color-mix(in oklab, var(--scrim) 94%, transparent);
+  box-shadow: 0 10px 28px color-mix(in oklab, var(--scrim) 60%, transparent);
   pointer-events: none;
   z-index: 5;
 }
@@ -1579,9 +2000,9 @@
 .track-hover-frame {
   pointer-events: none;
   position: absolute;
-  bottom: 6px;
+  bottom: 4px;
   transform: translateX(-50%);
-  color: #5f708c;
+  color: var(--text-faint);
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
 }
@@ -1589,13 +2010,13 @@
 .track-snap {
   pointer-events: none;
   position: absolute;
-  top: 6px;
-  left: 6px;
-  padding: 3px 9px;
+  top: 4px;
+  left: 4px;
+  padding: 2px 8px;
   border-radius: 999px;
-  background: rgb(9 14 24 / 0.86);
-  border: 1px solid rgb(109 102 245 / 0.45);
-  color: #cfd6ff;
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  border: 1px solid color-mix(in oklab, var(--ring) 45%, transparent);
+  color: var(--text-brand);
   font-size: 0.6875rem;
   white-space: nowrap;
 }
@@ -1608,62 +2029,118 @@
 /* ---------- preview crop + loading ---------- */
 
 /* Sits over the letterboxed picture area, so crop percentages map to the frame. */
-.crop-layer {
+/*
+ * A layer is only a coordinate space for its box. It spans the whole picture, so
+ * if it were hit-testable it would swallow every pointer event - including the
+ * ones meant for the other editor's box, which sits above or below it - and only
+ * one of the two could ever be touched. The boxes themselves answer the pointer.
+ */
+.crop-layer,
+.wm-layer {
   position: absolute;
   touch-action: none;
   overflow: hidden;
+  pointer-events: none;
 }
 
 .crop-box {
   position: absolute;
-  border: 1px solid rgb(255 255 255 / 0.9);
-  box-shadow: 0 0 0 9999px rgb(4 8 14 / 0.55);
+  border: 1px solid color-mix(in oklab, var(--on-accent) 90%, transparent);
+  box-shadow: 0 0 0 9999px color-mix(in oklab, var(--scrim) 55%, transparent);
   cursor: move;
+  pointer-events: auto;
 }
 
-.crop-size {
+/*
+ * The label sits inside the box, centred on its top edge. Above the box it would
+ * be clipped away by the layer - a crop of the whole frame, or a logo marked in a
+ * frame corner, has no room up there at all - and the corner handles are already
+ * using the two top corners.
+ */
+.crop-size,
+.wm-size {
   position: absolute;
-  top: -20px;
-  left: 0;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
   padding: 1px 6px;
   border-radius: 4px;
-  background: rgb(9 14 24 / 0.9);
-  color: #e6ebf7;
+  background: color-mix(in oklab, var(--panel) 90%, transparent);
+  color: var(--text-strong);
   font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.crop-handle {
+/*
+ * The logo boxes are drawn in the warning colour rather than the crop's accent:
+ * both editors can be on screen at once, and they do different things - one
+ * keeps a rectangle of the picture, the other paints its rectangle out.
+ */
+.wm-box {
+  position: absolute;
+  pointer-events: auto;
+  border: 1px dashed var(--warning);
+  background: repeating-linear-gradient(
+    45deg,
+    color-mix(in oklab, var(--warning) 26%, transparent) 0 5px,
+    transparent 5px 10px
+  );
+  cursor: move;
+}
+
+/* The region the panel is editing is the one that answers to the pointer. */
+.wm-box.active {
+  border-style: solid;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--warning) 45%, transparent);
+}
+
+.crop-handle,
+.wm-handle {
   position: absolute;
   width: 14px;
   height: 14px;
-  border: 2px solid #fff;
+  border: 2px solid var(--on-accent);
   background: var(--accent-bright);
   border-radius: 3px;
 }
 
-.crop-handle.nw {
-  top: -7px;
-  left: -7px;
+.wm-handle {
+  background: var(--warning);
+}
+
+/*
+ * The handles sit just inside the box rather than straddling it. The layer clips
+ * to the picture (the crop's dimming is a 9999px shadow that has to be clipped
+ * somewhere), so a handle hanging outside the box is invisible and unclickable -
+ * which is exactly the case for a crop of the whole frame, or a logo box marked
+ * flush in a corner, where the box edge and the picture edge are the same line.
+ */
+.crop-handle.nw,
+.wm-handle.nw {
+  top: 2px;
+  left: 2px;
   cursor: nwse-resize;
 }
 
-.crop-handle.ne {
-  top: -7px;
-  right: -7px;
+.crop-handle.ne,
+.wm-handle.ne {
+  top: 2px;
+  right: 2px;
   cursor: nesw-resize;
 }
 
-.crop-handle.sw {
-  bottom: -7px;
-  left: -7px;
+.crop-handle.sw,
+.wm-handle.sw {
+  bottom: 2px;
+  left: 2px;
   cursor: nesw-resize;
 }
 
-.crop-handle.se {
-  bottom: -7px;
-  right: -7px;
+.crop-handle.se,
+.wm-handle.se {
+  bottom: 2px;
+  right: 2px;
   cursor: nwse-resize;
 }
 
@@ -1673,7 +2150,7 @@
   height: 100%;
   min-height: 200px;
   overflow: hidden;
-  background: #0a1220;
+  background: var(--track);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1682,7 +2159,7 @@
 .skeleton-shimmer {
   position: absolute;
   inset: 0;
-  background: linear-gradient(100deg, transparent 20%, rgb(109 102 245 / 0.16) 50%, transparent 80%);
+  background: linear-gradient(100deg, transparent 20%, color-mix(in oklab, var(--ring) 16%, transparent) 50%, transparent 80%);
   animation: shimmer 1.4s linear infinite;
 }
 
@@ -1717,7 +2194,7 @@
   display: grid;
   place-items: center;
   padding: 28px;
-  background: rgb(6 10 18 / 0.72);
+  background: color-mix(in oklab, var(--scrim) 72%, transparent);
   backdrop-filter: blur(3px);
 }
 
@@ -1731,9 +2208,9 @@
   padding: 52px 44px;
   border: 2px dashed var(--accent-soft);
   border-radius: 20px;
-  background: rgb(15 23 40 / 0.92);
+  background: color-mix(in oklab, var(--panel) 92%, transparent);
   text-align: center;
-  box-shadow: 0 24px 60px rgb(2 6 14 / 0.6);
+  box-shadow: 0 24px 60px color-mix(in oklab, var(--scrim) 60%, transparent);
 }
 
 .drop-zone-inner svg {
@@ -1759,20 +2236,20 @@
   flex: 0 0 auto;
   gap: 14px;
   padding: 16px 18px;
-  border: 1px solid rgb(109 102 245 / 0.4);
+  border: 1px solid color-mix(in oklab, var(--ring) 40%, transparent);
   border-radius: var(--radius);
-  background: linear-gradient(135deg, rgb(28 26 78 / 0.75), rgb(13 23 38 / 0.9));
+  background: linear-gradient(135deg, var(--surface-brand-tint), color-mix(in oklab, var(--panel) 90%, transparent));
 }
 
 .guide-card.error {
-  border-color: rgb(248 113 113 / 0.45);
-  background: linear-gradient(135deg, rgb(66 24 30 / 0.7), rgb(13 23 38 / 0.9));
+  border-color: color-mix(in oklab, var(--destructive) 45%, transparent);
+  background: linear-gradient(135deg, var(--surface-danger-tint), color-mix(in oklab, var(--panel) 90%, transparent));
 }
 
 /* A downloaded update waiting on a restart is good news, so it reads green. */
 .guide-card.ready {
-  border-color: rgb(74 222 128 / 0.45);
-  background: linear-gradient(135deg, rgb(15 46 33 / 0.7), rgb(13 23 38 / 0.9));
+  border-color: color-mix(in oklab, var(--success) 45%, transparent);
+  background: linear-gradient(135deg, var(--surface-success-tint), color-mix(in oklab, var(--panel) 90%, transparent));
 }
 
 .update-status {
@@ -1852,7 +2329,7 @@
   height: 24px;
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 0.75rem;
   font-weight: 700;
 }
@@ -1865,9 +2342,9 @@
   flex: 0 0 auto;
   gap: 13px;
   padding: 16px 18px;
-  border: 1px solid rgb(248 113 113 / 0.45);
+  border: 1px solid color-mix(in oklab, var(--destructive) 45%, transparent);
   border-radius: var(--radius);
-  background: rgb(58 20 26 / 0.55);
+  background: var(--surface-danger-tint);
 }
 
 .error-card > svg {
@@ -1891,7 +2368,7 @@
 
 .error-body p {
   margin: 0;
-  color: #f2c4c4;
+  color: var(--text-danger);
   font-size: 0.8125rem;
   line-height: 1.55;
   word-break: break-word;
@@ -1916,10 +2393,10 @@
   gap: 13px;
   max-width: 480px;
   padding: 16px 18px;
-  border: 1px solid #2b4a37;
+  border: 1px solid var(--border-toast);
   border-radius: var(--radius);
-  background: rgb(13 26 24 / 0.97);
-  box-shadow: 0 18px 44px rgb(2 6 14 / 0.65);
+  background: var(--surface-success-tint);
+  box-shadow: 0 18px 44px color-mix(in oklab, var(--scrim) 65%, transparent);
   animation: toast-in 180ms ease;
 }
 
@@ -1972,7 +2449,7 @@
   z-index: 70;
   display: grid;
   place-items: center;
-  background: rgb(4 8 14 / 0.7);
+  background: color-mix(in oklab, var(--scrim) 70%, transparent);
 }
 
 .sheet {
@@ -1983,7 +2460,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
-  box-shadow: 0 26px 70px rgb(2 6 14 / 0.7);
+  box-shadow: 0 26px 70px color-mix(in oklab, var(--scrim) 70%, transparent);
 }
 
 .sheet-head {
@@ -2038,7 +2515,7 @@
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
-  color: #4d5f7d;
+  color: var(--text-ghost);
 }
 
 .activity-icon svg {
@@ -2064,9 +2541,9 @@
   gap: 4px;
   height: 24px;
   padding: 0 10px;
-  border: 1px solid rgb(251 191 36 / 0.4);
+  border: 1px solid color-mix(in oklab, var(--warning) 40%, transparent);
   border-radius: 999px;
-  background: rgb(60 44 12 / 0.6);
+  background: var(--surface-warning-tint);
   color: var(--warning);
   font-size: 0.71875rem;
   font-variant-numeric: tabular-nums;
@@ -2103,7 +2580,7 @@
 .filter-chip.on {
   background: var(--accent);
   border-color: var(--accent-bright);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .btn-label {
@@ -2117,9 +2594,9 @@
   align-items: center;
   gap: 11px;
   padding: 14px 16px;
-  border: 1px solid #24402f;
+  border: 1px solid var(--border-success-soft);
   border-radius: 12px;
-  background: rgb(15 32 24 / 0.6);
+  background: var(--surface-success-tint);
   color: var(--text-soft);
   font-size: 0.78125rem;
   line-height: 1.45;
@@ -2132,7 +2609,7 @@
   padding: 16px 18px;
   border: 1px dashed var(--input);
   border-radius: 12px;
-  background: rgb(11 19 34 / 0.6);
+  background: color-mix(in oklab, var(--elevated) 60%, transparent);
   color: var(--text-soft);
   cursor: grab;
 }
@@ -2188,7 +2665,7 @@
   gap: 12px;
   min-height: 48px;
   padding: 0 16px;
-  background: rgb(11 19 34 / 0.45);
+  background: color-mix(in oklab, var(--elevated) 45%, transparent);
 }
 
 .tool-row + .tool-row {
@@ -2200,17 +2677,17 @@
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #43536b;
+  background: var(--dot-idle);
 }
 
 .tool-row.ok .tool-dot {
   background: var(--success);
-  box-shadow: 0 0 0 3px rgb(74 222 128 / 0.14);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 14%, transparent);
 }
 
 .tool-row.missing .tool-dot {
   background: var(--warning);
-  box-shadow: 0 0 0 3px rgb(251 191 36 / 0.14);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warning) 14%, transparent);
 }
 
 .tool-name {
@@ -2258,7 +2735,7 @@
     /* The narrower centre column wraps the timeline's trim row onto a second line,
        so the preview gives a little more of itself back before the workspace has to
        start scrolling. */
-    --preview-min: 180px;
+    --preview-min: 168px;
   }
 
   .main {
@@ -2287,7 +2764,7 @@
    timeline to the height the main grid reserved for it. */
 @media (max-width: 1360px) {
   .time-input {
-    width: 112px;
+    width: 96px;
   }
 }
 
@@ -2361,12 +2838,37 @@
     height: min(620px, 70vh);
   }
 
+  /* Stacked, the inspector is as wide as the window, so the pinned action row can
+     sit on one line. That hands roughly 30px back to the scrolling body, which on a
+     short window is the difference between seeing one field and two. */
+  .export-footer {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .export-footer .field-hint {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .export-footer > button {
+    flex: 0 0 auto;
+    min-width: 190px;
+  }
+
   /* Stacked, width is the scarce dimension. The top bar's labels go first: every
      one of those buttons already carries a tooltip and an aria-label, and the URL
      field is what actually needs the room. */
   .workspace {
-    padding: 16px 18px 16px;
-    gap: 14px;
+    padding: 0 14px 12px;
+    gap: 12px;
+  }
+
+  /* Keeps the same visual inset as the old workspace padding-top, but as a drag
+     handle. */
+  .topbar {
+    padding-top: 14px;
   }
 
   .topbar .btn-label {
@@ -2374,13 +2876,13 @@
   }
 
   .window-btn {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
   }
 
   .preview-controls {
-    padding: 10px 14px;
-    gap: 8px;
+    padding: 8px 12px;
+    gap: 7px;
   }
 }
 
@@ -2390,41 +2892,45 @@
    fold. The log is the pane that can give the space back. */
 @media (max-height: 880px) {
   :root {
-    --timeline-max: 264px;
+    --timeline-max: 190px;
   }
 
   .activity {
-    height: 88px;
+    height: 68px;
   }
 
   .workspace {
-    padding: 18px 22px 16px;
-    gap: 16px;
+    padding: 0 18px 12px;
+    gap: 12px;
+  }
+
+  .topbar {
+    padding-top: 16px;
   }
 
   .timeline {
-    gap: 10px;
+    gap: 8px;
   }
 }
 
 @media (max-height: 780px) {
   :root {
-    --preview-min: 160px;
-    --timeline-max: 256px;
+    --preview-min: 148px;
+    --timeline-max: 186px;
   }
 
   .activity {
-    height: 80px;
+    height: 60px;
   }
 
   /* A short pane has to drop the least useful line of the empty state rather than
      clip it. */
   .preview-empty {
-    padding: 22px 24px;
+    padding: 18px 20px;
   }
 
   .preview-empty strong {
-    font-size: 1rem;
+    font-size: 0.9375rem;
     margin-bottom: 6px;
   }
 
@@ -2438,41 +2944,41 @@
    do: the log, the timeline and the inspector's own padding. */
 @media (max-height: 720px) {
   :root {
-    --preview-min: 150px;
-    --timeline-max: 248px;
+    --preview-min: 138px;
+    --timeline-max: 176px;
   }
 
   .activity {
-    height: 56px;
+    height: 48px;
   }
 
   .timeline {
-    padding: 14px 16px 12px;
-    gap: 10px;
+    padding: 10px 12px 8px;
+    gap: 7px;
   }
 
   .track {
-    height: 60px;
+    height: 42px;
   }
 
   .export-scroll {
-    padding: 14px 16px 8px;
+    padding: 10px 14px 10px;
   }
 
   .panel-section {
-    gap: 12px;
-    padding-bottom: 14px;
+    gap: 10px;
+    padding-bottom: 12px;
   }
 
   .export-footer {
-    gap: 10px;
-    padding: 12px 16px 16px;
+    gap: 8px;
+    padding: 10px 14px 12px;
   }
 
   /* Height is the scarce dimension here, so cap the fluid scale a little lower
      than the width rule would have it — but never *above* it, or a narrow, short
      window would grow its type as it shrinks. */
   html {
-    font-size: min(15px, clamp(13.5px, 0.55vw + 8px, 16px));
+    font-size: min(14px, clamp(13px, 0.5vw + 7px, 15px));
   }
 }

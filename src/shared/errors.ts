@@ -20,7 +20,8 @@ export type ErrorCode =
   | 'install-failed'
   | 'verify-failed'
   | 'no-frames'
-  | 'url-unsupported'
+  | 'source-missing'
+  | 'remote-source'
   | 'unsupported-source'
   | 'unknown'
 
@@ -36,7 +37,8 @@ export const ERROR_CODES: ErrorCode[] = [
   'install-failed',
   'verify-failed',
   'no-frames',
-  'url-unsupported',
+  'source-missing',
+  'remote-source',
   'unsupported-source',
   'unknown'
 ]

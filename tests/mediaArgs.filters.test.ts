@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   GIFSICLE_LOSSY,
+  MAX_WATERMARKS,
   centeredCrop,
+  clampWatermarks,
   cropdetectArgs,
   gifsicleOptimizeArgs,
   normalizeCrop,
+  normalizeWatermarks,
   outputDuration,
   paletteArgs,
   parseCropDetect,
@@ -13,6 +16,7 @@ import {
   trimArgs,
   videoEncoderArgs,
   videoFilter,
+  watermarkFilters,
   webpArgs
 } from '../src/shared/mediaArgs'
 
@@ -96,6 +100,76 @@ describe('animated outputs', () => {
     expect(args[args.indexOf('-c:v') + 1]).toBe('libwebp_anim')
     expect(args).toContain('-an')
     expect(args[args.length - 1]).toBe('out.webp')
+  })
+})
+
+describe('watermark removal', () => {
+  const logo = { x: 20, y: 20, width: 120, height: 40 }
+
+  it('emits one delogo per marked area', () => {
+    expect(watermarkFilters([logo])).toEqual(['delogo=x=20:y=20:w=120:h=40'])
+    const two = videoFilter('video', { fps: null, width: null }, { watermarks: [logo, { x: 300, y: 40, width: 80, height: 30 }] })
+    expect(two).toContain('delogo=x=20:y=20:w=120:h=40,delogo=x=300:y=40:w=80:h=30')
+  })
+
+  it('paints the logo out before the crop and the resize move the frame', () => {
+    // The boxes are source pixels, so they have to be applied while the frame
+    // is still the source frame.
+    const filter = videoFilter('palette', { fps: 24, width: 480 }, { crop, watermarks: [logo] })
+    expect(filter.indexOf('delogo=')).toBeLessThan(filter.indexOf('crop=300'))
+    expect(filter.indexOf('delogo=')).toBeLessThan(filter.indexOf('scale=480'))
+  })
+
+  it('leaves the graph untouched when nothing is marked', () => {
+    const plain = videoFilter('palette', { fps: 24, width: 480 }, {}) 
+    expect(plain).not.toContain('delogo')
+    expect(watermarkFilters(null)).toEqual([])
+    expect(clampWatermarks(undefined)).toEqual([])
+  })
+
+  it('keeps a box a pixel inside the frame, where delogo can sample around it', () => {
+    // A box flush with the corner makes ffmpeg abort with "Logo area is outside
+    // of the frame", so the marking is pulled in instead.
+    expect(normalizeWatermarks([{ x: 0, y: 0, width: 120, height: 40 }], 640, 360)).toEqual([
+      { x: 1, y: 1, width: 120, height: 40 }
+    ])
+  })
+
+  it('trims a box that runs off the far edge instead of failing the export', () => {
+    expect(normalizeWatermarks([{ x: 600, y: 340, width: 200, height: 100 }], 640, 360)).toEqual([
+      { x: 600, y: 340, width: 39, height: 19 }
+    ])
+  })
+
+  it('drops a marking the frame is too small to hold', () => {
+    expect(normalizeWatermarks([logo], 0, 0)).toEqual([])
+    expect(normalizeWatermarks([logo], 2, 2)).toEqual([])
+  })
+
+  it('caps how many areas a request can carry', () => {
+    const many = Array.from({ length: MAX_WATERMARKS + 3 }, (_, index) => ({ ...logo, y: 20 + index }))
+    expect(clampWatermarks(many)).toHaveLength(MAX_WATERMARKS)
+  })
+
+  it('refuses to stream-copy once a logo has to be painted out', () => {
+    const copied = trimArgs('in.mp4', 'out.mp4', {
+      start: 0,
+      end: 2,
+      mute: false,
+      streamCopy: true,
+      watermarks: [logo]
+    })
+    expect(copied).not.toContain('copy')
+    expect(copied.join(' ')).toContain('delogo=x=20:y=20:w=120:h=40')
+  })
+
+  it('carries the marking into a GIF and an animated WebP', () => {
+    expect(paletteArgs('in.mp4', 'out.gif', { ...base, watermarks: [logo] }).join(' ')).toContain(
+      'delogo=x=20:y=20:w=120:h=40'
+    )
+    expect(webpArgs('in.mp4', 'out.webp', { ...base, watermarks: [logo] }).join(' ')).toContain(
+      'delogo=x=20:y=20:w=120:h=40'
+    )
   })
 })
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Cpu, FolderOpen, Gauge, Info, Palette, SlidersHorizontal, Wrench } from 'lucide-react'
 
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -11,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 import { UpdatePanel } from './UpdatePanel'
 import { WindowControls } from './WindowControls'
+import { THEMES } from '../../shared/types'
 import type {
   AppSettings,
   BinaryName,
@@ -21,6 +23,7 @@ import type {
   InstallProgressEvent,
   Language,
   OutputFormat,
+  Theme,
   ToolVersion,
   UpdateState,
   VideoSize
@@ -30,6 +33,31 @@ import { useI18n } from '../i18n'
 const FPS_OPTIONS = [10, 15, 20, 24, 30]
 const WIDTHS: Array<number | null> = [null, 320, 480, 640, 720]
 const NATIVE = 'native'
+
+/** A card heading with an icon, so the page can be scanned rather than read. */
+function CardHeading({ icon: Icon, children }: { icon: typeof Cpu; children: string }): JSX.Element {
+  return (
+    <span className="card-title">
+      <Icon />
+      {children}
+    </span>
+  )
+}
+
+/**
+ * The swatch is painted by the theme it previews: `data-theme` on the chip makes that
+ * theme's block apply to its subtree, so the three stripes come from the same tokens
+ * the app uses. A second copy of the palette in JavaScript could drift; this cannot.
+ */
+function ThemeSwatch({ theme }: { theme: Theme }): JSX.Element {
+  return (
+    <span className="theme-chip" data-theme={theme} aria-hidden="true">
+      <i />
+      <i />
+      <i />
+    </span>
+  )
+}
 
 type SettingsTab = 'output' | 'defaults' | 'tools' | 'system'
 
@@ -127,6 +155,16 @@ export function SettingsPage({
     onSave({ language })
   }
 
+  /**
+   * The theme repaints the whole shell, so judging it behind a Save button would mean
+   * looking at the wrong colours. It applies and persists the moment it is picked, and
+   * is therefore not part of `dirty`.
+   */
+  const changeTheme = (theme: Theme): void => {
+    setDraft((previous) => ({ ...previous, theme }))
+    onSave({ theme })
+  }
+
   const applyRecommended = (): void => {
     if (!hardware) return
     setDraft((previous) => ({
@@ -185,7 +223,9 @@ export function SettingsPage({
         <TabsContent value="output" className="flex flex-col gap-4">
           <Card>
             <CardHeader>
-              <CardTitle>{t('settings.output.title')}</CardTitle>
+              <CardTitle>
+                <CardHeading icon={FolderOpen}>{t('settings.output.title')}</CardHeading>
+              </CardTitle>
               <CardDescription>{t('settings.output.description')}</CardDescription>
             </CardHeader>
             <CardContent>
@@ -219,7 +259,9 @@ export function SettingsPage({
 
           <Card>
             <CardHeader>
-              <CardTitle>{t('settings.behavior.title')}</CardTitle>
+              <CardTitle>
+                <CardHeading icon={SlidersHorizontal}>{t('settings.behavior.title')}</CardHeading>
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2.5">
@@ -242,17 +284,51 @@ export function SettingsPage({
                   {t('settings.behavior.guide')}
                 </Label>
               </div>
-              <div className="flex max-w-xs flex-col gap-1.5">
-                <Label>{t('settings.behavior.language')}</Label>
-                <Select value={draft.language} onValueChange={(value) => changeLanguage(value as Language)}>
-                  <SelectTrigger aria-label={t('settings.behavior.language')}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="en">{t('settings.language.en')}</SelectItem>
-                    <SelectItem value="zh-TW">{t('settings.language.zhTW')}</SelectItem>
-                  </SelectContent>
-                </Select>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                <CardHeading icon={Palette}>{t('settings.appearance.title')}</CardHeading>
+              </CardTitle>
+              <CardDescription>{t('settings.appearance.description')}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {/* Both fields are display preferences, so they sit together and both
+                  apply on choice rather than on Save. */}
+              <div className="settings-grid">
+                <div className="setting-field">
+                  <Label>{t('settings.appearance.theme')}</Label>
+                  <Select value={draft.theme} onValueChange={(value) => changeTheme(value as Theme)}>
+                    <SelectTrigger aria-label={t('settings.appearance.theme')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {THEMES.map((theme) => (
+                        <SelectItem key={theme} value={theme}>
+                          <span className="theme-option">
+                            <ThemeSwatch theme={theme} />
+                            {t(`settings.theme.${theme}`)}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="setting-field">
+                  <Label>{t('settings.appearance.language')}</Label>
+                  <Select value={draft.language} onValueChange={(value) => changeLanguage(value as Language)}>
+                    <SelectTrigger aria-label={t('settings.appearance.language')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="en">{t('settings.language.en')}</SelectItem>
+                      <SelectItem value="zh-TW">{t('settings.language.zhTW')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -261,12 +337,14 @@ export function SettingsPage({
         <TabsContent value="defaults" className="flex flex-col gap-4">
           <Card>
             <CardHeader>
-              <CardTitle>{t('settings.defaults.title')}</CardTitle>
+              <CardTitle>
+                <CardHeading icon={Gauge}>{t('settings.defaults.title')}</CardHeading>
+              </CardTitle>
               <CardDescription>{t('settings.defaults.description')}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="settings-grid">
-                <div className="flex flex-col gap-1.5">
+                <div className="setting-field">
                   <Label>{t('settings.defaults.engine')}</Label>
                   <Select
                     value={draft.defaultEngine}
@@ -282,7 +360,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
+                <div className="setting-field">
                   <Label>{t('settings.defaults.fps')}</Label>
                   <Select
                     value={String(draft.defaultFps)}
@@ -301,7 +379,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
+                <div className="setting-field">
                   <Label>{t('settings.defaults.width')}</Label>
                   <Select
                     value={draft.defaultWidth === null ? NATIVE : String(draft.defaultWidth)}
@@ -322,7 +400,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
+                <div className="setting-field">
                   <Label>{t('settings.defaults.format')}</Label>
                   <Select
                     value={draft.defaultFormat}
@@ -338,7 +416,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
+                <div className="setting-field">
                   <Label>{t('settings.defaults.encoder')}</Label>
                   <Select
                     value={draft.defaultEncoder}
@@ -357,7 +435,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
+                <div className="setting-field">
                   <Label>{t('settings.defaults.videoSize')}</Label>
                   <Select
                     value={draft.defaultVideoSize}
@@ -386,7 +464,9 @@ export function SettingsPage({
         <TabsContent value="tools" className="flex flex-col gap-4">
           <Card>
             <CardHeader>
-              <CardTitle>{t('settings.tools.title')}</CardTitle>
+              <CardTitle>
+                <CardHeading icon={Wrench}>{t('settings.tools.title')}</CardHeading>
+              </CardTitle>
               <CardDescription>
                 {missing.length === 0 ? t('settings.tools.ready') : t('install.description')}
               </CardDescription>
@@ -455,7 +535,9 @@ export function SettingsPage({
         <TabsContent value="system" className="flex flex-col gap-4">
           <Card>
             <CardHeader>
-              <CardTitle>{t('settings.hardware.title')}</CardTitle>
+              <CardTitle>
+                <CardHeading icon={Cpu}>{t('settings.hardware.title')}</CardHeading>
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="kv">
@@ -494,7 +576,9 @@ export function SettingsPage({
 
           <Card>
             <CardHeader>
-              <CardTitle>{t('settings.about.title')}</CardTitle>
+              <CardTitle>
+                <CardHeading icon={Info}>{t('settings.about.title')}</CardHeading>
+              </CardTitle>
               <CardDescription>{t('settings.about.body', { version: version || '—' })}</CardDescription>
             </CardHeader>
             <CardContent>
@@ -509,14 +593,16 @@ export function SettingsPage({
         </TabsContent>
       </Tabs>
 
-      <div className={`settings-bar ${dirty ? 'dirty' : ''}`}>
-        <span className="muted">{dirty ? t('settings.unsaved') : t('settings.saved')}</span>
-        <Button variant="secondary" className="primary-action" disabled={!dirty} onClick={() => setDraft(settings)}>
-          {t('settings.revert')}
-        </Button>
-        <Button disabled={!dirty} onClick={() => onSave(draft)}>
-          {t('settings.save')}
-        </Button>
+      <div className="settings-foot">
+        <div className={`settings-bar ${dirty ? 'dirty' : ''}`}>
+          <span className="muted">{dirty ? t('settings.unsaved') : t('settings.saved')}</span>
+          <Button variant="secondary" className="primary-action" disabled={!dirty} onClick={() => setDraft(settings)}>
+            {t('settings.revert')}
+          </Button>
+          <Button disabled={!dirty} onClick={() => onSave(draft)}>
+            {t('settings.save')}
+          </Button>
+        </div>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 
+import { canOpenSource } from '../shared/sources'
 import type { MediaSourceSnapshot, SessionState } from '../shared/types'
 import { sessionPath } from './paths'
 
@@ -34,9 +35,10 @@ function sanitize(raw: Partial<SessionState>): SessionState {
 
 export function loadSession(): SessionState {
   try {
-    return sanitize(JSON.parse(readFileSync(sessionPath(), 'utf8')) as Partial<SessionState>)
+    const state = sanitize(JSON.parse(readFileSync(sessionPath(), 'utf8')) as Partial<SessionState>)
+    return { ...state, available: canOpenSource(state.source, existsSync) }
   } catch {
-    return { ...EMPTY }
+    return { ...EMPTY, available: false }
   }
 }
 

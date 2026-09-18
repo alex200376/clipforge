@@ -154,13 +154,11 @@ export interface ToastState {
 export function Toast({
   toast,
   onClose,
-  onReveal,
-  onOpenFolder
+  onReveal
 }: {
   toast: ToastState | null
   onClose: () => void
   onReveal: (filePath: string) => void
-  onOpenFolder: () => void
 }): JSX.Element | null {
   const { t } = useI18n()
   useEffect(() => {
@@ -178,15 +176,13 @@ export function Toast({
         <span>{toast.body}</span>
       </div>
       <div className="toast-actions">
+        {/* One action, not two: revealing the file already opens the folder that holds it. */}
         {toast.path && (
           <Button size="sm" variant="secondary" onClick={() => onReveal(toast.path!)}>
+            <FolderOpen />
             {t('toast.reveal')}
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={onOpenFolder}>
-          <FolderOpen />
-          {t('toast.openFolder')}
-        </Button>
         <Button size="icon-sm" variant="ghost" className="btn-quiet" onClick={onClose} aria-label={t('shortcuts.close')}>
           <X />
         </Button>

@@ -54,7 +54,7 @@ describe('error localisation', () => {
 
   it('localises export failures by code', () => {
     expect(codedFailureMessage({ errorCode: 'cancelled', error: 'Cancelled' }, t)).toBe('The job was cancelled.')
-    expect(codedFailureMessage({ errorCode: 'url-unsupported', error: 'raw' }, t)).toContain('local file')
+    expect(codedFailureMessage({ errorCode: 'source-missing', error: 'raw' }, t)).toContain('no longer there')
   })
 
   it('falls back to the raw message for unknown codes', () => {

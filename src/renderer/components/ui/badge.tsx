@@ -12,9 +12,13 @@ const badgeVariants = cva(
         default: 'border-brand/60 bg-primary/20 text-brand-soft',
         secondary: 'border-input bg-secondary text-soft',
         outline: 'border-input bg-transparent text-soft',
-        success: 'border-[#246b42] bg-[#10291d] text-[#86efac]',
-        warning: 'border-[#72531b] bg-[#2a2110] text-[#f5d999]',
-        destructive: 'border-[#7f2b2b] bg-[#331616] text-[#fecaca]'
+        // Token-driven like everything else, so a badge keeps its meaning in every
+        // theme: the tints come from `success`/`warning`/`destructive` mixed over the
+        // theme's panel, and the text mixes toward `foreground`, which keeps contrast
+        // readable when the theme flips to light.
+        success: 'border-[var(--border-success)] bg-[var(--surface-success-tint)] text-[var(--text-success)]',
+        warning: 'border-[var(--border-warning)] bg-[var(--surface-warning-tint)] text-[var(--text-warning)]',
+        destructive: 'border-[var(--border-danger)] bg-[var(--surface-danger-tint)] text-[var(--text-danger)]'
       }
     },
     defaultVariants: { variant: 'default' }

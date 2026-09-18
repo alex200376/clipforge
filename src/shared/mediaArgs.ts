@@ -3,10 +3,10 @@
  * process and the unit tests can all share exactly the same command shapes.
  *
  * Everything funnels through `videoFilter()`, which keeps the retime/crop/scale
- * order in one place: retime → resample → crop → scale → ping-pong.
+ * order in one place: retime → resample → logo removal → crop → scale → ping-pong.
  */
 
-import type { CropSpec, VideoEncoder } from './types'
+import type { CropSpec, VideoEncoder, WatermarkRegion } from './types'
 
 export interface GifOptions {
   start: number
@@ -33,6 +33,8 @@ export interface FilterOptions {
   /** 1 = unchanged. The clip gets shorter when this is above 1. */
   speed?: number
   boomerang?: boolean
+  /** Boxes to paint out with `delogo`, in source pixels. */
+  watermarks?: WatermarkRegion[] | null
 }
 
 export interface VideoEncodeOptions extends VideoOptions, FilterOptions {
@@ -42,11 +44,6 @@ export interface VideoEncodeOptions extends VideoOptions, FilterOptions {
   /** Bitrate target in kbps; when set the encoder runs in bitrate mode. */
   kbps?: number
   loudnorm?: boolean
-}
-
-export interface StreamSection {
-  start: number
-  end: number
 }
 
 /** Thumbnails rendered into the trim timeline; shared by main and renderer. */
@@ -111,6 +108,73 @@ export function normalizeCrop(
   return { x, y, width: boxWidth, height: boxHeight }
 }
 
+/**
+ * `delogo` interpolates the box from the pixels just outside it, so a box that
+ * touches the frame edge has nothing to sample: ffmpeg aborts the whole export
+ * with "Logo area is outside of the frame". Marking a logo in the very corner
+ * therefore loses a one-pixel ring, which is invisible beside what it hides.
+ */
+export const WATERMARK_EDGE = 1
+/** Smallest box worth painting out. */
+export const MIN_WATERMARK = 2
+/** Upper bound, so a stray click cannot turn into an unbounded filter graph. */
+export const MAX_WATERMARKS = 4
+
+const clamp = (value: number, low: number, high: number): number =>
+  Math.min(Math.max(value, low), Math.max(low, high))
+
+/**
+ * Frame-independent tidy-up: whole pixels, a positive box, one pixel of margin
+ * from the edges, and no more than `MAX_WATERMARKS` regions. The main process
+ * runs this on whatever arrives over IPC; the renderer runs the frame-aware
+ * version below, so the preview shows exactly what will be painted out.
+ */
+export function clampWatermarks(regions: WatermarkRegion[] | null | undefined): WatermarkRegion[] {
+  const result: WatermarkRegion[] = []
+  for (const region of regions ?? []) {
+    if (!region) continue
+    result.push({
+      x: Math.max(WATERMARK_EDGE, Math.round(region.x)),
+      y: Math.max(WATERMARK_EDGE, Math.round(region.y)),
+      width: Math.max(MIN_WATERMARK, Math.round(region.width)),
+      height: Math.max(MIN_WATERMARK, Math.round(region.height))
+    })
+    if (result.length === MAX_WATERMARKS) break
+  }
+  return result
+}
+
+/**
+ * Clamps logo boxes into the frame, keeping the border `delogo` needs. A box
+ * that cannot fit at all is dropped rather than shipped, because the filter
+ * would fail the export instead of quietly drawing nothing.
+ */
+export function normalizeWatermarks(
+  regions: WatermarkRegion[] | null | undefined,
+  width: number,
+  height: number
+): WatermarkRegion[] {
+  if (width <= 0 || height <= 0) return []
+  const result: WatermarkRegion[] = []
+  for (const region of clampWatermarks(regions)) {
+    const x = clamp(region.x, WATERMARK_EDGE, width - 1 - WATERMARK_EDGE - MIN_WATERMARK)
+    const y = clamp(region.y, WATERMARK_EDGE, height - 1 - WATERMARK_EDGE - MIN_WATERMARK)
+    const boxWidth = clamp(region.width, MIN_WATERMARK, width - 1 - x)
+    const boxHeight = clamp(region.height, MIN_WATERMARK, height - 1 - y)
+    if (boxWidth < MIN_WATERMARK || boxHeight < MIN_WATERMARK) continue
+    if (x + boxWidth > width - 1 || y + boxHeight > height - 1) continue
+    result.push({ x, y, width: boxWidth, height: boxHeight })
+  }
+  return result
+}
+
+/** One `delogo` per box; they chain as ordinary comma-separated filters. */
+export function watermarkFilters(regions: WatermarkRegion[] | null | undefined): string[] {
+  return (regions ?? []).map(
+    (region) => `delogo=x=${region.x}:y=${region.y}:w=${region.width}:h=${region.height}`
+  )
+}
+
 export function scaleFilter(width: number | null, evenDims = false): string {
   if (width === null || width <= 0) {
     return evenDims ? 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos' : 'scale=iw:-1:flags=lanczos'
@@ -143,6 +207,10 @@ function baseChain(size: SizeSpec, filters: FilterOptions): string {
   // setpts retimes before the fps filter, so the frame count follows the speed.
   if (speed !== 1) parts.push(`setpts=${(1 / speed).toFixed(6)}*PTS`)
   if (size.fps !== null && size.fps > 0) parts.push(`fps=${size.fps}`)
+  // Logos are painted out before the crop and the resize move the frame: their
+  // coordinates are source pixels, and the interpolated pixels come from the
+  // untouched source around them.
+  parts.push(...watermarkFilters(filters.watermarks))
   if (filters.crop) {
     const { x, y, width, height } = filters.crop
     parts.push(`crop=${width}:${height}:${x}:${y}`)
@@ -212,22 +280,6 @@ export function paletteArgs(source: string, output: string, options: GifOptions 
   ]
 }
 
-/** Same filter graph but reading from stdin, where input seeking is impossible. */
-export function paletteStdinArgs(output: string, options: GifOptions & FilterOptions): string[] {
-  return [
-    '-y',
-    '-i',
-    'pipe:0',
-    '-t',
-    sec(duration(options)),
-    '-vf',
-    videoFilter('palette', { fps: options.fps, width: options.width }, options),
-    '-loop',
-    '0',
-    output
-  ]
-}
-
 /** Animated WebP: typically a fifth of the size of the equivalent GIF. */
 export function webpArgs(source: string, output: string, options: GifOptions & FilterOptions): string[] {
   return [
@@ -251,26 +303,6 @@ export function webpArgs(source: string, output: string, options: GifOptions & F
   ]
 }
 
-export function webpStdinArgs(output: string, options: GifOptions & FilterOptions): string[] {
-  return [
-    '-y',
-    '-i',
-    'pipe:0',
-    '-t',
-    sec(duration(options)),
-    '-vf',
-    videoFilter('animated', { fps: options.fps, width: options.width }, options),
-    '-c:v',
-    'libwebp_anim',
-    '-q:v',
-    String(options.quality),
-    '-loop',
-    '0',
-    '-an',
-    output
-  ]
-}
-
 export function frameArgs(source: string, pattern: string, options: GifOptions & FilterOptions): string[] {
   return [
     '-y',
@@ -280,19 +312,6 @@ export function frameArgs(source: string, pattern: string, options: GifOptions &
     sec(duration(options)),
     '-i',
     source,
-    '-vf',
-    videoFilter('frames', { fps: options.fps, width: options.width }, options),
-    pattern
-  ]
-}
-
-export function frameStdinArgs(pattern: string, options: GifOptions & FilterOptions): string[] {
-  return [
-    '-y',
-    '-i',
-    'pipe:0',
-    '-t',
-    sec(duration(options)),
     '-vf',
     videoFilter('frames', { fps: options.fps, width: options.width }, options),
     pattern
@@ -368,7 +387,11 @@ function audioArgs(mute: boolean, loudnorm = false): string[] {
 
 export function trimArgs(source: string, output: string, options: VideoEncodeOptions): string[] {
   const head = ['-y', '-ss', sec(options.start), '-t', sec(duration(options)), '-i', source]
-  const filtered = Boolean(options.crop) || Boolean(options.boomerang) || (options.speed ?? 1) !== 1
+  const filtered =
+    Boolean(options.crop) ||
+    Boolean(options.watermarks?.length) ||
+    Boolean(options.boomerang) ||
+    (options.speed ?? 1) !== 1
   // Stream copy is only possible when nothing has to be re-rendered.
   if (options.streamCopy && !filtered) {
     return [...head, '-c', 'copy', ...(options.mute ? ['-an'] : []), '-movflags', '+faststart', output]
@@ -456,14 +479,27 @@ export function ytdlpMetadataArgs(url: string): string[] {
   return ['--dump-single-json', '--no-warnings', '--no-playlist', url]
 }
 
-export function ytdlpStreamArgs(url: string, section?: StreamSection): string[] {
-  const args = ['--no-warnings', '--no-playlist', '-f', 'best[ext=mp4]/best']
-  if (section && section.end > section.start) {
-    // Lets yt-dlp download only the requested window instead of the whole video.
-    args.push('--download-sections', `*${sec(section.start)}-${sec(section.end)}`)
-  }
-  args.push('-o', '-', url)
-  return args
+/**
+ * Fetches a link to a real file instead of piping it into ffmpeg.
+ *
+ * Streaming `yt-dlp -o -` into ffmpeg cannot work in general: an MP4 whose
+ * `moov` atom sits at the end - which is what most sites hand out - is not
+ * readable from a pipe at all, so ffmpeg reports `partial file` and writes an
+ * empty output. yt-dlp's own downloader handles every site it supports, and the
+ * local file it leaves behind is seekable, which is what trimming, cropping and
+ * the filmstrip all need.
+ */
+export function ytdlpDownloadArgs(url: string, outputTemplate: string): string[] {
+  return [
+    '--no-warnings',
+    '--no-playlist',
+    '-f',
+    'best[ext=mp4]/best',
+    '--force-overwrites',
+    '-o',
+    outputTemplate,
+    url
+  ]
 }
 
 export function parseYtDlpPercent(line: string): number | null {
@@ -472,14 +508,35 @@ export function parseYtDlpPercent(line: string): number | null {
 }
 
 /**
- * ffmpeg's `-progress` stream is machine chatter (`frame=`, `fps=`, `speed=`…).
- * It drives the progress bar, so it should never reach the activity log.
+ * gifski draws its own bar as `\rFrame 12 / 240  ###...  0s \r`. Output arrives in
+ * bursts, so one line can carry several updates - the last count is the current
+ * one. Reading these is what lets the longest part of a gifski export move at all:
+ * gifski emits no ffmpeg-style times, so before this the stage sat at zero.
+ */
+export function parseGifskiFrames(line: string): { done: number; total: number } | null {
+  const matches = line.match(/Frame\s+(\d+)\s*\/\s*(\d+)/g)
+  if (!matches || matches.length === 0) return null
+  const last = /Frame\s+(\d+)\s*\/\s*(\d+)/.exec(matches[matches.length - 1])
+  if (!last) return null
+  const done = Number(last[1])
+  const total = Number(last[2])
+  if (!Number.isInteger(done) || !Number.isInteger(total) || total <= 0) return null
+  return { done: Math.min(done, total), total }
+}
+
+/**
+ * Machine chatter from the encoders — ffmpeg's `-progress` stream (`frame=`, `fps=`,
+ * `speed=`…), gifski's bar and its running size report. All of it drives the bar and
+ * none of it belongs in the activity log.
  */
 const PROGRESS_KEYS =
   /^(frame|fps|stream_\d+_\d+(_\w+)?|bitrate|total_size|out_time(_us|_ms)?|dup_frames|drop_frames|speed|progress)=/
 
+const GIFSKI_PROGRESS = /^(Frame\s+\d+\s*\/\s*\d+|\d+(\.\d+)?\s*[kKMG]?B GIF;?)/
+
 export function isProgressLine(line: string): boolean {
-  return PROGRESS_KEYS.test(line.trim())
+  const trimmed = line.trim()
+  return PROGRESS_KEYS.test(trimmed) || GIFSKI_PROGRESS.test(trimmed)
 }
 
 /** ffmpeg -progress emits `out_time=HH:MM:SS.microseconds`; convert to seconds. */

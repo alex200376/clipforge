@@ -86,7 +86,7 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
       <div className="output-box">
         <div className="output-stage">
           <div className="output-empty">
-            <ImageOff className="mx-auto mb-3 size-7 text-[#4d5f7d]" aria-hidden="true" />
+            <ImageOff className="mx-auto mb-3 size-7 text-[var(--text-ghost)]" aria-hidden="true" />
             <strong>{t('output.empty.title')}</strong>
             {t('output.empty.body')}
           </div>

@@ -2,27 +2,35 @@ import { existsSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 import { ClipForgeError, errorPayload } from '../shared/errors'
+import type { GifOptions } from '../shared/mediaArgs'
 import {
+  clampWatermarks,
   frameArgs,
-  frameStdinArgs,
   gifskiArgs,
   gifsicleOptimizeArgs,
   outputDuration,
   paletteArgs,
-  paletteStdinArgs,
   targetSizeArgs,
   trimArgs,
-  webpArgs,
-  webpStdinArgs,
-  ytdlpStreamArgs
+  webpArgs
 } from '../shared/mediaArgs'
 import type { FilterOptions } from '../shared/mediaArgs'
-import type { ExportResult, GifRequest, JobProgress, VideoEncoder, VideoRequest } from '../shared/types'
+import { remoteSourceName } from '../shared/sources'
+import type {
+  ExportResult,
+  GifRequest,
+  JobProgress,
+  VideoEncoder,
+  VideoRequest,
+  WatermarkEngine,
+  WatermarkRegion
+} from '../shared/types'
+import { sessionFor } from './ai'
 import { findBinary, missingBinaryError } from './binaries'
 import { availableEncoders, resolveEncoder } from './hardware'
 import { workDir } from './paths'
 import { MediaJob } from './runner'
-import { ytdlpPath } from './ytdlp'
+import { materializeUrl } from './urlSource'
 
 export interface ExportDeps {
   emit: (event: JobProgress) => void
@@ -36,13 +44,49 @@ interface Filters {
   crop: FilterOptions['crop']
   speed: number
   boomerang: boolean
+  watermarks: WatermarkRegion[]
 }
 
 const filtersOf = (request: FilterOptions): Filters => ({
   crop: request.crop ?? null,
   speed: request.speed && request.speed > 0 ? request.speed : 1,
-  boomerang: Boolean(request.boomerang)
+  boomerang: Boolean(request.boomerang),
+  // The renderer clamps against the real frame size; this only guarantees the
+  // invariants `delogo` needs, since a box outside the frame fails the export.
+  watermarks: clampWatermarks(request.watermarks)
 })
+
+interface AiExport {
+  source: string
+  duration: number
+  filters: Filters
+}
+
+/**
+ * Swaps in the inpainted clip when the export asked for AI removal.
+ *
+ * Two consequences are handled here rather than at the call sites. The marked boxes
+ * must stop being passed on as `delogo` filters - the pixels are already replaced,
+ * and painting over them again would smear the very fill that was synthesised. And
+ * the AI master is already trimmed, so the range starts at zero instead of at the
+ * user's start time.
+ *
+ * An export that asked for AI while marking areas and finds no prepared result is
+ * refused rather than quietly falling back to `delogo`: silently producing the
+ * thing the user moved away from would be worse than an error that says so.
+ */
+function aiExport(
+  request: { aiToken?: string; watermarkEngine?: WatermarkEngine; watermarks?: WatermarkRegion[] },
+  filters: Filters
+): AiExport | null {
+  const wanted = request.watermarkEngine === 'ai' && (request.watermarks?.length ?? 0) > 0
+  if (!wanted) return null
+  const session = request.aiToken ? sessionFor(request.aiToken) : null
+  if (!session?.patched || !existsSync(session.patched)) {
+    throw new ClipForgeError('unknown', 'The AI removal result is not ready. Run the removal again before exporting.')
+  }
+  return { source: session.patched, duration: session.duration, filters: { ...filters, watermarks: [] } }
+}
 
 /**
  * Keeps the error code alongside the message so the renderer can show a
@@ -74,6 +118,21 @@ function uniqueOutput(directory: string, base: string, extension: string): strin
       return candidate
     }
   }
+}
+
+/**
+ * A link is fetched to a local file before any export starts, so every ffmpeg
+ * call below reads an ordinary seekable file. Piping instead does not work for
+ * the common case - an MP4 with its `moov` atom at the end cannot be read from a
+ * pipe at all - and it also makes `-ss` seeking impossible, which trimming needs.
+ */
+async function exportSource(
+  source: string,
+  isUrl: boolean,
+  deps: ExportDeps
+): Promise<{ source: string; base: string }> {
+  if (!isUrl) return { source, base: safeBaseName(path.basename(source)) }
+  return { source: await materializeUrl(source, deps), base: safeBaseName(remoteSourceName(source)) }
 }
 
 /**
@@ -112,32 +171,23 @@ interface GifOutcome {
   error?: string
 }
 
-async function encodeGifski(request: GifRequest, filters: Filters, ffmpeg: string, output: string, deps: ExportDeps): Promise<GifOutcome> {
+async function encodeGifski(
+  source: string,
+  options: GifOptions & Filters,
+  ffmpeg: string,
+  output: string,
+  deps: ExportDeps
+): Promise<GifOutcome> {
   const scratch = workDir('frames')
   try {
-    const options = {
-      start: request.start,
-      end: request.end,
-      fps: request.fps,
-      width: request.width,
-      quality: clampQuality(request.quality),
-      ...filters
-    }
-    const window = Math.max(0.05, request.end - request.start)
-    const rendered = Math.max(0.05, outputDuration(request, filters))
+    const window = Math.max(0.05, options.end - options.start)
     const pattern = path.join(scratch, 'frame_%06d.png')
     const framesJob = new MediaJob('Rendering frames', deps.emit, deps.log)
     deps.registerJob(framesJob)
-    const frames = request.isUrl
-      ? await framesJob.runPipeline(
-          { command: ytdlpPath(), args: ytdlpStreamArgs(request.source, { start: request.start, end: request.end }) },
-          { command: ffmpeg, args: frameStdinArgs(pattern, options) },
-          { duration: rendered }
-        )
-      : await framesJob.run(
-          { command: ffmpeg, args: frameArgs(request.source, pattern, options) },
-          { duration: window }
-        )
+    const frames = await framesJob.run(
+      { command: ffmpeg, args: frameArgs(source, pattern, options) },
+      { duration: window }
+    )
     if (!frames.ok) return { ok: false, error: frames.error }
 
     const files = readdirSync(scratch)
@@ -166,29 +216,37 @@ async function encodeGifski(request: GifRequest, filters: Filters, ffmpeg: strin
 
 export async function exportGif(request: GifRequest, deps: ExportDeps): Promise<ExportResult> {
   const format = request.format ?? 'gif'
-  const filters = filtersOf(request)
+  let ai: AiExport | null
+  try {
+    ai = aiExport(request, filtersOf(request))
+  } catch (error) {
+    return failure(error)
+  }
+  const filters = ai?.filters ?? filtersOf(request)
   const ffmpeg = findBinary('ffmpeg')
   if (!ffmpeg) return failure(missingBinaryError('ffmpeg'))
-  if (request.isUrl) {
-    try {
-      ytdlpPath()
-    } catch (error) {
-      return failure(error)
-    }
+
+  let prepared: { source: string; base: string }
+  try {
+    prepared = await exportSource(request.source, request.isUrl, deps)
+  } catch (error) {
+    return failure(error)
   }
+  const source = ai?.source ?? prepared.source
+  const range = ai ? { start: 0, end: ai.duration } : { start: request.start, end: request.end }
 
   const options = {
-    start: request.start,
-    end: request.end,
+    start: range.start,
+    end: range.end,
     fps: request.fps,
     width: request.width,
     quality: clampQuality(request.quality),
     ...filters
   }
-  const window = Math.max(0.05, request.end - request.start)
-  const rendered = Math.max(0.05, outputDuration(request, filters))
+  const window = Math.max(0.05, range.end - range.start)
+  const rendered = Math.max(0.05, outputDuration(range, filters))
   const extension = format === 'webp' ? '.webp' : '.gif'
-  const output = uniqueOutput(request.outputDir, safeBaseName(path.basename(request.source)), extension)
+  const output = uniqueOutput(request.outputDir, prepared.base, extension)
   // Animated WebP has its own encoder, so the GIF engine choice does not apply.
   const wantsGifski = format === 'gif' && request.engine !== 'palette'
 
@@ -196,27 +254,15 @@ export async function exportGif(request: GifRequest, deps: ExportDeps): Promise<
   if (format === 'webp') {
     const job = new MediaJob('Encoding WebP', deps.emit, deps.log)
     deps.registerJob(job)
-    const result = request.isUrl
-      ? await job.runPipeline(
-          { command: ytdlpPath(), args: ytdlpStreamArgs(request.source, { start: request.start, end: request.end }) },
-          { command: ffmpeg, args: webpStdinArgs(output, options) },
-          { duration: rendered }
-        )
-      : await job.run({ command: ffmpeg, args: webpArgs(request.source, output, options) }, { duration: window })
+    const result = await job.run({ command: ffmpeg, args: webpArgs(source, output, options) }, { duration: window })
     outcome = result.ok ? { ok: true, output } : { ok: false, error: result.error }
   } else if (wantsGifski) {
     if (!findBinary('gifski')) return failure(missingBinaryError('gifski'))
-    outcome = await encodeGifski(request, filters, ffmpeg, output, deps)
+    outcome = await encodeGifski(source, options, ffmpeg, output, deps)
   } else {
     const job = new MediaJob('Encoding GIF', deps.emit, deps.log)
     deps.registerJob(job)
-    const result = request.isUrl
-      ? await job.runPipeline(
-          { command: ytdlpPath(), args: ytdlpStreamArgs(request.source, { start: request.start, end: request.end }) },
-          { command: ffmpeg, args: paletteStdinArgs(output, options) },
-          { duration: rendered }
-        )
-      : await job.run({ command: ffmpeg, args: paletteArgs(request.source, output, options) }, { duration: window })
+    const result = await job.run({ command: ffmpeg, args: paletteArgs(source, output, options) }, { duration: window })
     outcome = result.ok ? { ok: true, output } : { ok: false, error: result.error }
   }
 
@@ -234,15 +280,21 @@ export async function exportGif(request: GifRequest, deps: ExportDeps): Promise<
 export async function exportVideo(request: VideoRequest, deps: ExportDeps): Promise<ExportResult> {
   const ffmpeg = findBinary('ffmpeg')
   if (!ffmpeg) return failure(missingBinaryError('ffmpeg'))
-  if (request.isUrl) {
-    return failure(new ClipForgeError('url-unsupported', 'Video export needs a local file. Use GIF export for URLs.'))
-  }
 
-  const filters = filtersOf(request)
-  const base = safeBaseName(path.basename(request.source))
-  const output = uniqueOutput(request.outputDir, base, '.mp4')
-  const window = Math.max(0.05, request.end - request.start)
-  const rendered = Math.max(0.05, outputDuration(request, filters))
+  let prepared: { source: string; base: string }
+  let aiFilters: AiExport | null
+  try {
+    aiFilters = aiExport(request, filtersOf(request))
+    prepared = await exportSource(request.source, request.isUrl, deps)
+  } catch (error) {
+    return failure(error)
+  }
+  const source = aiFilters?.source ?? prepared.source
+
+  const filters = aiFilters?.filters ?? filtersOf(request)
+  const range = aiFilters ? { start: 0, end: aiFilters.duration } : { start: request.start, end: request.end }
+  const output = uniqueOutput(request.outputDir, prepared.base, '.mp4')
+  const rendered = Math.max(0.05, outputDuration(range, filters))
 
   const encoders = await availableEncoders()
   // Test seam: lets the harness prove the fallback path on any machine.
@@ -251,9 +303,11 @@ export async function exportVideo(request: VideoRequest, deps: ExportDeps): Prom
 
   const attempt = async (candidate: VideoEncoder): Promise<{ ok: boolean; error?: string }> => {
     const common = {
-      start: request.start,
-      end: request.end,
+      start: range.start,
+      end: range.end,
       mute: request.mute,
+      // An AI master is an FFV1 matroska file: copying it into an MP4 would produce
+      // something no player opens, so the picture is always re-encoded on this path.
       streamCopy: false,
       encoder: candidate,
       loudnorm: Boolean(request.loudnorm),
@@ -261,8 +315,8 @@ export async function exportVideo(request: VideoRequest, deps: ExportDeps): Prom
     }
     const args =
       request.targetBytes && request.targetBytes > 0
-        ? targetSizeArgs(request.source, output, { ...common, targetBytes: request.targetBytes })
-        : trimArgs(request.source, output, common)
+        ? targetSizeArgs(source, output, { ...common, targetBytes: request.targetBytes })
+        : trimArgs(source, output, common)
     const job = new MediaJob('Encoding video', deps.emit, deps.log)
     deps.registerJob(job)
     const result = await job.run({ command: ffmpeg, args }, { duration: rendered })

@@ -36,7 +36,8 @@ const ERROR_KEYS: Partial<Record<ErrorCode, TranslationKey>> = {
   'install-failed': 'error.install-failed',
   'verify-failed': 'error.verify-failed',
   'no-frames': 'error.no-frames',
-  'url-unsupported': 'error.url-unsupported',
+  'source-missing': 'error.source-missing',
+  'remote-source': 'error.remote-source',
   'unsupported-source': 'error.unsupported-source'
 }
 
@@ -50,6 +51,7 @@ export function errorKeyFor(code: ErrorCode): TranslationKey | undefined {
  * every ffmpeg invocation.
  */
 const STAGE_KEYS: Record<string, TranslationKey> = {
+  'Downloading link': 'export.stage.downloading',
   'Rendering frames': 'export.stage.renderingFrames',
   'Building GIF': 'export.stage.buildingGif',
   'Encoding GIF': 'export.stage.encodingGif',

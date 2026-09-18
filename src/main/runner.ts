@@ -1,8 +1,8 @@
 import { ChildProcess, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 
-import { isProgressLine, parseProgressTime, parseYtDlpPercent } from '../shared/mediaArgs'
-import type { JobProgress } from '../shared/types'
+import { isProgressLine, parseGifskiFrames, parseProgressTime, parseYtDlpPercent } from '../shared/mediaArgs'
+import type { JobProgress, JobProgressDetail } from '../shared/types'
 
 export interface Command {
   command: string
@@ -31,8 +31,8 @@ let counter = 0
 const isFfmpeg = (command: string): boolean => /ffmpeg(\.exe)?$/i.test(command)
 
 /**
- * Kill the whole process tree. On Windows a plain kill leaves piped children
- * (yt-dlp feeding ffmpeg) running, so taskkill is required.
+ * Kill the whole process tree. On Windows a plain kill leaves children of a
+ * child running, so taskkill is required.
  */
 function killTree(child: ChildProcess): void {
   if (child.exitCode !== null || child.killed) return
@@ -72,12 +72,13 @@ export class MediaJob {
     return this.cancelled
   }
 
-  private report(stage: string, percent: number, message: string): void {
+  private report(stage: string, percent: number, message: string, detail?: JobProgressDetail): void {
     this.emit({
       jobId: this.id,
       stage,
       percent: Math.max(0, Math.min(100, Math.round(percent))),
-      message
+      message,
+      ...(detail ? { detail } : {})
     })
   }
 
@@ -87,25 +88,48 @@ export class MediaJob {
     this.log(line)
   }
 
-  private spawnTracked(command: string, args: string[], pipeStdout = false): ChildProcess {
-    const child = spawn(command, args, {
-      windowsHide: true,
-      stdio: pipeStdout ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe']
-    })
+  private spawnTracked(command: string, args: string[]): ChildProcess {
+    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     this.children.push(child)
     if (this.cancelled) killTree(child)
     return child
   }
 
-  /** Reads a stream line-by-line and forwards progress to the UI. */
-  private consume(child: ChildProcess, options: RunOptions, stage: string, onPercent: (value: number) => void): void {
+  /**
+   * Reads a stream line-by-line and forwards progress to the UI.
+   *
+   * Splitting on a bare carriage return matters: ffmpeg's `-progress` and gifski's
+   * bar both redraw in place with `\r`, so a chunk that looks like one line can hold
+   * a whole burst of updates.
+   */
+  private consume(
+    child: ChildProcess,
+    options: RunOptions,
+    onPercent: (value: number, detail?: JobProgressDetail) => void
+  ): void {
     const handle = (chunk: Buffer): void => {
-      for (const raw of chunk.toString('utf8').split(/\r?\n/)) {
+      for (const raw of chunk.toString('utf8').split(/\r\n|\r|\n/)) {
         const line = raw.trim()
         if (line.length === 0) continue
+        const duration = options.duration ?? 0
         const time = parseProgressTime(line)
-        if (time !== null && options.duration && options.duration > 0) {
-          onPercent((time / options.duration) * 100)
+        if (time !== null && duration > 0) {
+          onPercent((time / duration) * 100, { kind: 'time', processed: Math.min(time, duration), total: duration })
+        }
+        // yt-dlp reports its own percentages while fetching a link, which is the
+        // only progress a download stage has: without this the bar sits at zero
+        // for the whole download.
+        const fetched = parseYtDlpPercent(line)
+        if (fetched !== null) {
+          onPercent(fetched)
+          continue
+        }
+        // gifski counts frames rather than seconds, and says so on stdout. This is
+        // the only progress the GIF-building stage has.
+        const frames = parseGifskiFrames(line)
+        if (frames !== null) {
+          onPercent((frames.done / frames.total) * 100, { kind: 'frames', ...frames })
+          continue
         }
         // Progress stats update the bar above; only real messages belong in the log.
         if (!isProgressLine(line)) this.record(line)
@@ -125,59 +149,9 @@ export class MediaJob {
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8')
     })
-    this.consume(child, options, stage, (percent) => this.report(stage, percent, stage))
+    this.consume(child, options, (percent, detail) => this.report(stage, percent, stage, detail))
     this.report(stage, 0, stage)
     return this.wait(child)
-  }
-
-  /**
-   * Feeds the producer's stdout into the consumer's stdin. Used for
-   * `yt-dlp | ffmpeg` so URL media is converted without a visible download.
-   */
-  async runPipeline(
-    producer: Command,
-    consumer: Command,
-    options: RunOptions = {}
-  ): Promise<RunOutcome> {
-    const stage = options.stage ?? this.stage
-    const producerChild = this.spawnTracked(producer.command, producer.args, true)
-    const consumerArgs = isFfmpeg(consumer.command)
-      ? ['-hide_banner', '-nostats', '-progress', 'pipe:2', ...consumer.args]
-      : consumer.args
-    const consumerChild = spawn(consumer.command, consumerArgs, {
-      windowsHide: true,
-      stdio: [producerChild.stdout ?? 'ignore', 'pipe', 'pipe']
-    })
-    this.children.push(consumerChild)
-    if (this.cancelled) killTree(consumerChild)
-    producerChild.stdout?.resume()
-
-    // Download percentages are surfaced as messages only, so the bar stays
-    // monotonic while ffmpeg reports real encoding progress.
-    producerChild.stderr?.on('data', (chunk: Buffer) => {
-      for (const raw of chunk.toString('utf8').split(/\r?\n/)) {
-        const line = raw.trim()
-        if (line.length === 0) continue
-        const percent = parseYtDlpPercent(line)
-        if (percent !== null) {
-          this.report(stage, 0, `Streaming ${Math.round(percent)}%`)
-          continue
-        }
-        this.record(line)
-      }
-    })
-
-    this.consume(consumerChild, options, stage, (percent) => this.report(stage, percent, stage))
-    this.report(stage, 0, stage)
-    const outcome = await this.wait(consumerChild)
-    const producerCode = await new Promise<number | null>((resolve) => {
-      if (producerChild.exitCode !== null) return resolve(producerChild.exitCode)
-      producerChild.on('close', resolve)
-    })
-    if (outcome.ok && producerCode !== 0 && !this.cancelled) {
-      return { ...outcome, ok: false, error: `Streaming failed (producer exit code ${producerCode})` }
-    }
-    return outcome
   }
 
   private wait(child: ChildProcess): Promise<RunOutcome> {

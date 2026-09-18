@@ -103,8 +103,13 @@ if errorlevel 1 (
 )
 exit /b 0
 
+rem The build used to be skipped whenever dist merely existed, so editing the app
+rem and running it again relaunched the previous build - a fix would look like it
+rem had not worked. check-dist.mjs compares the sources against the output instead
+rem (exit 1 = rebuild), and anything unexpected falls through to a build.
 :ensure_dist
-if exist "dist\main\index.js" if exist "dist\renderer\index.html" (
+call node "scripts\check-dist.mjs"
+if not errorlevel 1 (
     echo   Build        : up to date
     exit /b 0
 )

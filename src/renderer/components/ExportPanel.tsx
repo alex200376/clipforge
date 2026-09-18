@@ -1,11 +1,12 @@
-import { ChevronDown, ChevronUp, Crop as CropIcon, Gauge, Image, Layers, Scan, Video } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ChevronDown, ChevronUp, Crop as CropIcon, Eraser, Gauge, Image, Layers, Plus, Scan, Trash2, Video } from 'lucide-react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 
+import { ProgressBlock } from './ProgressBlock'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
 import { Label } from './ui/label'
-import { Progress } from './ui/progress'
+import { NumberField } from './ui/number-field'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Slider } from './ui/slider'
 import type {
@@ -13,14 +14,16 @@ import type {
   EncoderChoice,
   GifEngine,
   HardwareProfile,
-  JobProgress,
   OutputFormat,
-  VideoSize
+  VideoSize,
+  WatermarkEngine,
+  WatermarkRegion
 } from '../../shared/types'
-import { formatBytes, formatDuration } from '../format'
+import { formatBytes } from '../format'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
-import type { BudgetChoice, EstimateView, ExportMode, PresetId } from '../types'
+import type { BudgetChoice, EstimateView, ExportMode, PresetId, WatermarkCorner } from '../types'
+import type { ExportProgressView } from '../useProgress'
 
 interface Props {
   mode: ExportMode
@@ -54,6 +57,22 @@ interface Props {
   cropKnown: boolean
   aspect: number | null
   onAspect: (aspect: number | null) => void
+  watermarkOn: boolean
+  onWatermarkOn: (value: boolean) => void
+  /** Clamped boxes, in source pixels. */
+  watermarks: WatermarkRegion[]
+  activeRegion: number
+  onActiveRegion: (index: number) => void
+  onWatermarkCorner: (corner: WatermarkCorner) => void
+  onAddWatermark: () => void
+  onRemoveWatermark: (index: number) => void
+  /** How marked boxes are erased: instant interpolation, or AI inpainting. */
+  watermarkEngine: WatermarkEngine
+  onWatermarkEngine: (engine: WatermarkEngine) => void
+  onDetectWatermark: () => void
+  detectBusy: boolean
+  /** False when the bundled AI weights are missing from this build. */
+  aiAvailable: boolean
   mute: boolean
   onMute: (mute: boolean) => void
   loudnorm: boolean
@@ -63,9 +82,11 @@ interface Props {
   encoder: EncoderChoice
   onEncoder: (choice: EncoderChoice) => void
   hardware: HardwareProfile | null
-  progress: JobProgress | null
-  /** Wall-clock start of the running job, used for the elapsed / ETA readout. */
-  jobStart: number | null
+  /** The running export's progress, derived once in the app so the panel's bar and
+   *  the taskbar's fill describe the same number. Null while nothing is running. */
+  view: ExportProgressView | null
+  /** What a stage is doing while it reports no progress of its own. */
+  phaseNote: string | null
   busy: boolean
   hasSource: boolean
   onExport: () => void
@@ -82,27 +103,20 @@ const ASPECTS: Array<{ label: string; value: number | null }> = [
   { label: '4:5', value: 4 / 5 },
   { label: '16:9', value: 16 / 9 }
 ]
+/** Corner presets, in reading order, so the grid maps onto the preview. */
+const CORNERS: Array<{ id: WatermarkCorner; key: TranslationKey }> = [
+  { id: 'tl', key: 'watermark.corner.tl' },
+  { id: 'tr', key: 'watermark.corner.tr' },
+  { id: 'bl', key: 'watermark.corner.bl' },
+  { id: 'br', key: 'watermark.corner.br' }
+]
+
 const PRESETS: Array<{ id: PresetId; key: TranslationKey }> = [
   { id: 'discord', key: 'preset.discord' },
   { id: 'x', key: 'preset.x' },
   { id: 'slack', key: 'preset.slack' },
   { id: 'wallpaper', key: 'preset.wallpaper' }
 ]
-
-/** Main-process stage names mapped onto the steps shown while a job runs. */
-const STEPS: Record<'gifski' | 'palette' | 'webp' | 'video', Array<{ key: TranslationKey; stages: string[] }>> = {
-  gifski: [
-    { key: 'export.stage.renderingFrames', stages: ['Rendering frames'] },
-    { key: 'export.stage.buildingGif', stages: ['Building GIF'] },
-    { key: 'export.stage.optimising', stages: ['Optimising GIF'] }
-  ],
-  palette: [
-    { key: 'export.stage.encodingGif', stages: ['Encoding GIF'] },
-    { key: 'export.stage.optimising', stages: ['Optimising GIF'] }
-  ],
-  webp: [{ key: 'export.stage.encodingWebp', stages: ['Encoding WebP'] }],
-  video: [{ key: 'export.stage.encodingVideo', stages: ['Encoding video'] }]
-}
 
 /**
  * One titled group of controls. The heading and the hairline under the group are
@@ -154,6 +168,19 @@ export function ExportPanel(props: Props): JSX.Element {
     cropKnown,
     aspect,
     onAspect,
+    watermarkOn,
+    onWatermarkOn,
+    watermarks,
+    activeRegion,
+    onActiveRegion,
+    onWatermarkCorner,
+    onAddWatermark,
+    onRemoveWatermark,
+    watermarkEngine,
+    onWatermarkEngine,
+    onDetectWatermark,
+    detectBusy,
+    aiAvailable,
     mute,
     onMute,
     loudnorm,
@@ -163,8 +190,8 @@ export function ExportPanel(props: Props): JSX.Element {
     encoder,
     onEncoder,
     hardware,
-    progress,
-    jobStart,
+    view,
+    phaseNote,
     busy,
     hasSource,
     onExport,
@@ -175,18 +202,6 @@ export function ExportPanel(props: Props): JSX.Element {
   const isGif = mode === 'gif'
   const isWebp = isGif && format === 'webp'
   const [advanced, setAdvanced] = useState(false)
-  const [now, setNow] = useState(() => Date.now())
-
-  useEffect(() => {
-    if (!progress) return
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [progress])
-
-  const elapsed = progress && jobStart ? Math.max(0, (now - jobStart) / 1000) : 0
-  const eta = progress && progress.percent >= 3 ? (elapsed / progress.percent) * (100 - progress.percent) : null
-  const stepSet = !isGif ? STEPS.video : isWebp ? STEPS.webp : engine === 'gifski' ? STEPS.gifski : STEPS.palette
-  const activeStep = progress ? stepSet.findIndex((step) => step.stages.includes(progress.stage)) : -1
 
   const hint = hardware
     ? isGif
@@ -264,6 +279,129 @@ export function ExportPanel(props: Props): JSX.Element {
                   {t('crop.size', { width: crop.width, height: crop.height })}
                 </em>
               )}
+            </>
+          )}
+        </Section>
+
+        {/* Painting a logo out is a correction to the picture, so it belongs
+            beside Framing rather than among the quality knobs. */}
+        <Section icon={<Eraser />} title={t('watermark.title')}>
+          <label className="check-row">
+            <Checkbox
+              checked={watermarkOn}
+              disabled={!cropKnown}
+              onCheckedChange={(value) => onWatermarkOn(value === true)}
+              aria-label={t('watermark.enable')}
+            />
+            <span>
+              <strong>{t('watermark.enable')}</strong>
+              <em>{cropKnown ? t('watermark.hint') : t('watermark.unknownSize')}</em>
+            </span>
+          </label>
+
+          {/* Offered whether or not the feature is already on: finding the mark is
+              what turns it on, so hiding the button behind the switch would be
+              backwards. */}
+          <div className="field">
+            <Button size="sm" variant="secondary" onClick={onDetectWatermark} disabled={!cropKnown || detectBusy}>
+              <Scan />
+              {detectBusy ? t('watermark.detecting') : t('watermark.detect')}
+            </Button>
+            <em className="field-hint">{t('watermark.detectHint')}</em>
+          </div>
+
+          {watermarkOn && (
+            <>
+              {/* What is marked comes first: the box is the decision, the corner
+                  buttons are only a shortcut to placing it. */}
+              <div className="field">
+                <div className="field-row">
+                  <Label>{t('watermark.regions')}</Label>
+                  <span className="region-tools">
+                    <Button size="icon" variant="ghost" onClick={onAddWatermark} aria-label={t('watermark.add')}>
+                      <Plus />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => onRemoveWatermark(activeRegion)}
+                      aria-label={t('watermark.remove')}
+                      disabled={watermarks.length === 0}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {watermarks.map((_region, index) => (
+                    <Button
+                      key={index}
+                      size="sm"
+                      variant={index === activeRegion ? 'default' : 'secondary'}
+                      aria-pressed={index === activeRegion}
+                      onClick={() => onActiveRegion(index)}
+                    >
+                      {t('watermark.region', { index: index + 1 })}
+                    </Button>
+                  ))}
+                </div>
+
+                {watermarks[activeRegion] ? (
+                  <em className="field-hint">
+                    {t('watermark.size', {
+                      width: watermarks[activeRegion].width,
+                      height: watermarks[activeRegion].height,
+                      x: watermarks[activeRegion].x,
+                      y: watermarks[activeRegion].y
+                    })}
+                  </em>
+                ) : (
+                  <em className="field-hint warn">{t('watermark.none')}</em>
+                )}
+              </div>
+
+              <div className="field">
+                <Label>{t('watermark.place')}</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {CORNERS.map((corner) => (
+                    <Button
+                      key={corner.id}
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => onWatermarkCorner(corner.id)}
+                    >
+                      {t(corner.key)}
+                    </Button>
+                  ))}
+                </div>
+                <em className="field-hint">{t('watermark.marginHint')}</em>
+              </div>
+
+              <div className="field">
+                <Label>{t('watermark.engine')}</Label>
+                <Select
+                  value={watermarkEngine}
+                  onValueChange={(value) => onWatermarkEngine(value as WatermarkEngine)}
+                >
+                  <SelectTrigger aria-label={t('watermark.engine')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="delogo">{t('watermark.engine.fast')}</SelectItem>
+                    <SelectItem value="ai" disabled={!aiAvailable}>
+                      {t('watermark.engine.ai')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <em className="field-hint">
+                  {watermarkEngine === 'ai'
+                    ? t('watermark.engine.aiHint')
+                    : aiAvailable
+                      ? t('watermark.engine.fastHint')
+                      : t('watermark.engine.missing')}
+                </em>
+              </div>
             </>
           )}
         </Section>
@@ -359,14 +497,12 @@ export function ExportPanel(props: Props): JSX.Element {
             <div className="field">
               <div className="field-row">
                 <Label>{t('export.fps')}</Label>
-                <input
-                  className="num-input"
-                  type="number"
+                <NumberField
+                  value={fps}
                   min={5}
                   max={50}
-                  value={fps}
                   aria-label={t('export.fps')}
-                  onChange={(event) => onFps(Math.max(5, Math.min(50, Number(event.target.value) || fps)))}
+                  onCommit={onFps}
                 />
               </div>
               <Slider
@@ -382,14 +518,12 @@ export function ExportPanel(props: Props): JSX.Element {
             <div className="field">
               <div className="field-row">
                 <Label>{t('export.quality')}</Label>
-                <input
-                  className="num-input"
-                  type="number"
+                <NumberField
+                  value={quality}
                   min={1}
                   max={100}
-                  value={quality}
                   aria-label={t('export.quality')}
-                  onChange={(event) => onQuality(Math.max(1, Math.min(100, Number(event.target.value) || quality)))}
+                  onCommit={onQuality}
                 />
               </div>
               <Slider
@@ -528,29 +662,7 @@ export function ExportPanel(props: Props): JSX.Element {
           </div>
         </div>
 
-        {progress && (
-          <div className="progress-block">
-            <Progress value={progress.percent} aria-label={t('export.working')} />
-            <div className="progress-meta">
-              <span>{progress.message}</span>
-              <span className="tabular-nums">{Math.round(progress.percent)}%</span>
-            </div>
-            <div className="progress-meta">
-              <span>{t('export.elapsed', { time: formatDuration(elapsed) ?? '0s' })}</span>
-              <span>{eta !== null ? t('export.eta', { time: formatDuration(eta) ?? '—' }) : ''}</span>
-            </div>
-            <ol className="step-list">
-              {stepSet.map((step, index) => (
-                <li
-                  key={step.key}
-                  className={index < activeStep ? 'done' : index === activeStep ? 'active' : 'pending'}
-                >
-                  {t(step.key)}
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
+        {view && <ProgressBlock view={view} note={phaseNote} />}
       </div>
 
       <div className="export-footer">

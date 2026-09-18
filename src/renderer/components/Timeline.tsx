@@ -382,6 +382,12 @@ export function Timeline({
 
   const magnetText = freeSnap ? t('timeline.snap.free') : snapInfo ? magnetLabel(snapInfo.magnet, t) : null
   const frames = duration > 0 ? Math.max(1, Math.round(clipLength / frameDuration(fps))) : 0
+  // Claiming a frame rate we never learned would make the count look exact when
+  // it is really an assumption, so the rate is reported as unknown instead.
+  const clipMeta =
+    fps > 0
+      ? t('timeline.clipMeta', { frames, fps: Math.round(fps) })
+      : t('timeline.clipMetaNoFps', { frames })
   const selectedStep = secondsPerPixel(max, trackWidth)
 
   return (
@@ -393,7 +399,7 @@ export function Timeline({
             ? t('timeline.selectedNamed', { name: mediaName, time: formatTime(clipLength) })
             : t('timeline.selected', { time: formatTime(clipLength) })}
         </span>
-        <span className="timeline-meta">{t('timeline.clipMeta', { frames, fps: Math.round(fps) })}</span>
+        <span className="timeline-meta">{clipMeta}</span>
       </div>
 
       <div

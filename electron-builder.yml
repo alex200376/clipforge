@@ -28,6 +28,17 @@ extraResources:
     to: bin
     filter:
       - '**/*'
+  # The AI weights and the ONNX runtime's wasm. Shipping them is what makes AI
+  # watermark removal work offline on the first export; populate via
+  # `npm run prepare:binaries`.
+  - from: resources/models
+    to: models
+    filter:
+      - '**/*'
+  - from: resources/ort
+    to: ort
+    filter:
+      - '**/*'
   # Packaged window/taskbar icon. The exe carries the .ico already, but the
   # BrowserWindow needs a real image file at runtime.
   - from: build/icon.png

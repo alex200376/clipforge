@@ -183,7 +183,7 @@ export function InstallCard({
         <div className="flex flex-col gap-2">
           <Progress
             value={progress.overallPercent}
-            indicatorClassName="bg-gradient-to-r from-[#5148e8] to-[#8b7bff]"
+            indicatorClassName="bg-gradient-to-r from-[var(--primary)] to-[var(--brand-top)]"
           />
           <div className="flex justify-between gap-2 text-[0.71875rem] text-dim">
             <span className="tabular-nums">{progress.overallPercent}%</span>

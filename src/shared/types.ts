@@ -30,6 +30,8 @@ export interface UrlMetadata {
   /** 0 when the site does not report a frame size. */
   width: number
   height: number
+  /** 0 when the site does not report one; frame stepping then assumes 25fps. */
+  fps: number
 }
 
 export interface PreviewSource {
@@ -38,8 +40,15 @@ export interface PreviewSource {
   duration: number
   /** True when the original file already plays natively (no remux needed). */
   direct: boolean
-  /** True when only an initial window of a remote video was fetched for preview. */
-  partial: boolean
+  /** 0 when unknown; a link only reports its frame rate once it is downloaded. */
+  fps: number
+  /**
+   * Source pixels of the prepared file. A direct video link reports no frame size
+   * from the site, so this probe is the only place its geometry is ever learned -
+   * and crop, watermark and the size estimate all refuse to run without it.
+   */
+  width: number
+  height: number
 }
 
 /** A finished export exposed to the renderer through the clipforge:// token scheme. */
@@ -52,6 +61,116 @@ export interface RegisteredMedia {
 export interface CropSpec {
   x: number
   y: number
+  width: number
+  height: number
+}
+
+/**
+ * A rectangle of the frame to paint out, in source pixels.
+ *
+ * The same shape as a crop because it describes the same thing - a box of the
+ * source - and the editors share one drag implementation. The rules are not the
+ * same though: `delogo` rebuilds the box from the pixels immediately around it
+ * and refuses to run when the box touches the frame edge, so these get a
+ * one-pixel inset rather than the even-pixel rounding a crop needs.
+ */
+export type WatermarkRegion = CropSpec
+
+/**
+ * How marked boxes are erased.
+ *
+ * `delogo` rebuilds the box by interpolating from the pixels just outside it. It
+ * is instant and perfect on flat backgrounds, and turns into a visible smear over
+ * texture. `ai` runs the marked windows through LaMa inpainting instead, which
+ * synthesises the missing picture, at the cost of real GPU or CPU time.
+ */
+export type WatermarkEngine = 'delogo' | 'ai'
+
+/** One region's window, as planned by the main process and used by the worker. */
+export interface AiRegionPlan {
+  /** Index into the request's region list. */
+  index: number
+  /** The window cut out of the frame, in source pixels. */
+  crop: CropSpec
+  /** The marked box inside that window, in source pixels. */
+  box: CropSpec
+  /** The same box in model coordinates, for the mask. */
+  modelBox: CropSpec
+  /** Uniform factor applied to the window before inference. 1 = untouched. */
+  scale: number
+  /** Model-space padding around the scaled window. */
+  pad: { left: number; top: number; right: number; bottom: number }
+  /** How many frames this window has, and how many are already inpainted. */
+  total: number
+  done: number
+}
+
+export interface AiPrepareRequest {
+  source: string
+  isUrl: boolean
+  start: number
+  duration: number
+  /** Constant rate the range is normalised to. 0 is refused, not guessed. */
+  fps: number
+  regions: WatermarkRegion[]
+  width: number
+  height: number
+}
+
+export interface AiPrepareResult {
+  token: string
+  /** False when a previous run already produced these patches. */
+  fresh: boolean
+  fps: number
+  frames: number
+  duration: number
+  width: number
+  height: number
+  regions: AiRegionPlan[]
+}
+
+/** Where the bundled AI models live, as clipforge:// URLs the renderer can fetch. */
+export interface AiAssets {
+  /** Inpainting weights, or null when they are not installed. */
+  lama: string | null
+  /** Detection weights, or null when they are not installed. */
+  detector: string | null
+  /**
+   * The ONNX runtime's files, or null when they are not installed.
+   *
+   * All three addresses are inside one folder and keep their real file names, because
+   * the runtime finds its own parts by name: `api` is the module the app loads at run
+   * time, and from there it resolves `mjs` and `wasm` relative to itself - including
+   * inside the worker threads it starts, which re-import the module they came from.
+   * Opaque per-file addresses break that: the thread is handed a URL that resolves to
+   * nothing and simply never answers.
+   */
+  runtime: { api: string; wasm: string; mjs: string } | null
+  /** Model file names that are missing, for a message that says which. */
+  missing: string[]
+}
+
+export interface AiDetectRequest {
+  source: string
+  isUrl: boolean
+  start: number
+  duration: number
+  width: number
+  height: number
+  /** How many frames across the range to look at. */
+  samples: number
+}
+
+export interface AiSampleFrame {
+  index: number
+  /** Seconds into the source, so a box can be reported against the real time. */
+  time: number
+  url: string
+}
+
+export interface AiDetectResult {
+  frames: AiSampleFrame[]
+  /** Frame size of the sampled images; they are scaled down for speed. */
   width: number
   height: number
 }
@@ -78,6 +197,12 @@ export interface GifRequest extends RangeSpec {
   boomerang?: boolean
   /** Shrink the result with gifsicle after encoding (GIF only). */
   optimize?: boolean
+  /** Logo boxes painted out before the crop and the resize. */
+  watermarks?: WatermarkRegion[]
+  /** Marked boxes are erased with `delogo` unless this asks for inpainting. */
+  watermarkEngine?: WatermarkEngine
+  /** A prepared AI session whose patched master replaces `source`. */
+  aiToken?: string
 }
 
 export interface VideoRequest extends RangeSpec {
@@ -92,6 +217,12 @@ export interface VideoRequest extends RangeSpec {
   encoder?: EncoderChoice
   /** EBU R128 loudness normalisation for the audio track. */
   loudnorm?: boolean
+  /** Logo boxes painted out before the crop and the resize. */
+  watermarks?: WatermarkRegion[]
+  /** Marked boxes are erased with `delogo` unless this asks for inpainting. */
+  watermarkEngine?: WatermarkEngine
+  /** A prepared AI session whose patched master replaces `source`. */
+  aiToken?: string
 }
 
 export interface ExportResult {
@@ -107,11 +238,22 @@ export interface ExportResult {
   encoderFallback?: string
 }
 
+/**
+ * How far the running stage is, in the units that stage actually works in. A bare
+ * percentage cannot say whether a stage is measurably moving at all, nor how fast -
+ * both of which are needed to show a count ("frame 412 of 900") or to estimate the
+ * remaining time from the observed rate rather than from the percentage alone.
+ */
+export type JobProgressDetail =
+  | { kind: 'time'; processed: number; total: number }
+  | { kind: 'frames'; done: number; total: number }
+
 export interface JobProgress {
   jobId: string
   stage: string
   percent: number
   message: string
+  detail?: JobProgressDetail
 }
 
 export interface DependencyState {
@@ -178,9 +320,17 @@ export interface HardwareProfile {
 
 export type Language = 'en' | 'zh-TW'
 
+/**
+ * Palette names. Each one is a block in `styles.css` overriding the base tokens; the
+ * order here is the order the settings dropdown offers them in.
+ */
+export const THEMES = ['midnight', 'graphite', 'ember', 'aurora', 'daylight'] as const
+export type Theme = (typeof THEMES)[number]
+
 export interface AppSettings {
   outputDir: string
   language: Language
+  theme: Theme
   autoCleanup: boolean
   /**
    * Export defaults. Kept flat on purpose: settings.ts merges shallowly, so a
@@ -203,6 +353,8 @@ export interface SessionState {
   source: MediaSourceSnapshot | null
   range: RangeSpec
   exportedAt: string | null
+  /** Set by `loadSession`: false when a remembered local file is gone. */
+  available?: boolean
 }
 
 export interface MediaSourceSnapshot {

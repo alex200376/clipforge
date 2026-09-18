@@ -11,5 +11,9 @@ release/
 .verify-ui.mjs
 resources/bin/*.exe
 resources/bin/*.dll
+# Fetched and checksummed by `npm run prepare:binaries` (~220 MB).
+resources/models/
+resources/ort/
+.bin-scratch/
 *.log
 .DS_Store

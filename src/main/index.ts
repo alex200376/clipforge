@@ -1,13 +1,60 @@
-import { BrowserWindow, app, session, shell } from 'electron'
+import { BrowserWindow, app, crashReporter, session, shell } from 'electron'
 
-import { cancelActiveWork, registerIpc, trackWindowState } from './ipc'
-import { handleMediaProtocol, registerMediaScheme } from './mediaProtocol'
-import { iconPath, isDev, preloadEntry, rendererEntry } from './paths'
+import { cancelActiveWork, registerIpc, releaseDownloads, trackWindowState } from './ipc'
+import { handleMediaProtocol, registerMediaScheme, setAppRoot } from './mediaProtocol'
+import { appUrl, iconPath, isDev, preloadEntry, rendererDir, rendererEntry } from './paths'
+
+/**
+ * Asks for the discrete GPU on a machine that has both.
+ *
+ * Windows and Linux hand a process the power-saving adapter unless it says otherwise, and
+ * Chromium builds its list of WebGPU adapters from what it is offered - so on a hybrid
+ * laptop the NVIDIA card is not merely second choice, it is not in the list at all. Asking
+ * for it here is what makes `powerPreference: 'high-performance'` in the renderer mean
+ * anything; without it that request is answered by the only adapter Chromium has.
+ *
+ * macOS decides for itself and ignores the switch, which is why it is not passed there.
+ */
+if (process.platform !== 'darwin') app.commandLine.appendSwitch('force_high_performance_gpu')
 
 // Scheme privileges must be declared before the app is ready.
 registerMediaScheme()
 
+/**
+ * Local-only crash reporting. Nothing is uploaded: a minidump is written under
+ * the profile's Crashpad folder, which is the difference between a crash that
+ * can be diagnosed and an app that simply disappears mid-job.
+ */
+crashReporter.start({ productName: 'ClipForge', uploadToServer: false, compress: true })
+
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * One bad job must not take the app down with it. A renderer crash is reported
+ * and recovered here; the session file is untouched, so whatever was being
+ * edited is still offered on the next launch.
+ */
+function watchForCrashes(window: BrowserWindow): void {
+  window.webContents.on('render-process-gone', (_event, details) => {
+    const reason = `${details.reason} (exit code ${details.exitCode})`
+    console.error(`[ClipForge] the window's renderer stopped: ${reason}`)
+    if (details.reason === 'clean-exit' || window.isDestroyed()) return
+    window.webContents.reload()
+    window.webContents.once('did-finish-load', () => {
+      window.webContents.send('clipforge:log', `The preview process stopped unexpectedly (${reason}) — reloaded.`)
+    })
+  })
+}
+
+app.on('child-process-gone', (_event, details) => {
+  if (details.reason === 'clean-exit') return
+  console.error(`[ClipForge] ${details.type} process stopped: ${details.reason}${details.exitCode ? ` (exit code ${details.exitCode})` : ''}`)
+})
+
+// A rejected promise anywhere in the main process should be a log line, not a
+// silent exit.
+process.on('uncaughtException', (error) => console.error('[ClipForge] uncaught exception', error))
+process.on('unhandledRejection', (reason) => console.error('[ClipForge] unhandled rejection', reason))
 
 function createWindow(): void {
   const icon = iconPath()
@@ -38,6 +85,7 @@ function createWindow(): void {
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
   trackWindowState(mainWindow)
+  watchForCrashes(mainWindow)
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -49,7 +97,15 @@ function createWindow(): void {
   if (isDev()) {
     void mainWindow.loadURL('http://localhost:5173')
   } else {
-    void mainWindow.loadFile(rendererEntry())
+    void mainWindow.loadURL(appUrl())
+    // The app scheme is what gives the page a real origin; if serving it ever fails,
+    // the plain file load still runs everything that does not need a worker.
+    let fellBack = false
+    mainWindow.webContents.on('did-fail-load', (_event, _code, _description, url, isMainFrame) => {
+      if (fellBack || !isMainFrame || !url.startsWith('clipforge://app')) return
+      fellBack = true
+      void mainWindow?.loadFile(rendererEntry())
+    })
   }
 }
 
@@ -59,8 +115,13 @@ function applyContentSecurityPolicy(): void {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
+        // `wasm-unsafe-eval` is what lets the inpainting model run: without it Chromium
+        // refuses to instantiate WebAssembly at all. `connect-src clipforge:` is how the
+        // renderer reaches the bundled weights, the ONNX runtime and the sampled frames,
+        // and `blob:` in `script-src` is there because the runtime hands its own glue
+        // file to worker threads as a blob when it is loaded from another origin.
         'Content-Security-Policy': [
-          "default-src 'self'; img-src 'self' data: clipforge:; media-src 'self' clipforge:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+          "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self' clipforge: data: blob:; img-src 'self' data: clipforge: blob:; media-src 'self' clipforge: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
         ]
       }
     })
@@ -68,6 +129,9 @@ function applyContentSecurityPolicy(): void {
 }
 
 app.whenReady().then(() => {
+  // The built renderer is served over the app's own scheme, so it needs to know where
+  // it lives before the first load.
+  setAppRoot(rendererDir())
   handleMediaProtocol()
   applyContentSecurityPolicy()
   registerIpc(() => mainWindow)
@@ -80,6 +144,8 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   cancelActiveWork()
+  // Downloaded links are large; they should not outlive the run that needed them.
+  releaseDownloads()
 })
 
 app.on('window-all-closed', () => {

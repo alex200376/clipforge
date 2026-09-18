@@ -4,9 +4,12 @@ import path from 'node:path'
 
 import { ClipForgeError } from '../shared/errors'
 
-import { remuxPreviewArgs, transcodePreviewArgs, ytdlpStreamArgs } from '../shared/mediaArgs'
+import { remuxPreviewArgs, transcodePreviewArgs } from '../shared/mediaArgs'
+import { isRemoteUrl } from '../shared/sources'
 import type { CropRequest, NotifyRequest } from '../shared/api'
 import type {
+  AiDetectRequest,
+  AiPrepareRequest,
   AppSettings,
   BinaryName,
   FilmstripRequest,
@@ -17,6 +20,7 @@ import type {
   VideoRequest,
   WindowState
 } from '../shared/types'
+import { aiAssets, compositeAiSession, prepareAiSession, readAiFrames, releaseAiSessions, sampleFrames, writeAiPatches } from './ai'
 import { detectCrop } from './autocrop'
 import { ALL_BINARIES, dependencyStates, findBinary, missingBinaries, missingBinaryError, toolVersions } from './binaries'
 import { loadSession, saveSession } from './session'
@@ -30,10 +34,10 @@ import { defaultOutputDir, resolveOutputDir, workDir } from './paths'
 import { probeLocalFile } from './probe'
 import { MediaJob } from './runner'
 import { cancelScheduledCheck, checkForUpdates, initUpdates, installUpdate, scheduleFirstCheck, updateState } from './updates'
-import { resolveMetadata, ytdlpPath } from './ytdlp'
+import { materializeUrl, releaseMaterializedUrls } from './urlSource'
+import { resolveMetadata } from './ytdlp'
 
 const DIRECT_EXTENSIONS = new Set(['.mp4', '.m4v', '.webm'])
-const URL_PREVIEW_SECONDS = 90
 
 let activeJob: MediaJob | null = null
 let activeInstall: AbortController | null = null
@@ -69,6 +73,16 @@ export function cancelActiveWork(): void {
   activeInstall = null
 }
 
+/**
+ * Everything the app wrote to the temp folder goes when the app does: a downloaded
+ * link, and the master file and inpainted frames of an AI removal, which are
+ * rebuildable but large.
+ */
+export function releaseDownloads(): void {
+  releaseMaterializedUrls()
+  releaseAiSessions()
+}
+
 export function registerIpc(getWindow: WindowGetter): void {
   const send = (channel: string, payload: unknown): void => {
     const window = getWindow()
@@ -89,6 +103,19 @@ export function registerIpc(getWindow: WindowGetter): void {
 
   const resolveSourcePath = (source: string): string => resolveMediaToken(source) ?? source
 
+  /**
+   * Filmstrip and crop detection only ever run on a prepared local file. When the
+   * renderer asks before a link's preview exists it hands over the raw URL, and
+   * ffmpeg would answer with something unreadable about an unsupported protocol.
+   */
+  const requireLocalSource = (source: string): string => {
+    const resolved = resolveSourcePath(source)
+    if (isRemoteUrl(resolved)) {
+      throw new ClipForgeError('remote-source', 'This link has not finished downloading yet.')
+    }
+    return resolved
+  }
+
   async function preparePreview(source: string, isUrl: boolean): Promise<PreviewSource> {
     const ffmpeg = findBinary('ffmpeg')
     if (!ffmpeg) throw missingBinaryError('ffmpeg')
@@ -97,36 +124,50 @@ export function registerIpc(getWindow: WindowGetter): void {
     const job = new MediaJob('Preparing preview', emit, log)
     track(job)
 
-    if (isUrl) {
-      const result = await job.runPipeline(
-        { command: ytdlpPath(), args: ytdlpStreamArgs(source, { start: 0, end: URL_PREVIEW_SECONDS }) },
-        { command: ffmpeg, args: ['-y', '-i', 'pipe:0', '-c', 'copy', '-movflags', '+faststart', output] },
-        { duration: URL_PREVIEW_SECONDS }
-      )
-      if (!result.ok) throw new Error(result.error ?? 'Could not build a preview for this URL')
-      preparedPreview = output
-      const info = await probeLocalFile(output).catch(() => null)
-      return { url: registerMediaToken(output), duration: info?.duration ?? URL_PREVIEW_SECONDS, direct: false, partial: true }
+    // A link is fetched first so the preview comes from an ordinary local file.
+    // Streaming it into ffmpeg does not work: a non-faststart MP4 - moov at the
+    // end, which is what most servers send - cannot be read from a pipe, so
+    // ffmpeg reports `partial file` and the preview comes out empty.
+    const local = isUrl ? await materializeUrl(source, { emit, log, registerJob: track }) : source
+
+    // A download is only known to be playable once ffmpeg has re-muxed it, so
+    // even an `.mp4` link takes the remux path rather than being handed to the
+    // <video> element as it arrived.
+    const extension = path.extname(local).toLowerCase()
+    if (!isUrl && DIRECT_EXTENSIONS.has(extension)) {
+      preparedPreview = local
+      const info = await probeLocalFile(local).catch(() => null)
+      return {
+        url: registerMediaToken(local),
+        duration: info?.duration ?? 0,
+        direct: true,
+        fps: info?.fps ?? 0,
+        // Neither path scales the picture, so geometry measured here is the
+        // source's own. It is the only chance a direct video link ever has to
+        // learn its frame size.
+        width: info?.width ?? 0,
+        height: info?.height ?? 0
+      }
     }
 
-    const extension = path.extname(source).toLowerCase()
-    if (DIRECT_EXTENSIONS.has(extension)) {
-      preparedPreview = source
-      const info = await probeLocalFile(source).catch(() => null)
-      return { url: registerMediaToken(source), duration: info?.duration ?? 0, direct: true, partial: false }
-    }
-
-    const remuxed = await job.run({ command: ffmpeg, args: remuxPreviewArgs(source, output) })
+    const remuxed = await job.run({ command: ffmpeg, args: remuxPreviewArgs(local, output) })
     if (!remuxed.ok) {
       const transcoded = await job.run(
-        { command: ffmpeg, args: transcodePreviewArgs(source, output) },
+        { command: ffmpeg, args: transcodePreviewArgs(local, output) },
         { stage: 'Rewrapping preview' }
       )
       if (!transcoded.ok) throw new Error(transcoded.error ?? 'Could not prepare a preview for this file')
     }
     preparedPreview = output
     const info = await probeLocalFile(output).catch(() => null)
-    return { url: registerMediaToken(output), duration: info?.duration ?? 0, direct: false, partial: false }
+    return {
+      url: registerMediaToken(output),
+      duration: info?.duration ?? 0,
+      direct: false,
+      fps: info?.fps ?? 0,
+      width: info?.width ?? 0,
+      height: info?.height ?? 0
+    }
   }
 
   ipcMain.handle('clipforge:settings:get', () => loadSettings())
@@ -161,12 +202,12 @@ export function registerIpc(getWindow: WindowGetter): void {
   )
 
   ipcMain.handle('clipforge:media:filmstrip', async (_event, request: FilmstripRequest) => {
-    const source = resolveSourcePath(request.source)
+    const source = requireLocalSource(request.source)
     return buildFilmstrip(source, request.duration, request.frames, emit, log)
   })
 
   ipcMain.handle('clipforge:media:crop', async (_event, request: CropRequest) => {
-    const source = resolveSourcePath(request.source)
+    const source = requireLocalSource(request.source)
     return detectCrop(source, request.start, request.duration, request.width, request.height, { emit, log })
   })
 
@@ -218,6 +259,38 @@ export function registerIpc(getWindow: WindowGetter): void {
 
   ipcMain.handle('clipforge:hardware', () => detectHardware())
 
+  /**
+   * The AI removal surface. The main process owns the files and the renderer owns
+   * the pixels, so this is a pull loop: the renderer asks for a batch of window
+   * frames, hands back a batch of patches, and repeats while the job runs.
+   */
+  ipcMain.handle('clipforge:ai:assets', () => aiAssets())
+
+  ipcMain.handle('clipforge:ai:prepare', (_event, request: AiPrepareRequest) =>
+    prepareAiSession({ ...request, source: requireLocalSource(request.source) }, { emit, log, registerJob: track })
+  )
+
+  ipcMain.handle(
+    'clipforge:ai:frames',
+    (_event, request: { token: string; index: number; from: number; count: number }) =>
+      readAiFrames(request.token, request.index, request.from, request.count)
+  )
+
+  ipcMain.handle(
+    'clipforge:ai:patches',
+    (_event, request: { token: string; index: number; from: number; patches: Uint8Array[] }) =>
+      writeAiPatches(request.token, request.index, request.from, request.patches)
+  )
+
+  ipcMain.handle('clipforge:ai:composite', (_event, request: { token: string }) =>
+    compositeAiSession(request.token, { emit, log, registerJob: track })
+  )
+
+  /** Sample frames for the detectors; both of them read the same handful. */
+  ipcMain.handle('clipforge:ai:samples', (_event, request: AiDetectRequest) =>
+    sampleFrames({ ...request, source: requireLocalSource(request.source) }, { emit, log, registerJob: track })
+  )
+
   /** Lets the renderer preview a finished export through the same token scheme. */
   ipcMain.handle('clipforge:media:register', async (_event, filePath: string) => {
     const info = await probeLocalFile(filePath).catch(() => null)
@@ -260,6 +333,10 @@ export function registerIpc(getWindow: WindowGetter): void {
   ipcMain.handle('clipforge:clipboard:text', () => clipboard.readText())
 
   ipcMain.handle('clipforge:session:load', () => loadSession())
+
+  ipcMain.handle('clipforge:session:clear', () => {
+    saveSession({ source: null, range: { start: 0, end: 0 }, exportedAt: null })
+  })
 
   ipcMain.handle('clipforge:session:save', (_event, state: SessionState) => {
     saveSession(state)
