@@ -1,0 +1,7 @@
+# cmd.exe tracks its position in a batch file by byte offset and assumes CRLF endings. In a
+# file with Unix endings it resumes at the wrong offset after a nested batch call and
+# silently skips whole sections - release.bat once jumped over its commit, push and tag steps
+# and went on to publish a release. Keep batch files CRLF in the working tree; a checkout
+# that writes them back as LF breaks them, and scripts/check-bat-eol.mjs is the guard.
+*.bat text eol=crlf
+*.cmd text eol=crlf

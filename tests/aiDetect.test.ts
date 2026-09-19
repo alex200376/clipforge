@@ -6,11 +6,13 @@ import {
   detectStaticBlobs,
   decodeDenseDetections,
   decodeQueryDetections,
+  detectionSettings,
   detectorLayout,
   expandBox,
   fromLetterbox,
   groupBoxes,
   iou,
+  mergeRows,
   localContrast,
   mergeCandidates,
   noiseFloor,
@@ -314,6 +316,112 @@ describe('the built-in detector', () => {
     expect(detectStaticBlobs(frames, width, height, options)).toHaveLength(2)
   })
 
+  it('keeps its distances in source pixels as the sample width grows', () => {
+    // The regression this exists for: the detector's ring and merge gap were fixed pixel
+    // counts, so analysing a clip at 1080 instead of 640 quietly moved the ring 40% closer
+    // to every mark - for a mark larger than a few pixels the ring then lands inside it and
+    // the test asks the mark whether it looks like itself. The settings scale with the
+    // width, so the same clip answers the same question at either size.
+    const at640 = detectionSettings(640, 360, 6)
+    const at1080 = detectionSettings(1080, 607, 6)
+    expect(at640.groupGap).toBe(16)
+    expect(at640.ringDistance).toBe(14)
+    expect(at1080.groupGap).toBe(27)
+    expect(at1080.ringDistance).toBe(24)
+    // The same distance measured against the source: 14 of 640 and 24 of 1080.
+    expect((at640.ringDistance! / 640) * 1080).toBeCloseTo(at1080.ringDistance!, 0)
+  })
+
+  it('never shrinks its size filters below the floor', () => {
+    const tiny = detectionSettings(64, 48, 4)
+    expect(tiny.minArea).toBe(20)
+    expect(tiny.groupGap).toBeGreaterThanOrEqual(4)
+    expect(tiny.ringDistance).toBeGreaterThanOrEqual(1)
+  })
+
+  it('finds a mark whose outline fills barely a tenth of its own box', () => {
+    // The App-Store-style badge: a thin ring with nothing inside it. Measured on real
+    // footage its border fills 0.11 of its box, and the floor that kept only solid blobs
+    // (0.15) threw the badge away while keeping the words beside it. This ring fills 0.13,
+    // so it is the same decision - and the scene is built so the mark's own pixels do not
+    // move, which is what leaves the density rule as the only thing that can reject it.
+    const width = 96
+    const height = 64
+    const frames = Array.from({ length: 6 }, (_value, frame) => {
+      const pixels = new Uint8Array(width * height)
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const background = 90 + Math.round(25 * Math.sin((x + frame * 4) / 9) + 15 * Math.cos((y + frame * 3) / 7))
+          const badge = x >= 10 && x <= 85 && y >= 8 && y <= 55
+          const onEdge = badge && (x < 12 || x > 83 || y < 10 || y > 53)
+          pixels[y * width + x] = onEdge ? 215 : background
+        }
+      }
+      return pixels
+    })
+    const found = detectStaticBlobs(frames, width, height, detectionSettings(width, height, 6))
+    expect(found).toHaveLength(1)
+    expect(found[0]!.x).toBeLessThanOrEqual(11)
+    expect(found[0]!.width).toBeGreaterThanOrEqual(74)
+  })
+
+  it('joins a row of glyphs spaced further apart than the fixed gap', () => {
+    // The failure this was fixed against, measured on a real clip: a wordmark came back as
+    // one region per letter. The glyph gaps there were 18 px at sample scale against a
+    // merge gap of 16, so the letters were each just too far from the next - and the same
+    // mark at a higher resolution is further apart still in pixels. The gap that separates
+    // glyphs follows the size of the type, so the merge asks whether two shapes are the
+    // same height and on the same line rather than how many pixels apart they are.
+    const width = 96
+    const height = 48
+    const glyphs = [
+      { x: 12, width: 10 },
+      { x: 36, width: 10 },
+      { x: 60, width: 10 }
+    ]
+    const frames = Array.from({ length: 6 }, (_value, frame) => {
+      const pixels = new Uint8Array(width * height)
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const background = 90 + Math.round(25 * Math.sin((x + frame * 4) / 9) + 15 * Math.cos((y + frame * 3) / 7))
+          const ink = glyphs.some((glyph) => x >= glyph.x && x < glyph.x + glyph.width && y >= 14 && y <= 34)
+          pixels[y * width + x] = ink ? 215 : background
+        }
+      }
+      return pixels
+    })
+    const found = detectStaticBlobs(frames, width, height, {
+      staticThreshold: 3,
+      contrastThreshold: 16,
+      minArea: 20,
+      maxAreaRatio: 0.25,
+      minSide: 4,
+      // Deliberately smaller than the 24 px between the glyphs.
+      groupGap: 8
+    })
+    expect(found).toHaveLength(1)
+    expect(found[0]!.x).toBeLessThanOrEqual(13)
+    expect(found[0]!.x + found[0]!.width).toBeGreaterThanOrEqual(69)
+  })
+
+  it('keeps marks apart when they are further apart than one line tall', () => {
+    // Two marks on the same line, a frame apart, are two regions a user would draw
+    // separately - and joining them would hand the inpainter a strip of picture that
+    // neither of them covers.
+    const first = { box: box(0, 0, 10, 20), members: [0] }
+    const second = { box: box(60, 0, 10, 20), members: [1] }
+    expect(mergeRows([first, second], 0.75)).toHaveLength(2)
+  })
+
+  it('joins only shapes that share a line', () => {
+    // A caption under a logo is a different mark: no vertical overlap means no join,
+    // however close the two are horizontally.
+    const above = { box: box(0, 0, 10, 20), members: [0] }
+    const below = { box: box(12, 30, 10, 20), members: [1] }
+    const merged = mergeRows([above, below], 0.75)
+    expect(merged).toHaveLength(2)
+  })
+
   it('finds a mark whose own region also contains still background', () => {
     // The failure this was fixed against, from a real clip: a small bright handle at the
     // bottom of the frame. The still-pixel test found the mark, but the blob around it also
@@ -398,6 +506,77 @@ describe('the built-in detector', () => {
       return pixels
     })
     expect(detectStaticBlobs(frames, width, height, options)).toHaveLength(0)
+  })
+
+  /**
+   * The mark from a real clip: a wordmark and a store badge at 70% opacity, bottom-left,
+   * over skin that drifts.
+   *
+   * Two things about it defeat a detector that is not careful. Every one of its pixels
+   * moves, because it is a blend of the picture rather than a constant - so a test that
+   * asks "did this pixel stay the same?" is asking the wrong question. And most of its box
+   * is the picture it sits on, because letters have gaps and the ink is thin - so a test
+   * that averages the whole box divides the mark's contrast by how much of it is ink.
+   */
+  const badgeScene = (frames: number) => {
+    const width = 96
+    const height = 72
+    const grain = (x: number, y: number): number => {
+      const value = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453
+      return (value - Math.floor(value)) * 2 - 1
+    }
+    const ink = (x: number, y: number): boolean => {
+      if (x < 8 || x >= 80 || y < 50 || y >= 66) return false
+      const localX = x - 8
+      const localY = y - 50
+      if (localX < 5 && localY >= 3 && localY < 14) return true
+      if (localX >= 10 && localX < 44 && localY >= 5 && localY < 13) return localX % 5 < 3
+      if (localX >= 50 && localX < 70 && localY >= 2 && localY < 16) {
+        const border = localX < 52 || localX >= 68 || localY < 4 || localY >= 14
+        return border || (localX % 4 < 2 && localY >= 6 && localY < 12)
+      }
+      return false
+    }
+    return Array.from({ length: frames }, (_value, frame) => {
+      const shift = frame * 3
+      const pixels = new Uint8Array(width * height)
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const skin = 150 + 25 * Math.sin(x / 40) - 20 * Math.cos(y / 50)
+          const picture = skin + 12 * grain(x + shift, y)
+          pixels[y * width + x] = Math.max(0, Math.min(255, Math.round(ink(x, y) ? 0.3 * picture + 0.7 * 248 : picture)))
+        }
+      }
+      return pixels
+    })
+  }
+
+  it('finds a translucent badge whose box is mostly the picture under it', () => {
+    const frames = badgeScene(8)
+    // Sanity: its pixels are not frozen, and they do move less than the picture's do.
+    const stats = temporalStats(frames, 96, 72)
+    const onInk = stats.deviation[55 * 96 + 12]!
+    const onPicture = stats.deviation[20 * 96 + 12]!
+    expect(onInk).toBeGreaterThan(0.5)
+    expect(onInk).toBeLessThan(onPicture * 0.6)
+
+    // The worker's own settings, scaled to this smaller scene: the gap that joins the words
+    // of one mark is the one that matters here.
+    const found = detectStaticBlobs(frames, 96, 72, {
+      staticThreshold: 3,
+      contrastThreshold: 16,
+      minArea: 12,
+      maxAreaRatio: 0.25,
+      minSide: 4,
+      groupGap: 16,
+      ringDistance: 8
+    })
+    // One region over the whole badge, not a fragment of its brightest end.
+    expect(found).toHaveLength(1)
+    expect(found[0]!.x).toBeLessThanOrEqual(10)
+    expect(found[0]!.x + found[0]!.width).toBeGreaterThanOrEqual(78)
+    expect(found[0]!.y).toBeLessThanOrEqual(52)
+    expect(found[0]!.y + found[0]!.height).toBeGreaterThanOrEqual(64)
   })
 
   it('still rejects a blob that is really just picture detail', () => {

@@ -32,4 +32,13 @@ describe('committing a typed number', () => {
     expect(commitNumberField(' 20 ', fpsField)).toBe(20)
     expect(commitNumberField('-4', fpsField)).toBe(5)
   })
+
+  it('keeps decimals in a field that asks for them', () => {
+    // A speed field. Rounding 1.25 to 1 would be a different export from the one asked for.
+    const speedField = { min: 0.1, max: 10, fallback: 1, decimals: 2 }
+    expect(commitNumberField('1.25', speedField)).toBe(1.25)
+    expect(commitNumberField('1.333', speedField)).toBe(1.33)
+    expect(commitNumberField('0.05', speedField)).toBe(0.1)
+    expect(commitNumberField('', speedField)).toBe(1)
+  })
 })

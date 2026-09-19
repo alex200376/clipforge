@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   GIFSICLE_LOSSY,
+  MAX_SPEED,
   MAX_WATERMARKS,
+  MIN_SPEED,
+  atempoFilters,
   centeredCrop,
+  clampSpeed,
   clampWatermarks,
   cropdetectArgs,
   gifsicleOptimizeArgs,
@@ -22,6 +26,76 @@ import {
 
 const base = { start: 2, end: 4, fps: 24, width: 480, quality: 90 }
 const crop = { x: 10, y: 20, width: 300, height: 200 }
+
+describe('the playback speed a user may ask for', () => {
+  it('keeps a speed inside the range, and honours the ends exactly', () => {
+    expect(clampSpeed(1.25)).toBe(1.25)
+    expect(clampSpeed(MIN_SPEED)).toBe(0.1)
+    expect(clampSpeed(MAX_SPEED)).toBe(10)
+  })
+
+  it('clamps beyond the range instead of failing the export', () => {
+    expect(clampSpeed(0.01)).toBe(MIN_SPEED)
+    expect(clampSpeed(99)).toBe(MAX_SPEED)
+  })
+
+  it('rounds to the precision the field shows, so the label and the export agree', () => {
+    // Two decimals is the resolution of a speed here, and the field rounds to the same
+    // place before this is called, so the number on screen is the number the export uses.
+    expect(clampSpeed(1.3333333)).toBe(1.33)
+    expect(clampSpeed(1.006)).toBe(1.01)
+    expect(clampSpeed(1.004)).toBe(1)
+    expect(clampSpeed(1.5)).toBe(1.5)
+  })
+
+  it('falls back to normal speed for a value that is not one', () => {
+    // Zero would divide the duration and every progress figure by zero.
+    expect(clampSpeed(0)).toBe(1)
+    expect(clampSpeed(-2)).toBe(1)
+    expect(clampSpeed(Number.NaN)).toBe(1)
+    expect(clampSpeed(undefined)).toBe(1)
+    expect(clampSpeed(null)).toBe(1)
+  })
+
+  it('leaves the audio alone at normal speed', () => {
+    expect(atempoFilters(1)).toEqual([])
+  })
+
+  it('retimes the audio by the requested factor', () => {
+    expect(atempoFilters(2)).toEqual(['atempo=2.000000'])
+    expect(atempoFilters(0.5)).toEqual(['atempo=0.500000'])
+  })
+
+  it('chains atempo beyond the 0.5x-2x a single instance takes', () => {
+    // One atempo cannot do 4x, and a chain that is off by a factor is exactly the kind of
+    // mistake that shows up as drift near the end of a clip.
+    expect(atempoFilters(4)).toEqual(['atempo=2.000000', 'atempo=2.000000'])
+    expect(atempoFilters(3)).toEqual(['atempo=2.000000', 'atempo=1.500000'])
+    expect(atempoFilters(0.25)).toEqual(['atempo=0.500000', 'atempo=0.500000'])
+    expect(atempoFilters(0.1)).toEqual([
+      'atempo=0.500000',
+      'atempo=0.500000',
+      'atempo=0.500000',
+      'atempo=0.800000'
+    ])
+  })
+
+  it('retimes the sound of a normal export, so picture and sound stay together', () => {
+    // The failure this prevents: the video is retimed with setpts and the audio was not,
+    // which muxes a half-length picture with full-length sound.
+    const fast = trimArgs('in.mp4', 'out.mp4', { start: 0, end: 2, speed: 1.5, mute: false, streamCopy: false })
+    expect(fast.join(' ')).toContain('-af atempo=1.500000')
+    const muted = trimArgs('in.mp4', 'out.mp4', { start: 0, end: 2, speed: 1.5, mute: true, streamCopy: false })
+    expect(muted).toContain('-an')
+    expect(muted.join(' ')).not.toContain('atempo')
+  })
+
+  it('normalises after retiming, so loudness measures what is heard', () => {
+    const args = trimArgs('in.mp4', 'out.mp4', { start: 0, end: 2, speed: 2, loudnorm: true, mute: false, streamCopy: false })
+    const filter = args[args.indexOf('-af') + 1]!
+    expect(filter).toBe('atempo=2.000000,loudnorm=I=-16:TP=-1.5:LRA=11')
+  })
+})
 
 describe('the shared filter pipeline', () => {
   it('orders retime, resample, crop and scale', () => {

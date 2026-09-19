@@ -19,6 +19,24 @@ echo.
 
 where node >nul 2>nul
 if errorlevel 1 goto :no_node
+
+rem cmd.exe mis-executes a batch file with Unix line endings: it resumes at the wrong byte
+rem offset after a nested batch call and silently skips whole sections, so the build would
+rem run from a script whose flow cannot be trusted. Refuse to start from one.
+if not exist "scripts\check-bat-eol.mjs" (
+    echo   ERROR: scripts\check-bat-eol.mjs is missing; it checks that this script can run.
+    set "CODE=1"
+    goto :finish
+)
+node "scripts\check-bat-eol.mjs" "%~f0"
+if errorlevel 1 (
+    echo.
+    echo   ERROR: this script has Unix line endings, which cmd.exe cannot follow.
+    echo   Rewrite it with:  node scripts\check-bat-eol.mjs --fix
+    set "CODE=1"
+    goto :finish
+)
+
 for /f "delims=" %%v in ('node -v') do set "NODE_VERSION=%%v"
 for /f "delims=" %%v in ('npm -v') do set "NPM_VERSION=%%v"
 echo   Node      : !NODE_VERSION!

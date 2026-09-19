@@ -48,6 +48,23 @@ export function formatSpeed(bytesPerSecond: number): string | null {
   return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${Math.max(1, Math.round(bytesPerSecond / 1024))} KB/s`
 }
 
+/**
+ * Length of an output the settings would produce.
+ *
+ * `formatDuration` is built for a countdown and rounds to whole seconds, which reads as
+ * broken beside a clip: a quarter-second GIF is not "0s", and at a high speed the panel
+ * would show that for every setting. Short outputs therefore keep a decimal - two below a
+ * second, one below ten - which is also the range where changing the speed visibly moves
+ * the number.
+ */
+export function formatLength(seconds: number | null): string | null {
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return null
+  if (seconds < 10) return `${seconds.toFixed(seconds < 1 ? 2 : 1)}s`
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${pad(Math.round(seconds) % 60)}s`
+  return `${Math.floor(seconds / 3600)}h ${pad(Math.floor(seconds / 60) % 60)}m`
+}
+
 /** Compact remaining-time label: `45s`, `2m 30s`, `1h 05m`. */
 export function formatDuration(seconds: number | null): string | null {
   if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return null

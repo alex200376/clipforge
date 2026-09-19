@@ -6,6 +6,8 @@ interface NumberFieldProps {
   value: number
   min: number
   max: number
+  /** Digits kept on commit; 0 unless the field holds something like a speed. */
+  decimals?: number
   'aria-label': string
   onCommit: (value: number) => void
 }
@@ -18,7 +20,7 @@ interface NumberFieldProps {
  * field with a minimum of 5 stays `12` until you leave the field, and only then
  * does it clamp. Escape abandons the edit.
  */
-export function NumberField({ value, min, max, onCommit, ...props }: NumberFieldProps) {
+export function NumberField({ value, min, max, decimals = 0, onCommit, ...props }: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null)
 
   // A value pushed in from elsewhere (slider, fitted estimate) has to replace a
@@ -29,7 +31,7 @@ export function NumberField({ value, min, max, onCommit, ...props }: NumberField
 
   const commit = (): void => {
     if (draft === null) return
-    onCommit(commitNumberField(draft, { min, max, fallback: value }))
+    onCommit(commitNumberField(draft, { min, max, fallback: value, decimals }))
     setDraft(null)
   }
 
@@ -39,6 +41,7 @@ export function NumberField({ value, min, max, onCommit, ...props }: NumberField
       type="number"
       min={min}
       max={max}
+      step={decimals > 0 ? 1 / 10 ** decimals : 1}
       value={draft ?? String(value)}
       aria-label={props['aria-label']}
       onChange={(event) => setDraft(event.target.value)}

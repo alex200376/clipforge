@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { errorPayload, errorMessage } from '../shared/errors'
-import { estimateAnimatedBytes, fitToBudget, outputDimensions } from '../shared/estimate'
+import { estimateAnimatedBytes, estimateVideoBytes, fitToBudget, outputDimensions } from '../shared/estimate'
 import { AI_FEATHER } from '../shared/aiWindow'
 import {
   FILMSTRIP_FRAMES,
@@ -12,7 +12,7 @@ import {
   outputDuration
 } from '../shared/mediaArgs'
 import { isRemoteUrl } from '../shared/sources'
-import { findWatermarks, onAiNote, runAiRemoval } from './ai/client'
+import { findWatermarks, onAiNote, preloadModels, runAiRemoval } from './ai/client'
 import type {
   AiAssets,
   AppSettings,
@@ -172,8 +172,7 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [guideOpen, setGuideOpen] = useState(!seed.onboarded)
   const [sessionName, setSessionName] = useState<string | null>(null)
-  const [calibration, setCalibration] = useState(1)
-  const [measured, setMeasured] = useState<{ estimated: number; actual: number } | null>(null)
+  const [measured, setMeasured] = useState<{ estimated: number; actual: number; mode: ExportMode } | null>(null)
   // The window is frameless, so the renderer mirrors its frame state: the controls
   // swap in a restore glyph, and fullscreen drops chrome that has nowhere to sit.
   const [chrome, setChrome] = useState<WindowState>({ maximized: false, fullscreen: false })
@@ -187,6 +186,7 @@ export function App({ initialSettings }: Props): JSX.Element {
   const stage = useRef<string | null>(null)
   const noticeTimer = useRef<number | null>(null)
   const defaultsApplied = useRef(initialSettings !== undefined)
+  const aiPreloaded = useRef(false)
   const dragDepth = useRef(0)
   const sessionSource = useRef<MediaSource | null>(null)
   const resumeAfterHover = useRef(false)
@@ -472,7 +472,6 @@ export function App({ initialSettings }: Props): JSX.Element {
       setWatermarkOn(false)
       setWatermarks([])
       setActiveRegion(0)
-      setCalibration(1)
       setMeasured(null)
       setSessionName(null)
     },
@@ -789,6 +788,36 @@ export function App({ initialSettings }: Props): JSX.Element {
 
   const aiAvailable = Boolean(aiAssetsState?.lama && aiAssetsState.detector && aiAssetsState.runtime)
 
+  /**
+   * Opens the AI weights while the clip is still being arranged.
+   *
+   * Reading 208 MB of inpainting weights and building a session for them takes around
+   * ten seconds, and every one of those seconds used to land inside a wait the user was
+   * watching - the same ten seconds whether it was spent here or there, but here it is
+   * spent in the part of a session where nothing is expected yet. The export that follows
+   * finds the weights already open.
+   *
+   * Three conditions decide when, and each of them is the point of a different wait:
+   * nothing is opened until a clip exists, because a session that is only browsing should
+   * not pay 208 MB for a feature it never used; nothing is opened while a job is already
+   * running, so an export or a drag in progress keeps the machine to itself; and it happens
+   * once, since the weights stay open for the rest of the app run.
+   *
+   * Only the inpainter is asked for. The detector is 11 MB and opens in about a second, so
+   * there is nothing to win - and something to lose: its graph is refused by the GPU runtime
+   * on a machine where the inpainter's is not, and that refusal has to reach the caller to
+   * trigger the retry that opens it on the CPU runtime instead. A load started here would
+   * swallow it, and the search would quietly fall back to its built-in half for the whole
+   * session. It keeps its own click.
+   */
+  useEffect(() => {
+    if (aiPreloaded.current || !aiAvailable || !aiAssetsState) return
+    if (!source || source.width <= 0 || source.height <= 0) return
+    if (busy) return
+    aiPreloaded.current = true
+    void preloadModels(aiAssetsState, 'lama')
+  }, [aiAvailable, aiAssetsState, busy, source])
+
   /** Frame size the encoders will actually produce, before any budget fitting. */
   const outputFrame = useMemo(() => {
     if (!source || source.width <= 0 || source.height <= 0) return null
@@ -801,18 +830,40 @@ export function App({ initialSettings }: Props): JSX.Element {
   )
 
   /**
+   * Actual/estimated from the last export, applied to the mode it was measured in.
+   *
+   * Reused rather than measured again: the model is a single bits-per-pixel constant, and
+   * one real export of the same source replaces it with what that picture actually costs.
+   */
+  const calibration = useMemo(() => {
+    if (!measured || measured.mode !== mode) return 1
+    return Math.max(0.3, Math.min(3, measured.actual / measured.estimated))
+  }, [measured, mode])
+
+  /**
    * The size estimate drives both the readout and the budget fitting, so the
    * numbers the panel promises are the ones the export uses.
    */
   const estimate: EstimateView = useMemo(() => {
+    if (!outputFrame || clipSeconds <= 0 || !source) return { bytes: null, fitted: null, measured }
     if (!isGif) {
+      // A video export keeps the source's frame rate, so a clip whose rate is still unknown
+      // - a link that has not been read yet - cannot be counted. Saying so beats a number
+      // invented from a default.
+      if (!(source.fps > 0)) return { bytes: null, fitted: null, measured }
       return {
-        bytes: size === '10mb' ? 10 * 1024 * 1024 : size === '25mb' ? 25 * 1024 * 1024 : null,
+        bytes: estimateVideoBytes({
+          frame: outputFrame,
+          fps: source.fps,
+          seconds: clipSeconds,
+          targetBytes: size === '10mb' ? 10 * 1024 * 1024 : size === '25mb' ? 25 * 1024 * 1024 : null,
+          audio: !mute,
+          correction: calibration
+        }),
         fitted: null,
-        measured: null
+        measured
       }
     }
-    if (!outputFrame || clipSeconds <= 0) return { bytes: null, fitted: null, measured }
     const base = estimateAnimatedBytes({ format, frame: outputFrame, fps, seconds: clipSeconds, calibration })
     if (budget === 'off') return { bytes: base, fitted: null, measured }
     const fitted = fitToBudget({
@@ -828,7 +879,7 @@ export function App({ initialSettings }: Props): JSX.Element {
       fitted: { width: fitted.width, fps: fitted.fps, bytes: fitted.bytes, fits: fitted.fits },
       measured
     }
-  }, [isGif, size, outputFrame, clipSeconds, format, fps, calibration, budget, measured])
+  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, budget, measured])
 
   // With a budget active the export follows the fitted numbers, not the sliders.
   const effectiveFps = budget !== 'off' && estimate.fitted ? estimate.fitted.fps : fps
@@ -966,9 +1017,10 @@ export function App({ initialSettings }: Props): JSX.Element {
           pushLog(t('export.encoderHint') + ` (${result.encoderFallback} → libx264)`, 'raw')
         }
         if (expected && result.sizeBytes) {
-          setMeasured({ estimated: expected, actual: result.sizeBytes })
-          // A measurement beats a model: the next estimate uses the real ratio.
-          setCalibration(Math.max(0.3, Math.min(3, result.sizeBytes / expected)))
+          // A measurement beats a model: the next estimate uses the real ratio. Recorded
+          // with the mode it came from, because a GIF's bytes-per-pixel says nothing about
+          // a re-encoded video - applying one to the other turned a measurement into a lie.
+          setMeasured({ estimated: expected, actual: result.sizeBytes, mode: isGif ? 'gif' : 'video' })
         }
         setPanelTab('output')
         setToast({
@@ -1552,6 +1604,7 @@ export function App({ initialSettings }: Props): JSX.Element {
                       estimate={estimate}
                       speed={speed}
                       onSpeed={setSpeed}
+                      clipSeconds={clipSeconds}
                       boomerang={boomerang}
                       onBoomerang={setBoomerang}
                       cropEnabled={cropEnabled}

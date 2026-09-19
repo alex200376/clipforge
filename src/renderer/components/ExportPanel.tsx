@@ -19,7 +19,8 @@ import type {
   WatermarkEngine,
   WatermarkRegion
 } from '../../shared/types'
-import { formatBytes } from '../format'
+import { clampSpeed, MAX_SPEED, MIN_SPEED } from '../../shared/mediaArgs'
+import { formatBytes, formatLength } from '../format'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
 import type { BudgetChoice, EstimateView, ExportMode, PresetId, WatermarkCorner } from '../types'
@@ -46,6 +47,9 @@ interface Props {
   estimate: EstimateView
   speed: number
   onSpeed: (value: number) => void
+  /** Length of the selection after speed and ping-pong, so a speed change can say what
+   *  it does to the clip instead of only naming the factor. */
+  clipSeconds: number | null
   boomerang: boolean
   onBoomerang: (value: boolean) => void
   cropEnabled: boolean
@@ -157,6 +161,7 @@ export function ExportPanel(props: Props): JSX.Element {
     estimate,
     speed,
     onSpeed,
+    clipSeconds,
     boomerang,
     onBoomerang,
     cropEnabled,
@@ -209,7 +214,14 @@ export function ExportPanel(props: Props): JSX.Element {
       : t('export.hint.video', { encoder: hardware.bestEncoder })
     : t('export.hint.detecting')
 
-  const estimateLabel = estimate.bytes === null ? t('export.estimate.unknown') : t('export.estimate', { size: formatBytes(estimate.bytes) })
+  // A chosen size is a limit the encoder is aimed at rather than a guess about the
+  // picture, so it reads as a ceiling - calling it "about" made a promise the file was
+  // never meant to keep.
+  const capped = !isGif && size !== 'original'
+  const estimateLabel =
+    estimate.bytes === null
+      ? t('export.estimate.unknown')
+      : t(capped ? 'export.estimate.upTo' : 'export.estimate', { size: formatBytes(estimate.bytes) })
 
   return (
     <>
@@ -592,7 +604,7 @@ export function ExportPanel(props: Props): JSX.Element {
           <div className="advanced-block">
             <div className="field">
               <Label>{t('export.speed')}</Label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="speed-row">
                 {SPEEDS.map((option) => (
                   <Button
                     key={option}
@@ -604,7 +616,26 @@ export function ExportPanel(props: Props): JSX.Element {
                     {option}×
                   </Button>
                 ))}
+                {/* The presets are a shortcut, not the menu: any speed in range is a
+                    legitimate choice, and the field is the same control the quick
+                    picks write into. */}
+                <span className="speed-custom">
+                  <NumberField
+                    value={speed}
+                    min={MIN_SPEED}
+                    max={MAX_SPEED}
+                    decimals={2}
+                    aria-label={t('export.speed.custom')}
+                    onCommit={(value) => onSpeed(clampSpeed(value))}
+                  />
+                  <span className="speed-unit">×</span>
+                </span>
               </div>
+              <em className="field-hint">
+                {clipSeconds === null || clipSeconds <= 0
+                  ? t('export.speed.hint', { min: String(MIN_SPEED), max: String(MAX_SPEED) })
+                  : t('export.speed.length', { length: formatLength(clipSeconds) ?? '' })}
+              </em>
             </div>
 
             {isGif && (

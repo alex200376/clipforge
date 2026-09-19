@@ -57,6 +57,61 @@ export function estimateAnimatedBytes({ format, frame, fps, seconds, calibration
   return Math.round(raw * (calibration > 0 ? calibration : 1))
 }
 
+/**
+ * Bits per pixel per frame for a re-encoded video at the app's default quality.
+ *
+ * Measured rather than guessed: `crf 22 / preset medium` on a 1080x1830 clip at 24 fps
+ * cost 0.096 bits per pixel per frame, and this one number is what the video estimate
+ * rests on. Content decides it - a flat screen compresses several times smaller, fine
+ * detail larger - so it is a starting point, and the measured ratio from the previous
+ * export of the same source is what sharpens it into a real prediction.
+ */
+const VIDEO_BITS_PER_PIXEL = 0.096
+/** The app's fixed audio bitrate, in bytes per second. */
+const AUDIO_BYTES_PER_SECOND = 16_000
+/** MP4 headers, index and frame tables. */
+const CONTAINER_BYTES = 24 * 1024
+/** The share of a target size the encoder is aimed at, matching `targetVideoBitrate`. */
+const TARGET_SHARE = 0.94
+
+export interface VideoEstimateInput {
+  frame: FrameSize
+  fps: number
+  seconds: number
+  /** The size the user asked for, when one was chosen. */
+  targetBytes?: number | null
+  /** False when the audio track is muted, which changes the answer for short clips. */
+  audio?: boolean
+  /** Actual/estimated from the last export of this source, to sharpen the model. */
+  correction?: number
+}
+
+/**
+ * Roughly what a video export will weigh.
+ *
+ * This path always re-encodes - the source may be a link or an inpainted master, so the
+ * stream is never copied - which means the size follows the encoder's quality and the
+ * frame area rather than the source's bitrate. A chosen target size is the one case with
+ * an exact answer: the bitrate is derived from it with a margin, so the file lands just
+ * under it, and the margin is applied here too rather than promising the limit itself.
+ */
+export function estimateVideoBytes({
+  frame,
+  fps,
+  seconds,
+  targetBytes = null,
+  audio = true,
+  correction = 1
+}: VideoEstimateInput): number {
+  const length = Math.max(0, seconds)
+  if (targetBytes !== null && targetBytes > 0) return Math.round(targetBytes * TARGET_SHARE)
+  const frames = Math.max(1, Math.round(length * fps))
+  const pixels = Math.max(1, frame.width * frame.height)
+  const video = (pixels * frames * VIDEO_BITS_PER_PIXEL) / 8
+  const track = audio ? length * AUDIO_BYTES_PER_SECOND : 0
+  return Math.round((video + track + CONTAINER_BYTES) * (correction > 0 ? correction : 1))
+}
+
 export interface BudgetStep {
   label: 'keep' | 'fps' | 'width'
   width: number

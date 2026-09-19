@@ -57,9 +57,58 @@ const sec = (value: number): string => value.toFixed(3)
 export const duration = (options: { start: number; end: number }): number =>
   Math.max(0, options.end - options.start)
 
+/**
+ * The playback speeds the export accepts.
+ *
+ * A range rather than a menu, because a speed is an artistic choice and 1.25x is
+ * perfectly ordinary. The ends are where the arithmetic stops being trustworthy: below
+ * a tenth, `setpts` is being asked to hold a frame for minutes and most of the output
+ * is duplicated frames; above ten, the fps filter drops nearly everything and the clip
+ * is a slideshow whatever the source was.
+ */
+export const MIN_SPEED = 0.1
+export const MAX_SPEED = 10
+
+/**
+ * A requested speed, clamped to the range and rounded to the precision the field shows.
+ *
+ * Rounded because the number is both a label and the divisor the whole export is built
+ * from: a draft of `1.3333333` typed into the field should not produce a duration that
+ * disagrees with the figure beside it.
+ */
+export function clampSpeed(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 1
+  return Math.max(MIN_SPEED, Math.min(MAX_SPEED, Math.round(value * 100) / 100))
+}
+
+/**
+ * `atempo` filters that retime the sound to a playback speed.
+ *
+ * One `atempo` takes a factor of 0.5 to 2, so a bigger change is a chain of them - 4x is
+ * `atempo=2,atempo=2`. This is not a nicety: the video is retimed with `setpts`, so a
+ * speed that leaves the audio alone muxes a short picture with full-length sound, and the
+ * result plays out of sync. The chain keeps the pitch.
+ */
+export function atempoFilters(speed: number): string[] {
+  const target = clampSpeed(speed)
+  if (target === 1) return []
+  const filters: string[] = []
+  let remaining = target
+  while (remaining > 2) {
+    filters.push('atempo=2.000000')
+    remaining /= 2
+  }
+  while (remaining < 0.5) {
+    filters.push('atempo=0.500000')
+    remaining /= 0.5
+  }
+  filters.push(`atempo=${remaining.toFixed(6)}`)
+  return filters
+}
+
 /** Wall-clock length of the export once speed and ping-pong are applied. */
 export function outputDuration(options: { start: number; end: number }, filters: FilterOptions = {}): number {
-  const speed = filters.speed && filters.speed > 0 ? filters.speed : 1
+  const speed = clampSpeed(filters.speed)
   const base = duration(options) / speed
   return filters.boomerang ? base * 2 : base
 }
@@ -203,7 +252,7 @@ interface Chain {
 
 function baseChain(size: SizeSpec, filters: FilterOptions): string {
   const parts: string[] = []
-  const speed = filters.speed && filters.speed > 0 ? filters.speed : 1
+  const speed = clampSpeed(filters.speed)
   // setpts retimes before the fps filter, so the frame count follows the speed.
   if (speed !== 1) parts.push(`setpts=${(1 / speed).toFixed(6)}*PTS`)
   if (size.fps !== null && size.fps > 0) parts.push(`fps=${size.fps}`)
@@ -378,10 +427,13 @@ export function videoEncoderArgs(encoder: VideoEncoder, params: { crf: number; k
   }
 }
 
-function audioArgs(mute: boolean, loudnorm = false): string[] {
+function audioArgs(mute: boolean, loudnorm = false, speed = 1): string[] {
   if (mute) return ['-an']
   const args = ['-c:a', 'aac', '-b:a', '128k']
-  if (loudnorm) args.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11')
+  // Retimed first, then normalised: loudness measured on a clip that has already been
+  // stretched is measuring what will actually be heard.
+  const filters = [...atempoFilters(speed), ...(loudnorm ? ['loudnorm=I=-16:TP=-1.5:LRA=11'] : [])]
+  if (filters.length > 0) args.push('-af', filters.join(','))
   return args
 }
 
@@ -391,7 +443,7 @@ export function trimArgs(source: string, output: string, options: VideoEncodeOpt
     Boolean(options.crop) ||
     Boolean(options.watermarks?.length) ||
     Boolean(options.boomerang) ||
-    (options.speed ?? 1) !== 1
+    clampSpeed(options.speed) !== 1
   // Stream copy is only possible when nothing has to be re-rendered.
   if (options.streamCopy && !filtered) {
     return [...head, '-c', 'copy', ...(options.mute ? ['-an'] : []), '-movflags', '+faststart', output]
@@ -402,7 +454,7 @@ export function trimArgs(source: string, output: string, options: VideoEncodeOpt
     '-vf',
     videoFilter('video', { fps: null, width: null, evenDims: true }, options),
     ...videoEncoderArgs(encoder, { crf: options.crf ?? 22 }),
-    ...audioArgs(options.mute, options.loudnorm),
+    ...audioArgs(options.mute, options.loudnorm, options.speed),
     '-movflags',
     '+faststart',
     output
@@ -438,7 +490,7 @@ export function targetSizeArgs(source: string, output: string, options: TargetSi
     '-vf',
     videoFilter('video', { fps: null, width: null, evenDims: true }, options),
     ...videoEncoderArgs(options.encoder ?? 'libx264', { crf: 23, kbps }),
-    ...audioArgs(options.mute, options.loudnorm),
+    ...audioArgs(options.mute, options.loudnorm, options.speed),
     '-movflags',
     '+faststart',
     output

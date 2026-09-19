@@ -287,8 +287,17 @@ interface AiWindowPlanEntry {
   region: WatermarkRegion
 }
 
-/** Longest edge of the frames the detectors look at. */
-const SAMPLE_WIDTH = 640
+/**
+ * Longest edge of the frames the detectors look at.
+ *
+ * This was 640, and 640 loses marks of its own: a 4 px store-badge border on a 1080-wide
+ * clip arrives as 2.4 px, and the encoder smears a line that thin with the picture moving
+ * behind it until the line is no longer still - measured at 5.0 deviation against a
+ * "still" threshold of 5, so the border was never even a candidate. The same border at the
+ * clip's own width measures 1.4 and is found. Sampling is one ffmpeg pass and a few PNGs,
+ * so the faithful thing to hand the detector is the clip's own pixels up to this cap.
+ */
+const SAMPLE_WIDTH = 1280
 
 /**
  * A handful of frames spread across the range, for the two detectors.

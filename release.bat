@@ -5,6 +5,11 @@ title ClipForge - Push, Build ^& Release
 set "LOG=%~dp0release.log"
 set "CODE=0"
 set "TAG=1"
+rem Set by the commit, push and tag steps, then proved again before anything is published,
+rem so a run that skipped them cannot reach the release.
+set "DID_COMMIT="
+set "DID_PUSH="
+set "DID_TAG="
 
 echo ============================================
 echo   ClipForge - Push, Build ^& Release
@@ -25,7 +30,7 @@ echo     VERSION=1.2.3            set package.json to this version before commit
 echo     PUBLIC=1                 create a new repository as public instead of private
 echo     SKIP_CHECKS=1            skip typecheck and unit tests
 echo     SKIP_BINARIES=1          keep the existing resources\bin payload
-echo     NO_TAG=1                 commit and push without tagging a release
+echo     NO_TAG=1                 commit and push, then stop before building or publishing
 echo     COMMIT_MSG="..."         override the generated commit message
 echo     NO_PAUSE=1               exit without waiting for a keypress
 echo.
@@ -35,6 +40,29 @@ echo.
 
 where node >nul 2>nul
 if errorlevel 1 goto :no_node
+
+rem cmd.exe mis-executes a batch file with Unix line endings: it resumes at the wrong byte
+rem offset after a nested batch call and silently skips whole sections. That is how this
+rem script once published a release whose commit, push and tag steps had never run. Refuse
+rem to start from such a file, while refusing is still cheap.
+if not exist "scripts\check-bat-eol.mjs" (
+    echo   ERROR: scripts\check-bat-eol.mjs is missing, so this script cannot prove that
+    echo   cmd.exe will execute it in order. Restore it before releasing.
+    set "CODE=1"
+    goto :finish
+)
+node "scripts\check-bat-eol.mjs" "%~f0"
+if errorlevel 1 (
+    echo.
+    echo   ERROR: this script has Unix line endings, which cmd.exe cannot follow.
+    echo   It would skip whole sections while later ones still ran, which is how a
+    echo   release gets published without its commit, push or tag. Rewrite it with:
+    echo     node scripts\check-bat-eol.mjs --fix
+    set "CODE=1"
+    >>"%LOG%" echo [%DATE% %TIME%] release refused, LF line endings
+    goto :finish
+)
+
 where git >nul 2>nul
 if errorlevel 1 goto :no_git
 for /f "delims=" %%v in ('node -v') do set "NODE_VERSION=%%v"
@@ -94,6 +122,7 @@ echo.
 echo   [3/6] Committing the working tree...
 call :commit
 if errorlevel 1 goto :failed
+set "DID_COMMIT=1"
 
 echo.
 echo   [4/6] Pushing to !OWNER!/!REPO_NAME!...
@@ -105,6 +134,7 @@ if errorlevel 1 (
     if errorlevel 1 goto :push_failed
 )
 call :mark "pushed"
+set "DID_PUSH=1"
 
 if "!TAG!"=="0" goto :no_tag
 call :tag
@@ -121,6 +151,31 @@ if /i "%SKIP_BINARIES%"=="1" (
     if errorlevel 1 goto :binaries_failed
     call :mark "media binaries ok"
 )
+
+rem Prove this run reached here in order before it may publish. cmd.exe can resume a batch
+rem file at the wrong offset and skip whole sections without a word, and the sections it
+rem skips are exactly the ones that keep a release honest - so anything missing here stops
+rem the run instead of publishing something that does not match git.
+if not "!DID_COMMIT!"=="1" goto :steps_skipped
+if not "!DID_PUSH!"=="1" goto :steps_skipped
+if "!TAG!"=="1" if not "!DID_TAG!"=="1" goto :steps_skipped
+
+for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD') do set "BRANCH=%%b"
+for /f "delims=" %%h in ('git rev-parse HEAD') do set "LOCAL_HEAD=%%h"
+set "REMOTE_HEAD="
+for /f "delims=" %%h in ('git rev-parse "refs/remotes/origin/!BRANCH!" 2^>nul') do set "REMOTE_HEAD=%%h"
+if not "!LOCAL_HEAD!"=="!REMOTE_HEAD!" goto :not_pushed
+for /f "delims=" %%s in ('git status --porcelain') do goto :dirty_tree
+
+rem A release is only as good as the tag it points at, so make sure the tag exists on the
+rem remote as well as locally - a local-only tag means GitHub would tag the wrong commit.
+if not "!TAG!"=="1" goto :tag_checked
+git rev-parse -q --verify "refs/tags/v!VERSION!" >nul
+if errorlevel 1 goto :no_tag_ref
+set "REMOTE_TAG="
+for /f "delims=" %%t in ('git ls-remote --tags origin "refs/tags/v!VERSION!" 2^>nul') do set "REMOTE_TAG=%%t"
+if not defined REMOTE_TAG goto :no_tag_ref
+:tag_checked
 
 echo.
 echo   [6/6] Building and publishing the GitHub release...
@@ -232,6 +287,51 @@ goto :finish
 echo.
 echo   ERROR: electron-builder finished but release\ClipForge-Setup-*.exe is missing.
 set "CODE=1"
+goto :finish
+
+rem NO_TAG=1 exists to commit and push without releasing. It used to fall through to the
+rem build and publish steps anyway, and publishing without a tag lets GitHub invent one at
+rem whatever the default branch happens to be. Stop after the push instead.
+:no_tag
+echo.
+echo   NO_TAG=1 - committed and pushed. Nothing was tagged, built or published.
+echo   Run again without NO_TAG to build the installer and publish the release.
+goto :done
+
+:steps_skipped
+echo.
+echo   ERROR: the commit, push and tag steps did not all run, so this run is not allowed
+echo   to build or publish anything.
+echo.
+echo   cmd.exe mis-executes a batch file with Unix line endings: after a nested batch call
+echo   it resumes at the wrong offset and silently skips whole sections. Check this file:
+echo     node scripts\check-bat-eol.mjs release.bat
+set "CODE=1"
+>>"%LOG%" echo [%DATE% %TIME%] steps skipped, refusing to publish
+goto :finish
+
+:not_pushed
+echo.
+echo   ERROR: HEAD is not on origin, so a release built here would not match a commit.
+echo   Push it first:  git push origin %BRANCH%
+set "CODE=1"
+>>"%LOG%" echo [%DATE% %TIME%] HEAD not pushed, refusing to publish
+goto :finish
+
+:dirty_tree
+echo.
+echo   ERROR: the working tree changed after the commit, so the release would not match
+echo   what is in git. Run again so it is committed first.
+set "CODE=1"
+>>"%LOG%" echo [%DATE% %TIME%] working tree changed, refusing to publish
+goto :finish
+
+:no_tag_ref
+echo.
+echo   ERROR: the tag v!VERSION! is not on the remote, so publishing now would create a
+echo   release against the wrong commit. Refusing to publish.
+set "CODE=1"
+>>"%LOG%" echo [%DATE% %TIME%] tag v!VERSION! missing, refusing to publish
 goto :finish
 
 :finish
@@ -481,4 +581,5 @@ if errorlevel 1 (
     exit /b 1
 )
 call :mark "tagged v!VERSION!"
+set "DID_TAG=1"
 exit /b 0

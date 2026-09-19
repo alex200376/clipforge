@@ -1559,6 +1559,31 @@
   gap: 4px;
 }
 
+/* Speed presets and the typed value on one line, because they are one control: the
+   quick picks write the same number the field shows. */
+.speed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.speed-custom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.speed-unit {
+  color: var(--text-dim);
+  font-size: 0.84375rem;
+}
+
+.speed-row .num-input {
+  width: 68px;
+}
+
 .field-hint {
   color: var(--text-dim);
   font-size: 0.78125rem;

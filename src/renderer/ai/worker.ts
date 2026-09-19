@@ -21,6 +21,7 @@ import {
   decodeCombinedDetections,
   decodeDenseDetections,
   decodeQueryDetections,
+  detectionSettings,
   detectStaticBlobs,
   detectorLayout,
   type Detection,
@@ -69,11 +70,13 @@ const DETECT_THRESHOLD = 0.25
  * This was 320, and 320 was the reason detection missed the marks it was pointed at: a
  * handle of a few dozen pixels is four pixels across once a 1080-wide clip is halved,
  * which is under the size filter and thin enough that averaging the mark with its moving
- * surroundings erases it from the still-pixel mask altogether. The samples arrive 640
- * wide, so working at their own size is both the most detail available and the cheapest
- * pass that keeps it.
+ * surroundings erases it from the still-pixel mask altogether. 640 was the same failure
+ * one step up - it still halves a 1080-wide clip, which is where a thin outline stops
+ * being still in the file: the App-Store-style badge's 4 px border measures 5.0 deviation
+ * at 640 against a threshold of 5, and 1.4 at the clip's own width. So this is a ceiling
+ * rather than a target, and the samples arrive at their own size.
  */
-const STATIC_WIDTH = 640
+const STATIC_WIDTH = 1280
 /** One model output name to consider: boxes, and scores. */
 const BOX_NAME = /box/i
 const SCORE_NAME = /logit|score|class|pred/i
@@ -699,24 +702,14 @@ async function detect(request: AiDetectRequest): Promise<{ candidates: AiCandida
     }
     return gray
   })
-  const temporalBoxes = detectStaticBlobs(luminance, small.width, small.height, {
-    // A floor rather than a setting: the detector raises this to the clip's own noise
-    // floor, because what "did not move" means depends on the encoder.
-    staticThreshold: 3,
-    contrastThreshold: 16,
-    minArea: Math.max(20, Math.round(small.width * small.height * 0.00008)),
-    maxAreaRatio: 0.25,
-    minSide: 4,
-    // A watermark is usually a row of glyphs, and the words of one mark sit within a few
-    // dozen pixels at full size - measured at 27 on the clip this was tuned against, where
-    // a gap of 8 left one handle as three separate regions. The background it is measured
-    // against is sampled further out than that, so it stays outside the whole line.
-    groupGap: 16,
-    ringDistance: 14,
-    // A few more than the export accepts, because the merge below can only reduce: asking
-    // for exactly the cap would drop a piece of a line that then has nothing to join.
-    maxResults: request.options.max + 2
-  })
+  // A few more than the export accepts, because the merge below can only reduce: asking for
+  // exactly the cap would drop a piece of a line that then has nothing to join.
+  const temporalBoxes = detectStaticBlobs(
+    luminance,
+    small.width,
+    small.height,
+    detectionSettings(small.width, small.height, request.options.max + 2)
+  )
   // One more merge, in source pixels and at a scale the user would recognise: the words of
   // a handle come back from the detector as separate regions often enough that joining
   // them here is the difference between one box over the mark and three over its letters.

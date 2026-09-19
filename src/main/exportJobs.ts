@@ -4,6 +4,7 @@ import path from 'node:path'
 import { ClipForgeError, errorPayload } from '../shared/errors'
 import type { GifOptions } from '../shared/mediaArgs'
 import {
+  clampSpeed,
   clampWatermarks,
   frameArgs,
   gifskiArgs,
@@ -49,7 +50,9 @@ interface Filters {
 
 const filtersOf = (request: FilterOptions): Filters => ({
   crop: request.crop ?? null,
-  speed: request.speed && request.speed > 0 ? request.speed : 1,
+  // Clamped here as well as in the field: the request arrives over IPC, and a speed of
+  // zero would otherwise divide the duration and every progress figure by zero.
+  speed: clampSpeed(request.speed),
   boomerang: Boolean(request.boomerang),
   // The renderer clamps against the real frame size; this only guarantees the
   // invariants `delogo` needs, since a box outside the frame fails the export.

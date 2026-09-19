@@ -1,6 +1,7 @@
 import type { AiPrepareRequest, AiPrepareResult, AiRegionPlan, AiAssets, CropSpec } from '../../shared/types'
 import { AI_BACKEND_FAILURE, AI_LOAD_TIMEOUT } from './protocol'
 import type { AiCandidate, AiWorkerRequest, AiWorkerRequestInput, AiWorkerResponse } from './protocol'
+import { createQueue } from './queue'
 
 /**
  * The renderer's side of AI removal.
@@ -152,13 +153,52 @@ function discardWorker(): void {
 }
 
 /**
+ * Loads run one at a time.
+ *
+ * Without this, two callers that wanted the weights at the same moment would both read
+ * `opened` as false and open the same session twice: for the 208 MB inpainter that is a
+ * minute of duplicated work rather than an error, which is the kind of bug that shows up
+ * only as unexplained slowness. The preload makes that overlap ordinary - it starts on its
+ * own - so the queue is what keeps it from costing more than it saves.
+ */
+const loadQueue = createQueue()
+
+/**
  * Opens the weights a task needs, once per app run, and reports the backend they got.
  *
  * Which ones is not a detail: detection is a search, and it needs only the 11 MB
  * detector. Loading the inpainting model first would put a 208 MB download in front of
  * a button whose whole job is to answer quickly.
  */
-export async function prepareModels(
+export function prepareModels(
+  assets: AiAssets,
+  models: 'lama' | 'detector' | 'both'
+): Promise<'webgpu' | 'wasm' | 'none'> {
+  return loadQueue.run(() => openModels(assets, models))
+}
+
+/**
+ * Opens the weights while nothing is waiting on them.
+ *
+ * The inpainter is 208 MB and takes about ten seconds to read and build a session for,
+ * and all of that used to be spent inside a wait the user was watching. Called when a
+ * clip is ready, this moves the cost into the part of a session where nothing is
+ * expected yet, and the export that follows finds the weights already open.
+ *
+ * A failure here is deliberately silent. It is a convenience, not a promise: the export
+ * or the search that needs the weights asks for them again, and *that* call is where a
+ * failure belongs, in front of the user who asked for the work rather than in a log
+ * nobody has opened.
+ */
+export async function preloadModels(assets: AiAssets, models: 'lama' | 'detector' | 'both'): Promise<void> {
+  try {
+    await loadQueue.run(() => openModels(assets, models))
+  } catch {
+    /* the next caller reports it properly */
+  }
+}
+
+async function openModels(
   assets: AiAssets,
   models: 'lama' | 'detector' | 'both'
 ): Promise<'webgpu' | 'wasm' | 'none'> {
@@ -211,7 +251,7 @@ export async function prepareModels(
           : 'The GPU could not run the model, so the CPU runtime is taking over.'
       )
       discardWorker()
-      return prepareModels(assets, models)
+      return openModels(assets, models)
     }
     if (text.includes(AI_LOAD_TIMEOUT) && requestedThreads !== 1) {
       // The second and last attempt: one thread, and a worker whose runtime has never
@@ -222,7 +262,7 @@ export async function prepareModels(
       requestedThreads = 1
       describe('The multi-threaded runtime did not finish starting, so the single-threaded one is taking over.')
       discardWorker()
-      return prepareModels(assets, models)
+      return openModels(assets, models)
     }
     throw error
   }

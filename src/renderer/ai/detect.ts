@@ -437,6 +437,20 @@ export interface StaticOptions {
    * Defaults to 4.
    */
   groupGap?: number
+  /**
+   * How far apart two blobs on the same line can be and still be one mark, as a
+   * fraction of the smaller blob's height. Defaults to 0.75.
+   *
+   * A fixed pixel gap cannot survive a change of resolution, because the space between
+   * the glyphs of a handle follows the *type* size and not the frame: the same mark is
+   * 30 px of letter spacing at 1080 wide and 60 px at 2160, while the gap that joined
+   * its letters stayed put. The failure is quiet - the detector does not lose the mark,
+   * it reports one region per letter, and a removal then erases a glyph at a time. A gap
+   * proportional to height answers the question that actually separates glyphs from
+   * unrelated detail, which is whether the two shapes are the same size and on the same
+   * line.
+   */
+  rowGapRatio?: number
   /** Most boxes to report. Defaults to 4. */
   maxResults?: number
 }
@@ -605,6 +619,92 @@ export function groupBoxes(boxes: CropSpec[], gap: number): { box: CropSpec; mem
 }
 
 /**
+ * Joins groups that lie on one line at a plausible type scale into a single group.
+ *
+ * `groupBoxes` joins what is a fixed distance apart, which is the wrong question for the
+ * glyphs of a handle: the space between letters and between words follows the size of the
+ * type, so the same mark needs a different pixel gap at every resolution. This asks the
+ * scale-free version instead - are these two shapes the same height, on the same line (a
+ * real vertical overlap, not a corner meeting), and no further apart horizontally than that
+ * height? - and unions them, transitively, so a whole line becomes one region.
+ *
+ * Two genuinely separate marks stay separate when they are further apart than one line tall,
+ * which is what a logo and a badge on opposite sides of a frame are; and when they sit close
+ * enough to join, the union is exactly the mark the user sees, which is also a region they
+ * would have drawn by hand.
+ */
+export function mergeRows(
+  groups: { box: CropSpec; members: number[] }[],
+  ratio: number
+): { box: CropSpec; members: number[] }[] {
+  if (ratio <= 0) return groups
+  const out = groups.map((group) => ({ box: { ...group.box }, members: [...group.members] }))
+  let joined = true
+  while (joined) {
+    joined = false
+    for (let a = 0; a < out.length && !joined; a += 1) {
+      for (let b = a + 1; b < out.length; b += 1) {
+        const first = out[a]!
+        const second = out[b]!
+        const overlap =
+          Math.min(first.box.y + first.box.height, second.box.y + second.box.height) -
+          Math.max(first.box.y, second.box.y)
+        const smaller = Math.min(first.box.height, second.box.height)
+        // Not the same line: a caption under a logo, or a mark in the other corner.
+        if (smaller <= 0 || overlap < 0.5 * smaller) continue
+        const apart =
+          Math.max(first.box.x, second.box.x) - Math.min(first.box.x + first.box.width, second.box.x + second.box.width)
+        if (apart > ratio * smaller) continue
+        const x = Math.min(first.box.x, second.box.x)
+        const y = Math.min(first.box.y, second.box.y)
+        first.box = {
+          x,
+          y,
+          width: Math.max(first.box.x + first.box.width, second.box.x + second.box.width) - x,
+          height: Math.max(first.box.y + first.box.height, second.box.y + second.box.height) - y
+        }
+        first.members.push(...second.members)
+        out.splice(b, 1)
+        joined = true
+        break
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * The average brightness of the pixels inside a region that were proposed as the mark.
+ *
+ * The counterpart of `ringMean` for a mark that does not fill its own box. A watermark is
+ * usually a sparse drawing - letters, a logo with gaps, a badge with a border - and what it
+ * stands out *by* is a property of its ink, not of the rectangle it happens to sit in.
+ */
+export function markMean(
+  mask: Uint8Array,
+  values: ArrayLike<number>,
+  width: number,
+  height: number,
+  box: { x: number; y: number; width: number; height: number }
+): { mean: number; count: number } {
+  const x0 = Math.max(0, Math.min(width, Math.round(box.x)))
+  const y0 = Math.max(0, Math.min(height, Math.round(box.y)))
+  const x1 = Math.max(x0, Math.min(width, Math.round(box.x + box.width)))
+  const y1 = Math.max(y0, Math.min(height, Math.round(box.y + box.height)))
+  let total = 0
+  let count = 0
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const index = y * width + x
+      if (mask[index] !== 1) continue
+      total += values[index] ?? 0
+      count += 1
+    }
+  }
+  return { mean: count > 0 ? total / count : 0, count }
+}
+
+/**
  * The building blocks of "did not move" and "stands out", measured rather than assumed.
  *
  * Exported because both halves are worth pinning on their own: which pixels count as
@@ -667,6 +767,40 @@ export function noiseFloor(deviation: ArrayLike<number>, percentile = 0.05): num
   return 0
 }
 
+/** The sample width the detector's distance settings were measured at. */
+const TUNED_SAMPLE_WIDTH = 640
+
+/**
+ * The settings the built-in detector is called with, for the size it is analysing.
+ *
+ * Two of these are distances, and a distance in pixels means something different at every
+ * sample width. The ring has to step outside the mark whatever size the mark is, and the
+ * gap that joins its glyphs follows the size of the type, so both were tuned at one width
+ * (640, on a real clip) and are given here as fractions of the pixel that changes: handing
+ * the detector the same numbers at 1080 would tighten the ring by 40% and start asking a
+ * mark whether it looks like itself. Keeping this in one place is what makes the sample
+ * width above a free choice rather than a retune.
+ */
+export function detectionSettings(width: number, height: number, maxResults: number): StaticOptions {
+  const scale = Math.max(0.0001, width / TUNED_SAMPLE_WIDTH)
+  return {
+    // A floor rather than a setting: the detector raises this to the clip's own noise
+    // floor, because what "did not move" means depends on the encoder.
+    staticThreshold: 3,
+    contrastThreshold: 16,
+    minArea: Math.max(20, Math.round(width * height * 0.00008)),
+    maxAreaRatio: 0.25,
+    minSide: 4,
+    // A watermark is usually a row of glyphs, and the words of one mark sit within a few
+    // dozen pixels at full size - measured at 27 on the clip this was tuned against, where
+    // a gap of 8 left one handle as three separate regions. The background the mark is
+    // compared against is sampled further out than that, so it stays outside the whole line.
+    groupGap: Math.max(4, Math.round(16 * scale)),
+    ringDistance: Math.max(1, Math.round(14 * scale)),
+    maxResults
+  }
+}
+
 /**
  * The built-in detector: static blobs that stand out from the picture around them.
  *
@@ -723,13 +857,23 @@ export function detectStaticBlobs(
   // same corners is texture. This is asked of each piece rather than of the merged region:
   // a line of text has gaps between its words by construction, so a rule applied to the
   // union would reject exactly the thing the grouping exists to produce.
+  //
+  // Loose, because the mask it is asked of is already a strong filter: every pixel in it
+  // was found to be standing out from its own surroundings, which picture detail does not
+  // do. What is left for this to catch is a genuinely sparse scatter - a dusting of pixels
+  // that happened to be still - and a real mark can be sparse in its own way. An outlined
+  // store badge is a ring and nothing else: measured at 0.11 of its own box at the clip's
+  // own width, where the previous 0.15 kept the words beside it and threw the badge away.
   const components = stillComponents(frozen, deviation, width, height).filter(
-    (component) => component.pixels / Math.max(1, component.box.width * component.box.height) >= 0.3
+    (component) => component.pixels / Math.max(1, component.box.width * component.box.height) >= 0.1
   )
   if (components.length === 0) return []
-  const groups = groupBoxes(
-    components.map((component) => component.box),
-    gap
+  const groups = mergeRows(
+    groupBoxes(
+      components.map((component) => component.box),
+      gap
+    ),
+    Math.max(0, options.rowGapRatio ?? 0.75)
   )
   const deviationSum = summedArea(deviation, width, height)
 
@@ -749,8 +893,16 @@ export function detectStaticBlobs(
     // is the same rule the still-pixel test encodes, applied where it actually belongs:
     // a mark is static *relative to what surrounds it*.
     if (ringMean(deviationSum, width, height, box, distance) < threshold) continue
-    const inside = areaOf(sum, width, height, box)
-    const standing = Math.abs(inside.total / Math.max(1, inside.count) - ringMean(sum, width, height, box, distance))
+    // How far the mark stands out is asked of the pixels that were proposed as the mark,
+    // not of the average of everything the region covers. The difference is not a detail:
+    // a wordmark is mostly the picture it sits on - its own gaps are picture, and a
+    // translucent one is a blend of it - so averaging the whole region into the question
+    // divides the mark's contrast by the share of it that is ink. A white badge on bright
+    // skin measured 12.8 that way where its own pixels stand out by 60, and the mark was
+    // thrown away for looking too much like the background it was covering.
+    const ink = markMean(frozen, mean, width, height, box)
+    if (ink.count === 0) continue
+    const standing = Math.abs(ink.mean - ringMean(sum, width, height, box, distance))
     if (standing < options.contrastThreshold) continue
     const density = pixels / Math.max(1, box.width * box.height)
     // Ranked by how much it stands out from the picture, how much of the picture it covers,

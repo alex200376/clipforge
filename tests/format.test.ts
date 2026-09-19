@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { formatBytes, formatDuration, formatTime, parseTime, shortTime } from '../src/renderer/format'
+import { formatBytes, formatDuration, formatLength, formatTime, parseTime, shortTime } from '../src/renderer/format'
 
 describe('parseTime', () => {
   it('accepts the formats the field shows', () => {
@@ -68,5 +68,22 @@ describe('human sizes', () => {
     expect(formatDuration(45)).toBe('45s')
     expect(formatDuration(150)).toBe('2m 30s')
     expect(formatDuration(3900)).toBe('1h 05m')
+  })
+
+  it('keeps a short output length precise', () => {
+    // Beside the speed control, where a 4s clip at 10x is 0.40s - and "0s" would read as
+    // a broken panel rather than a very fast export.
+    expect(formatLength(0.4)).toBe('0.40s')
+    expect(formatLength(0.04)).toBe('0.04s')
+    expect(formatLength(3.2)).toBe('3.2s')
+    expect(formatLength(9.94)).toBe('9.9s')
+  })
+
+  it('falls back to whole units once the length is long enough not to need them', () => {
+    expect(formatLength(40)).toBe('40s')
+    expect(formatLength(150)).toBe('2m 30s')
+    expect(formatLength(3900)).toBe('1h 05m')
+    expect(formatLength(null)).toBeNull()
+    expect(formatLength(Number.NaN)).toBeNull()
   })
 })

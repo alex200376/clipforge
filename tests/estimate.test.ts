@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { estimateAnimatedBytes, fitToBudget, outputDimensions } from '../src/shared/estimate'
+import { estimateAnimatedBytes, estimateVideoBytes, fitToBudget, outputDimensions } from '../src/shared/estimate'
 
 const frame = { width: 480, height: 270 }
 
@@ -47,6 +47,65 @@ describe('size estimation', () => {
 
   it('never predicts zero for an empty clip', () => {
     expect(estimateAnimatedBytes({ format: 'gif', frame, fps: 24, seconds: 0 })).toBeGreaterThan(0)
+  })
+})
+
+describe('video estimation', () => {
+  // The measurement this model is built on: 1080x1830 at 24 fps for 5.1667s, encoded
+  // with the app's own settings (`libx264 -preset medium -crf 22`, `aac -b:a 128k`),
+  // came out at 3,039,362 bytes.
+  const measured = { width: 1080, height: 1830 }
+  const measuredBytes = 3_039_362
+
+  it('predicts a real export closely', () => {
+    const estimate = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5.1667 })
+    expect(Math.abs(estimate - measuredBytes) / measuredBytes).toBeLessThan(0.1)
+  })
+
+  it('grows with the frame area and the length', () => {
+    const base = estimateVideoBytes({ frame: measured, fps: 24, seconds: 2 })
+    const longer = estimateVideoBytes({ frame: measured, fps: 24, seconds: 4 })
+    const bigger = estimateVideoBytes({ frame: { width: 2160, height: 3660 }, fps: 24, seconds: 2 })
+    expect(longer).toBeGreaterThan(base * 1.9)
+    // Four times the area is not four times the file: the audio track and the container are
+    // a fixed share of a clip this short, so the picture's growth is damped.
+    expect(bigger).toBeGreaterThan(base * 3.5)
+  })
+
+  it('counts the audio track, which is most of a short quiet clip', () => {
+    const withSound = estimateVideoBytes({ frame: measured, fps: 24, seconds: 2 })
+    const muted = estimateVideoBytes({ frame: measured, fps: 24, seconds: 2, audio: false })
+    expect(withSound - muted).toBe(Math.round(2 * 16_000))
+  })
+
+  it('answers a chosen target with the margin the encoder is aimed with', () => {
+    // The export derives its bitrate from the target and leaves itself 6% of room, so the
+    // honest prediction is that room rather than the limit itself.
+    const target = 10 * 1024 * 1024
+    const estimate = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5.1667, targetBytes: target })
+    expect(estimate).toBeLessThan(target)
+    expect(estimate).toBeGreaterThan(target * 0.9)
+  })
+
+  it('does not second-guess a target with a measurement from a previous export', () => {
+    // A target is arithmetic, not a guess about content: the encoder was told what to aim
+    // at, so a ratio from some earlier clip has nothing left to correct.
+    const target = 10 * 1024 * 1024
+    const plain = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5.1667, targetBytes: target })
+    const corrected = estimateVideoBytes({
+      frame: measured,
+      fps: 24,
+      seconds: 5.1667,
+      targetBytes: target,
+      correction: 2
+    })
+    expect(corrected).toBe(plain)
+  })
+
+  it('applies a correction from a real measurement', () => {
+    const plain = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5 })
+    const corrected = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5, correction: 0.5 })
+    expect(corrected).toBe(Math.round(plain * 0.5))
   })
 })
 
