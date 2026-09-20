@@ -37,6 +37,7 @@ const ERROR_KEYS: Partial<Record<ErrorCode, TranslationKey>> = {
   'verify-failed': 'error.verify-failed',
   'no-frames': 'error.no-frames',
   'source-missing': 'error.source-missing',
+  'no-picture': 'error.no-picture',
   'remote-source': 'error.remote-source',
   'unsupported-source': 'error.unsupported-source'
 }

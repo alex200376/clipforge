@@ -118,6 +118,8 @@ export const en = {
   'error.install-failed': 'The tool could not be written into the tools folder.',
   'error.verify-failed': 'The tool was installed but could not be started.',
   'error.no-frames': 'The selected range produced no frames.',
+  'error.no-picture':
+    'There is no picture in that file, only sound, so there is nothing to convert. If it came from a link, that link is serving an audio-only stream — the site may publish the video separately.',
   'error.source-missing': 'That file is no longer there — it may have been moved, renamed or deleted.',
   'error.remote-source': 'That is a web link, not a local file. Paste it into the URL field to import it.',
   'error.unsupported-source': 'This source cannot be used for that export.',
@@ -287,6 +289,7 @@ export const en = {
   'export.progress.time': '{done} of {total}',
   'export.progress.rate': '{rate}× realtime',
   'export.progress.perFrame': 'About {seconds}s a frame',
+  'export.progress.cooling': 'Resting so the GPU can cool · {seconds}s',
   'export.progress.unmeasured': 'This step reports no progress of its own',
   'export.stage.aiRemoval': 'Removing the watermark',
   'export.stage.downloading': 'Downloading the link',
@@ -338,6 +341,22 @@ export const en = {
   'watermark.engine.fastHint': 'Rebuilds the box from the pixels just outside it. Instant, and cleanest on flat or slow backgrounds.',
   'watermark.engine.aiHint': 'Paints the missing picture with LaMa instead of averaging around it, which holds up over texture. Runs when you export, and takes longer.',
   'watermark.engine.missing': 'The AI models are not installed in this build, so only the fast method is available.',
+  // The mode names carry no adjective about quality on purpose: nothing about the fill
+  // changes with this setting, only how long the export takes and how hot the machine gets.
+  'watermark.power': 'AI power',
+  'watermark.power.auto': 'Automatic',
+  'watermark.power.fast': 'Full speed',
+  'watermark.power.balanced': 'Balanced',
+  'watermark.power.quiet': 'Quiet',
+  'watermark.power.autoHint': 'Picks a mode from the {source}: {pace} right now.',
+  'watermark.power.fastHint': 'No rest between batches: the fastest run, and the machine holds its hottest for the whole of it.',
+  // Worded about the inpainting pass rather than the export, because that is what the rest
+  // applies to: the cut and the encode that follow are not paced, so a paced export as a
+  // whole came in at 1.5x on the machine this was measured on, not the pass's own factor.
+  'watermark.power.pacedHint':
+    'Rests between batches so the GPU is not at full power the whole time, which stretches the removal pass to about {factor}× its length. What it writes is identical.',
+  'watermark.power.plugged': 'charger',
+  'watermark.power.onBattery': 'battery',
   'watermark.detect': 'Find the watermark',
   'watermark.detecting': 'Looking for a watermark',
   'watermark.detectHint': 'Samples the clip for a mark that never moves, then leaves the box for you to check.',

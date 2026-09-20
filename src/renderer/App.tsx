@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { errorPayload, errorMessage } from '../shared/errors'
 import { estimateAnimatedBytes, estimateVideoBytes, fitToBudget, outputDimensions } from '../shared/estimate'
+import { resolvePace } from '../shared/aiPower'
 import { AI_FEATHER } from '../shared/aiWindow'
 import {
   FILMSTRIP_FRAMES,
@@ -108,7 +109,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   // Only the main process writes these two: the version is recorded at startup, and the
   // placeholder here is replaced by the stored settings before anything reads it.
   lastRunVersion: '',
-  keepUpdateInstaller: true
+  keepUpdateInstaller: true,
+  aiPowerMode: 'auto'
 }
 
 const BUDGET_BYTES = 8 * 1024 * 1024
@@ -131,6 +133,46 @@ export function App({ initialSettings }: Props): JSX.Element {
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme
   }, [settings.theme])
+
+  /**
+   * The power source, which is what `auto` in the AI power mode reads.
+   *
+   * Defaults to mains rather than to battery: an unknown answer should not silently slow
+   * every export down, and the real one arrives in the effect below.
+   */
+  const [onBattery, setOnBattery] = useState(false)
+  /** Milliseconds left of the AI loop's rest between batches, or 0 when it is working. */
+  const [coolingMs, setCoolingMs] = useState(0)
+
+  // Read once, then subscribed to: an export started on mains should start resting between
+  // frames the moment the charger is pulled, which is exactly when the user is holding the
+  // laptop and the heat matters most.
+  useEffect(() => {
+    let live = true
+    void window.clipforge
+      .powerState()
+      .then((state) => {
+        if (live) setOnBattery(state.onBattery)
+      })
+      .catch(() => undefined)
+    const stop = window.clipforge.onPowerState((state) => setOnBattery(state.onBattery))
+    return () => {
+      live = false
+      stop()
+    }
+  }, [])
+
+  /**
+   * How hard the AI removal may push the GPU, resolved once for the whole renderer.
+   *
+   * Derived rather than stored: it is a function of a setting and the charger, and a stored
+   * copy would be one more thing that can disagree with both. Read by the running loop
+   * between batches, so a change mid-export does not need a restart to take effect.
+   */
+  const aiPace = useMemo(
+    () => resolvePace(settings.aiPowerMode, onBattery),
+    [settings.aiPowerMode, onBattery]
+  )
   const [defaultDir, setDefaultDir] = useState('')
   const [dependencies, setDependencies] = useState<DependencyState[]>([])
   const [versions, setVersions] = useState<ToolVersion[]>([])
@@ -1129,10 +1171,16 @@ export function App({ initialSettings }: Props): JSX.Element {
             // hang, so it goes away the moment the cut is done.
             onPhase: (phase) => {
               if (phase === 'loading') setProgress(null)
-            }
+            },
+            // The rest between batches, as a countdown rather than as a note: this is
+            // minutes of a bar that is deliberately not moving, and the number is the
+            // only thing that separates "resting" from "stuck".
+            onCooling: setCoolingMs
           },
-          assets
+          assets,
+          aiPace
         )
+        setCoolingMs(0)
         await window.clipforge.aiComposite({ token: prepared.token })
         setAiProgress(null)
         aiToken = prepared.token
@@ -1226,6 +1274,8 @@ export function App({ initialSettings }: Props): JSX.Element {
       setBusy(false)
       setProgress(null)
       setJobStart(null)
+      // An export that failed mid-rest must not leave a countdown frozen on the card.
+      setCoolingMs(0)
       void window.clipforge.setTaskbarProgress(null)
     }
   }, [
@@ -1240,6 +1290,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     activeCrop,
     activeWatermarks,
     watermarkEngine,
+    aiPace,
     aiAssetsState,
     preview,
     speed,
@@ -1864,6 +1915,11 @@ export function App({ initialSettings }: Props): JSX.Element {
                       hardware={hardware}
                       view={busy ? exportView : null}
                       phaseNote={busy ? phaseNote : null}
+                      cooling={busy ? coolingMs : 0}
+                      powerMode={settings.aiPowerMode}
+                      onPowerMode={(mode) => void saveSettings({ aiPowerMode: mode })}
+                      aiPace={aiPace}
+                      onBattery={onBattery}
                       busy={busy}
                       hasSource={source !== null}
                       onExport={() => void runExport()}

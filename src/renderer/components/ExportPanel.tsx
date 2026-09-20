@@ -34,6 +34,8 @@ import { formatBytes, formatLength } from '../format'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
 import type { BudgetChoice, EstimateView, ExportMode, PresetId, WatermarkCorner } from '../types'
+import type { AiPace, AiPowerMode } from '../../shared/aiPower'
+import { AI_POWER_MODES } from '../../shared/aiPower'
 import type { ExportProgressView } from '../useProgress'
 
 interface Props {
@@ -98,6 +100,18 @@ interface Props {
   previewBusy: boolean
   /** False when the bundled AI weights are missing from this build. */
   aiAvailable: boolean
+  /**
+   * How hard AI removal may push the GPU, and what that resolves to right now.
+   *
+   * The pace is passed as well as the mode because the honest answer to "what did I just
+   * pick" is the one `auto` has already answered by looking at the charger.
+   */
+  powerMode: AiPowerMode
+  onPowerMode: (mode: AiPowerMode) => void
+  aiPace: AiPace
+  onBattery: boolean
+  /** Milliseconds the AI loop is resting for, so a paced export is not read as a stall. */
+  cooling: number
   mute: boolean
   onMute: (mute: boolean) => void
   loudnorm: boolean
@@ -227,7 +241,12 @@ export function ExportPanel(props: Props): JSX.Element {
     hasSource,
     onExport,
     onCancel,
-    onPreset
+    onPreset,
+    powerMode,
+    onPowerMode,
+    aiPace,
+    onBattery,
+    cooling
   } = props
   const { t } = useI18n()
   const isGif = mode === 'gif'
@@ -484,6 +503,44 @@ export function ExportPanel(props: Props): JSX.Element {
                * export is minutes of inference to find out. The instant engine is
                * predictable enough to need no such thing.
                */}
+              {/*
+               * Only for the AI engine, and only below it: this is not a quality knob like
+               * the ones above, it is the price of the pass - how long it takes against how
+               * hot the laptop gets. Sitting under the engine choice is what makes that
+               * relationship legible without a paragraph explaining it.
+               */}
+              {watermarkEngine === 'ai' && (
+                <div className="field">
+                  <Label>{t('watermark.power')}</Label>
+                  <Select value={powerMode} onValueChange={(value) => onPowerMode(value as AiPowerMode)}>
+                    <SelectTrigger aria-label={t('watermark.power')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AI_POWER_MODES.map((mode) => (
+                        <SelectItem key={mode} value={mode}>
+                          {t(`watermark.power.${mode}`)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <em className="field-hint">
+                    {/* `auto` is the only mode whose meaning is not in its own name, so it is
+                        the only one that has to say what it currently resolves to. */}
+                    {powerMode === 'auto'
+                      ? t('watermark.power.autoHint', {
+                          pace: t(`watermark.power.${aiPace.mode}`),
+                          source: t(onBattery ? 'watermark.power.onBattery' : 'watermark.power.plugged')
+                        })
+                      : // Read off the resolved pace rather than restated here, so the number the
+                        // hint promises and the duty the loop honours cannot drift apart.
+                        aiPace.duty >= 1
+                        ? t('watermark.power.fastHint')
+                        : t('watermark.power.pacedHint', { factor: (1 / aiPace.duty).toFixed(1) })}
+                  </em>
+                </div>
+              )}
+
               {watermarkEngine === 'ai' && (
                 <div className="field">
                   <Button variant="secondary" onClick={onPreviewFrame} disabled={previewBusy || watermarks.length === 0}>
@@ -851,7 +908,7 @@ export function ExportPanel(props: Props): JSX.Element {
           </div>
         </div>
 
-        {view && <ProgressBlock view={view} note={phaseNote} />}
+        {view && <ProgressBlock view={view} note={phaseNote} cooling={cooling} />}
       </div>
 
       {/* The estimate lives in the footer, which does not scroll, rather than at the bottom

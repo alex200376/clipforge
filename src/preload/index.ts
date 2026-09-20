@@ -22,6 +22,7 @@ import type {
   InstallProgressEvent,
   JobProgress,
   MediaInfo,
+  PowerState,
   RegisteredMedia,
   SessionState,
   StorageReport,
@@ -93,6 +94,12 @@ const api: ClipForgeApi = {
     const handler = (_event: unknown, payload: WindowState): void => listener(payload)
     ipcRenderer.on('clipforge:window:changed', handler)
     return () => ipcRenderer.removeListener('clipforge:window:changed', handler)
+  },
+  powerState: () => ipcRenderer.invoke('clipforge:power:state') as Promise<PowerState>,
+  onPowerState: (listener: (state: PowerState) => void) => {
+    const handler = (_event: unknown, payload: PowerState): void => listener(payload)
+    ipcRenderer.on('clipforge:power:changed', handler)
+    return () => ipcRenderer.removeListener('clipforge:power:changed', handler)
   },
   appVersion: () => ipcRenderer.invoke('clipforge:app:version') as Promise<string>,
   buildTime: () => ipcRenderer.invoke('clipforge:app:build-time') as Promise<string | null>,

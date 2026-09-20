@@ -20,6 +20,7 @@ import type {
   InstallProgressEvent,
   JobProgress,
   MediaInfo,
+  PowerState,
   PreviewSource,
   RegisteredMedia,
   SessionState,
@@ -153,6 +154,15 @@ export interface ClipForgeApi {
   closeWindow(): Promise<void>
   /** Fires when the frame changes without the renderer asking (drag-snap, F11, Esc). */
   onWindowState(listener: (state: WindowState) => void): () => void
+  /**
+   * Whether the machine is on battery, which decides what `auto` means for AI removal.
+   *
+   * Read once at start-up and relayed after that, so an export that is running when the
+   * charger is pulled starts resting between frames instead of concluding at the next
+   * launch that the laptop had been unplugged all along.
+   */
+  powerState(): Promise<PowerState>
+  onPowerState(listener: (state: PowerState) => void): () => void
   /** Version of the running build, straight from the packaged app manifest. */
   appVersion(): Promise<string>
   /** ISO timestamp of the running bundle, or null when it cannot be read. */

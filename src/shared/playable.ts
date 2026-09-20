@@ -42,6 +42,24 @@ export interface PlayableInput {
  * An unknown codec is a no: the probe is the only evidence there is, and acting on a
  * guess is how a preview comes up black.
  */
+/**
+ * Whether a probed file actually contains a picture.
+ *
+ * It exists because a file can be perfectly readable and still be useless here: an HLS
+ * link whose segments carry only an audio rendition downloads to a few megabytes of Opus,
+ * ffprobe reports a duration, and every stage of this app then behaves as if a clip had
+ * been loaded - the player shows an empty rectangle, the timeline offers to trim 232
+ * seconds of nothing, and the first real complaint is an ffmpeg error about a source with
+ * no frames. The probe knows the answer before any of that happens, so the answer is used.
+ *
+ * Both signals are accepted because either alone can be missing: a stream is usually named
+ * and usually measured, and this is only ever asked about a file ffprobe has just read.
+ */
+export function hasPicture({ width, height, videoCodec }: { width: number; height: number; videoCodec?: string }): boolean {
+  if ((videoCodec ?? '').length > 0) return true
+  return width > 0 && height > 0
+}
+
 export function playsDirectly({ extension, videoCodec, audioCodec }: PlayableInput): boolean {
   if (!CONTAINERS.has(extension.toLowerCase())) return false
   const video = videoCodec.toLowerCase()

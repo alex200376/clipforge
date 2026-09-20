@@ -1,3 +1,5 @@
+import type { AiPace } from '../../shared/aiPower'
+import { paceNote, pauseMs } from '../../shared/aiPower'
 import type {
   AiAssets,
   AiPrepareRequest,
@@ -319,6 +321,15 @@ export interface AiRunHandlers {
    * reported bug.
    */
   onPhase: (phase: 'loading' | 'painting') => void
+  /**
+   * How long the loop is resting before its next batch, or 0 when it is not resting.
+   *
+   * Reported as a countdown rather than as a start time so the display has one source of
+   * truth for it. A paced export is slower than an unpaced one by minutes, and a progress
+   * line that simply stops moving for those minutes cannot be told apart from the hang this
+   * app has been accused of more than once.
+   */
+  onCooling: (msLeft: number) => void
 }
 
 /**
@@ -333,7 +344,12 @@ export async function runAiRemoval(
   request: AiPrepareRequest,
   feather: number,
   handlers: AiRunHandlers,
-  assets: AiAssets
+  assets: AiAssets,
+  /**
+   * How hard this run may push the GPU. Already resolved - `auto` was answered by the
+   * caller, because the answer depends on the charger and not on anything in here.
+   */
+  pace: AiPace
 ): Promise<AiPrepareResult> {
   const prepared = await window.clipforge.aiPrepare(request)
   if (!prepared.fresh) return prepared
@@ -399,6 +415,9 @@ export async function runAiRemoval(
   const startedAt = Date.now()
   for (const plan of windows) {
     for (let from = 0; from < prepared.frames; from += BATCH) {
+      // Timed per batch, because that is the unit the pace applies to: the batch is what
+      // the card was busy for, and the rest it has earned is a share of it.
+      const workStartedAt = Date.now()
       const frames = await window.clipforge.aiFrames({ token: prepared.token, index: plan.index, from, count: BATCH })
       if (frames.length === 0) break
       const painted = await inpaintBatch(plan, frames, feather)
@@ -408,14 +427,46 @@ export async function runAiRemoval(
       await window.clipforge.aiPatches({ token: prepared.token, index: plan.index, from, patches: painted.patches })
       done += frames.length
       handlers.onInpaint(done, totalFrames)
+      // One batch of inference, then the rest the duty cycle allows. Read per batch rather
+      // than once at the start, so a mode change or a charger being pulled mid-export takes
+      // effect here instead of at the next launch.
+      await rest(pauseMs(Date.now() - workStartedAt, pace.duty), handlers.onCooling)
     }
   }
   const seconds = (Date.now() - startedAt) / 1000
   handlers.onNote(
     `Inpainted ${totalFrames} frame${totalFrames === 1 ? '' : 's'} in ${seconds.toFixed(1)}s` +
-      (totalFrames > 0 ? ` (${(seconds / totalFrames).toFixed(2)}s per frame)` : '')
+      (totalFrames > 0 ? ` (${(seconds / totalFrames).toFixed(2)}s per frame)` : '') +
+      // A paced run is meant to be slower, so the reason travels with the number: without
+      // it, a deliberate 1.7x reads as a machine that has become 1.7x slower.
+      (pace.duty < 1 ? `, ${paceNote(pace)}: resting between batches to keep the GPU cooler` : '')
   )
   return prepared
+}
+
+/** How often the display is told how much of a rest is left. */
+const COOLING_TICK_MS = 250
+
+/**
+ * Waits out a pause, saying how much of it remains.
+ *
+ * `report(0)` at the end is what takes the cooling line off the display, so it has to
+ * happen on every path out of here, including a rest of zero milliseconds.
+ */
+async function rest(ms: number, report: (msLeft: number) => void): Promise<void> {
+  if (ms <= 0) {
+    report(0)
+    return
+  }
+  const until = Date.now() + ms
+  report(ms)
+  for (;;) {
+    const left = until - Date.now()
+    if (left <= 0) break
+    await new Promise((resolve) => setTimeout(resolve, Math.min(COOLING_TICK_MS, left)))
+    report(Math.max(0, until - Date.now()))
+  }
+  report(0)
 }
 
 /**

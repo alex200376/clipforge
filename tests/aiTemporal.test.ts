@@ -27,11 +27,29 @@ describe('holding an inpainted fill still across frames', () => {
   })
 
   it('treats encoding-level noise as nothing moved', () => {
-    // Two frames of the same still background differ by a level or two from the encode
-    // alone. If that counted as movement, the fill would boil on exactly the footage this
-    // exists to steady: a logo over a black bar or a motionless interface.
-    expect(temporalWeight(1)).toBe(AI_BLEND_MAX)
+    // Both numbers here come from measuring a real clip rather than from taste. Painting its
+    // calmest region - 1.28 to 2.26 levels of difference between consecutive windows, which
+    // is encoding noise and not movement - through the real weights produced a fill that
+    // moved 1.45 levels a frame on its own, so this is the band the whole rule exists to
+    // flatten, and every part of it has to be treated as stillness.
+    expect(temporalWeight(1.28)).toBe(AI_BLEND_MAX)
+    expect(temporalWeight(2.26)).toBe(AI_BLEND_MAX)
     expect(temporalWeight(AI_BLEND_FLOOR)).toBe(AI_BLEND_MAX)
+  })
+
+  it('holds the measured noise band at full weight, whatever the floor is set to', () => {
+    // The floor has to sit clear above the noise, because a floor of 2 left the top of that
+    // band on the ramp: 2.26 levels would have been read as movement on footage that is
+    // standing still.
+    expect(AI_BLEND_FLOOR).toBeGreaterThan(2.26)
+  })
+
+  it('keeps a genuine movement mostly its own, which is what stops the smear', () => {
+    // The other measured region: windows changing by 7.5 to 12 levels a frame. The fill there
+    // moves 5.1 to 5.2 levels a frame either way - so the blend is not holding the motion
+    // back - and anything more than a third of the previous fill would start to.
+    expect(temporalWeight(7.55)).toBeLessThan(0.35)
+    expect(temporalWeight(12.08)).toBe(0)
   })
 
   it('keeps none of it when the picture really changed', () => {
@@ -132,9 +150,14 @@ describe('holding an inpainted fill still across frames', () => {
     for (let index = 1; index < levels.length; index += 1) {
       expect(levels[index]!).toBeGreaterThan(levels[index - 1]!)
     }
-    // Most of the way there within a handful of frames, which is the whole point of not
-    // letting the weight reach 1: it settles, it does not stall.
-    expect(levels[5]!).toBeGreaterThan(170)
-    expect(levels[5]!).toBeLessThan(200)
+    // It settles rather than stalling, and how fast is exactly what the maximum weight buys:
+    // half way within a handful of frames, the rest of the way over the following handful.
+    // Raising the weight buys stillness in the measured noise band and pays for it here, in
+    // how long a lasting change takes to catch up - which is the trade the constant records.
+    expect(levels[5]! / 200).toBeGreaterThan(0.5)
+    expect(levels[5]! / 200).toBeLessThan(0.8)
+    // A real change - a cut, a pan - is not this path at all: the weight collapses to zero,
+    // and the very next frame is entirely its own answer.
+    expect(temporalWeight(AI_BLEND_CEILING + 5)).toBe(0)
   })
 })

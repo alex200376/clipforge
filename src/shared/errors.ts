@@ -20,6 +20,7 @@ export type ErrorCode =
   | 'install-failed'
   | 'verify-failed'
   | 'no-frames'
+  | 'no-picture'
   | 'source-missing'
   | 'remote-source'
   | 'unsupported-source'
@@ -37,13 +38,28 @@ export const ERROR_CODES: ErrorCode[] = [
   'install-failed',
   'verify-failed',
   'no-frames',
+  'no-picture',
   'source-missing',
   'remote-source',
   'unsupported-source',
   'unknown'
 ]
 
-const PREFIX = /^\[([a-z-]+)\]\s*/
+/**
+ * A `[code] ` marker anywhere in a message, not only at the front of it.
+ *
+ * Anchoring it was a bug with a wide blast radius: Electron wraps anything thrown inside an
+ * `ipcMain` handler as `Error invoking remote method '<channel>': Error: [code] text`, so
+ * every coded error raised in the main process - a file that has been moved, a tool that is
+ * not installed yet, a source ffmpeg cannot read - arrived in the renderer with the wrapper
+ * in front of the code, failed to match, and was shown to the user as that raw sentence
+ * instead of the one written for it. Errors raised in the renderer itself kept working,
+ * which is why it went unnoticed.
+ *
+ * The text after the marker is what remains once the wrapper is cut away, so the same rule
+ * gives the readable half of the message on both paths.
+ */
+const CODED = /\[([a-z-]+)\]\s*/g
 
 export class ClipForgeError extends Error {
   constructor(
@@ -65,10 +81,13 @@ const isErrorCode = (value: string): value is ErrorCode => (ERROR_CODES as strin
 /** Splits a possibly-coded error message into its code and readable text. */
 export function errorPayload(error: unknown): ErrorPayload {
   const raw = error instanceof Error ? error.message : String(error)
-  const match = PREFIX.exec(raw)
-  const candidate = match?.[1]
-  if (candidate && isErrorCode(candidate)) {
-    return { code: candidate, message: raw.slice(match![0].length) }
+  for (const match of raw.matchAll(CODED)) {
+    const candidate = match[1]
+    // A message is free to contain brackets - an ffmpeg line, a file name - so only a marker
+    // that names a code this app knows is treated as one.
+    if (!candidate || !isErrorCode(candidate)) continue
+    const at = match.index ?? 0
+    return { code: candidate, message: raw.slice(at + match[0].length) }
   }
   return { code: 'unknown', message: raw }
 }

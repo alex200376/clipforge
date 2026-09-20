@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { playsDirectly } from '../src/shared/playable'
+import { hasPicture, playsDirectly } from '../src/shared/playable'
 
 const clip = (extension: string, videoCodec: string, audioCodec = ''): boolean =>
   playsDirectly({ extension, videoCodec, audioCodec })
@@ -37,6 +37,30 @@ describe('what the player can be handed untouched', () => {
 
   it('is happy with no sound at all', () => {
     expect(clip('.mp4', 'h264', '')).toBe(true)
+  })
+})
+
+describe('a file with no picture is not a clip', () => {
+  it('catches the audio-only link this was written for', () => {
+    // Measured from a real one: an HLS playlist whose segments carry a single Opus
+    // rendition. 232 seconds of duration, a name ending in `.mp4`, and not one frame in it -
+    // which is what the player was being handed, and why the preview was empty.
+    expect(hasPicture({ width: 0, height: 0, videoCodec: '' })).toBe(false)
+    expect(hasPicture({ width: 0, height: 0, videoCodec: undefined })).toBe(false)
+    expect(hasPicture({ width: 0, height: 0 })).toBe(false)
+  })
+
+  it('accepts a real picture, named or merely measured', () => {
+    expect(hasPicture({ width: 768, height: 1152, videoCodec: 'hevc' })).toBe(true)
+    // A stream ffprobe could not name but did measure is still a picture, and refusing it
+    // would reject a clip that plays perfectly.
+    expect(hasPicture({ width: 768, height: 1152 })).toBe(true)
+    expect(hasPicture({ width: 768, height: 1152, videoCodec: '' })).toBe(true)
+  })
+
+  it('does not accept a half-read size', () => {
+    expect(hasPicture({ width: 768, height: 0 })).toBe(false)
+    expect(hasPicture({ width: 0, height: 1152 })).toBe(false)
   })
 
   it('ignores how the extension is written', () => {

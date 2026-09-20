@@ -1,3 +1,4 @@
+import type { AiPowerMode } from './aiPower'
 import type { ErrorCode } from './errors'
 import type { GifDither, GifTuning } from './gifTuning'
 import type { OutputNaming } from './outputName'
@@ -459,6 +460,15 @@ export interface AppSettings {
    * is deleted with the rest once its update has been installed.
    */
   keepUpdateInstaller: boolean
+  /**
+   * How hard AI watermark removal may push the GPU. See `src/shared/aiPower.ts`.
+   *
+   * A setting rather than a constant because the right answer is a property of the machine
+   * it is running on - a desktop can run the pass flat out and never notice, a laptop user
+   * with it on their knees cannot - and `auto` is the answer for everyone who has not
+   * thought about it: full rate on mains, the cool end on battery.
+   */
+  aiPowerMode: AiPowerMode
 }
 
 /** Remembered so a crash or restart does not lose the clip being trimmed. */
@@ -509,6 +519,17 @@ export interface CropDetection {
 export interface WindowState {
   maximized: boolean
   fullscreen: boolean
+}
+
+/**
+ * What the power system is doing, as far as the app cares.
+ *
+ * One field, because that is the entire question `auto` asks of it. Anything more - a
+ * percentage, a time remaining - would be a number the app has no use for and would then
+ * have to keep fresh.
+ */
+export interface PowerState {
+  onBattery: boolean
 }
 
 /**

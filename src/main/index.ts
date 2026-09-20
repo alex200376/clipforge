@@ -1,7 +1,7 @@
 import { BrowserWindow, app, crashReporter, session, shell } from 'electron'
 
 import { formatBytes } from '../shared/bytes'
-import { cancelActiveWork, registerIpc, releaseDownloads, trackWindowState } from './ipc'
+import { cancelActiveWork, registerIpc, releaseDownloads, trackPowerState, trackWindowState } from './ipc'
 import { handleMediaProtocol, registerMediaScheme, setAppRoot } from './mediaProtocol'
 import { appUrl, iconPath, isDev, preloadEntry, rendererDir, rendererEntry } from './paths'
 import { sweepStaleWorkDirs } from './scratch'
@@ -127,12 +127,22 @@ function createWindow(): void {
       preload: preloadEntry(),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      // An export is work, and a minimised window is where a long one is sent. Chromium
+      // throttles timers in a hidden page - after five minutes, down to one a minute - and
+      // the AI loop is driven by them: a batch is awaited, then the rest between batches is
+      // a timer. Throttled, a short pause becomes a minute each and an export that should
+      // take ten minutes takes an hour. The frame is not animating anything while it is
+      // hidden, so nothing else here needed the throttle.
+      backgroundThrottling: false
     }
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
   trackWindowState(mainWindow)
+  // Relayed for the same reason the frame state is: what `auto` means for AI removal depends
+  // on the charger, and that can change while the app is open.
+  trackPowerState(mainWindow)
   watchForCrashes(mainWindow)
   mainWindow.on('closed', () => {
     mainWindow = null

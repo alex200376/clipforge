@@ -1,4 +1,14 @@
-import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
+import {
+  BrowserWindow,
+  Notification,
+  app,
+  clipboard,
+  dialog,
+  ipcMain,
+  nativeImage,
+  powerMonitor,
+  shell
+} from 'electron'
 import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 
@@ -8,7 +18,7 @@ import { ClipForgeError } from '../shared/errors'
 import { remuxPreviewArgs, transcodePreviewArgs } from '../shared/mediaArgs'
 import { normalizeDir } from '../shared/leftovers'
 import { shouldNotify } from '../shared/notifications'
-import { playsDirectly } from '../shared/playable'
+import { hasPicture, playsDirectly } from '../shared/playable'
 import { isRemoteUrl } from '../shared/sources'
 import type { CropRequest, NotifyRequest } from '../shared/api'
 import type {
@@ -20,6 +30,7 @@ import type {
   FilmstripRequest,
   GifRequest,
   JobProgress,
+  PowerState,
   PreviewSource,
   SessionState,
   StorageReport,
@@ -91,6 +102,35 @@ export function trackWindowState(window: BrowserWindow): void {
   window.on('unmaximize', broadcast)
   window.on('enter-full-screen', broadcast)
   window.on('leave-full-screen', broadcast)
+}
+
+/**
+ * Whether the machine is running on its battery.
+ *
+ * The one thing the app asks the power system, and it is asked for one reason: `auto` in
+ * the AI power mode means "full rate on mains, the cool end on battery", and heat is not the
+ * only thing at stake - a paced pass draws less power too, which on battery is runtime the
+ * user gets back.
+ */
+export function powerState(): PowerState {
+  return { onBattery: powerMonitor.isOnBatteryPower() }
+}
+
+/**
+ * Relays power-source changes to the renderer, the way the frame's own state is relayed.
+ *
+ * It lives here rather than in a module of its own because this is where the channels are:
+ * the contract test reads the senders out of this file, and a push nobody can see is a push
+ * that silently stops arriving. Only the two transitions are subscribed to - a suspend and a
+ * resume change nothing about which pace is right.
+ */
+export function trackPowerState(window: BrowserWindow): void {
+  const broadcast = (): void => {
+    if (window.isDestroyed()) return
+    window.webContents.send('clipforge:power:changed', powerState() satisfies PowerState)
+  }
+  powerMonitor.on('on-ac', broadcast)
+  powerMonitor.on('on-battery', broadcast)
 }
 
 export function cancelActiveWork(): void {
@@ -195,6 +235,16 @@ export function registerIpc(getWindow: WindowGetter): void {
     // installed - so the renderer asks again when the player reports it cannot read the
     // file, and the second answer always comes from ffmpeg.
     const info = await probeLocalFile(local).catch(() => null)
+    // A file with no picture is not a clip, and saying so here is the difference between a
+    // sentence and a black rectangle. A link is how it happens: an HLS playlist whose
+    // segments carry only an audio rendition downloads to a few megabytes of sound, ffprobe
+    // reports the duration, and every later stage treats it as a loaded clip - the player
+    // shows an empty frame, the timeline offers 232 seconds to trim, and the first honest
+    // complaint arrives from ffmpeg as "no frames" long after the user's time is spent.
+    // Local files can be sound-only too: dragging an `.m4a` in lands here as well.
+    if (info && !hasPicture(info)) {
+      throw new ClipForgeError('no-picture', `No video stream in ${path.basename(local)}; it is sound only.`)
+    }
     const direct = !rewrap && info !== null && playsDirectly({
       extension: path.extname(local),
       videoCodec: info.videoCodec ?? '',
@@ -510,6 +560,8 @@ export function registerIpc(getWindow: WindowGetter): void {
     const window = getWindow()
     return window ? windowState(window) : ({ maximized: false, fullscreen: false } satisfies WindowState)
   })
+
+  ipcMain.handle('clipforge:power:state', () => powerState())
 
   ipcMain.handle('clipforge:window:minimize', () => {
     getWindow()?.minimize()

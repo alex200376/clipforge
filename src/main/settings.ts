@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
+import { isAiPowerMode } from '../shared/aiPower'
 import { DEFAULT_GIF_TUNING, normalizeGifTuning } from '../shared/gifTuning'
 import { isNotifyWhen } from '../shared/notifications'
 import { DEFAULT_OUTPUT_TEMPLATE } from '../shared/outputName'
@@ -33,7 +34,11 @@ const DEFAULTS: AppSettings = {
   onboarded: false,
   autoUpdate: true,
   lastRunVersion: '',
-  keepUpdateInstaller: true
+  keepUpdateInstaller: true,
+  // Not `fast`: the mode only exists because sustained inference on a laptop is hot, and a
+  // user who has not opened the setting has not asked for that. On mains `auto` is `fast`
+  // anyway, so nothing is given up at a desk.
+  aiPowerMode: 'auto'
 }
 
 const LANGUAGES: Language[] = ['en', 'zh-TW']
@@ -90,7 +95,11 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     onboarded: raw.onboarded === true,
     autoUpdate: raw.autoUpdate !== false,
     lastRunVersion: typeof raw.lastRunVersion === 'string' ? raw.lastRunVersion : '',
-    keepUpdateInstaller: raw.keepUpdateInstaller !== false
+    keepUpdateInstaller: raw.keepUpdateInstaller !== false,
+    // An unknown mode is not carried into the export loop - `fast` would silently undo a
+    // deliberate preference and a typo would have to mean *something*, so the file's value
+    // falls back to the same default a fresh install gets.
+    aiPowerMode: isAiPowerMode(raw.aiPowerMode) ? raw.aiPowerMode : DEFAULTS.aiPowerMode
   }
 }
 

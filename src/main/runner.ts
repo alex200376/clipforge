@@ -245,11 +245,24 @@ export class MediaJob {
     from.stdout.on('error', () => undefined)
     from.stdout.pipe(to.stdin)
 
+    // A percentage that only ever grows, per stage.
+    //
+    // gifski's own bar names the frame it is on against a total it has to guess, and that
+    // guess grows: it reported 100% and then 70% of the same export, which walked the bar
+    // and the Windows taskbar fill backwards in the middle of a run. The caller's frame
+    // count is the truthful denominator where there is one, and where there is not, the
+    // worst this leaves is a bar that waits rather than one that reverses. Per call, so a
+    // retry starts from zero again.
+    let producerPercent = 0
+    let consumerPercent = 0
     const producerTail: string[] = []
     this.consume(
       from,
       options,
-      (percent, detail) => this.report(options.stage, percent, options.stage, detail),
+      (percent, detail) => {
+        producerPercent = Math.max(producerPercent, percent)
+        this.report(options.stage, producerPercent, options.stage, detail)
+      },
       producerTail
     )
     this.consume(to, { duration: 0, stage: options.consumerStage }, (percent, detail) => {
@@ -258,14 +271,16 @@ export class MediaJob {
       // the truthful denominator.
       if (expected > 0 && detail?.kind === 'frames') {
         const done = Math.min(detail.done, expected)
-        this.report(options.consumerStage, (done / expected) * 100, options.consumerStage, {
+        consumerPercent = Math.max(consumerPercent, (done / expected) * 100)
+        this.report(options.consumerStage, consumerPercent, options.consumerStage, {
           kind: 'frames',
           done,
           total: expected
         })
         return
       }
-      this.report(options.consumerStage, percent, options.consumerStage, detail)
+      consumerPercent = Math.max(consumerPercent, percent)
+      this.report(options.consumerStage, consumerPercent, options.consumerStage, detail)
     })
     this.report(options.stage, 0, options.stage)
 

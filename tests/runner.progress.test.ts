@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { MediaJob } from '../src/main/runner'
+import { overallPercent, planSteps, stepIndexFor } from '../src/renderer/progress'
 import { gifskiArgs, trimArgs, y4mArgs } from '../src/shared/mediaArgs'
 import type { JobProgress } from '../src/shared/types'
 
@@ -179,9 +180,33 @@ describe.skipIf(!haveFfmpeg)('runner progress', () => {
       }
       const done = counted.map((event) => (event.detail?.kind === 'frames' ? event.detail.done : 0))
       expect(Math.max(...done)).toBeGreaterThan(expected / 2)
-      // The bar only ever moves forward, however the two sides interleave.
-      const percents = events.map((event) => event.percent)
-      expect([...percents].sort((a, b) => a - b)).toEqual(percents)
+      // Two claims, and the difference between them is what used to make this flaky.
+      //
+      // Within a stage, the percentage may not fall - that is enforced in the runner,
+      // because a tool's own guessed total can grow and take its bar backwards. Across the
+      // run as a whole it *does* change stages, and the two sides genuinely overlap: the
+      // producer can finish at 100 while the encoder is still climbing at 98. Asserting on
+      // the merged sequence therefore failed on nothing more than a loaded machine. What
+      // the user sees is the derived overall, which is where "never backwards" lives, so
+      // that is asserted instead - through the app's own arithmetic, on these same events.
+      for (const stage of ['Rendering frames', 'Building GIF']) {
+        const percents = events.filter((event) => event.stage === stage).map((event) => event.percent)
+        expect(percents.length, `${stage} reported nothing`).toBeGreaterThan(0)
+        expect(percents, `${stage} went backwards`).toEqual([...percents].sort((a, b) => a - b))
+      }
+      const steps = planSteps({ mode: 'gif', format: 'gif', engine: 'gifski', ai: false })
+      let shown = 0
+      const overall = events.map((event) => {
+        shown = overallPercent({
+          steps,
+          index: stepIndexFor(steps, event.stage),
+          fraction: event.percent / 100,
+          previous: shown
+        })
+        return shown
+      })
+      expect(overall).toEqual([...overall].sort((a, b) => a - b))
+      expect(overall[overall.length - 1]).toBeLessThanOrEqual(99)
       expect(log.some((line) => /Frame\s+\d+\s*\/\s*\d+/.test(line))).toBe(false)
     },
     TIMEOUT

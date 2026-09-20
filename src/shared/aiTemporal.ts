@@ -23,17 +23,38 @@
  * genuinely slow motion - a slow pan behind a logo - would leave the first guess welded in
  * place. At this weight a frame keeps most of its predecessor, so the time constant is a
  * few frames: enough to flatten a per-frame wobble, short enough to follow the picture.
+ *
+ * Measured rather than guessed. Painting a real clip's calmest region (consecutive windows
+ * differing by 1.3 to 2.3 levels, which is encoding noise and not movement) through the real
+ * weights, the fill moved 1.45 levels per frame between frames with nothing held, and these
+ * weights gave:
+ *
+ *   weight  fill movement   how far the fill sits from that frame's own answer
+ *   0.55    0.69 levels     0.89 levels
+ *   0.70    0.58 levels     1.05 levels      <- what this used to be
+ *   0.85    0.25 levels     1.48 levels      <- this
+ *   0.95    0.03 levels     1.81 levels
+ *
+ * A moving region (windows differing by 7.5 to 12 levels, where the ceiling is what matters)
+ * stayed between 0.42 and 0.77 levels of deviation across that whole range, so the extra
+ * holding costs very little where the picture is actually going somewhere. 0.85 keeps a
+ * time constant of about seven frames - a third of a second at 24fps - where 0.95 stretches
+ * it to twenty, which is a fifth of a second of stale fill for the last thirteen points of
+ * stillness and is not worth it.
  */
-export const AI_BLEND_MAX = 0.7
+export const AI_BLEND_MAX = 0.85
 
 /**
  * Mean difference at or below which the fill is left as it was.
  *
- * Measured on the window in 0-255 levels, averaged over the three colour channels. Two
- * frames of the same still background differ by a level or two from encoding alone; this is
- * deliberately just above that, so ordinary noise does not count as movement.
+ * Measured on the window in 0-255 levels, averaged over the three colour channels. On real
+ * footage, two frames of the same still background differ by up to 2.3 levels from encoding
+ * alone - the calmest region of a clip measured 1.28 to 2.26 across its frame pairs - so the
+ * floor has to sit above that or ordinary noise would be read as movement on exactly the
+ * footage this exists to steady. It was 2, which caught the same region only by the skin of
+ * its teeth.
  */
-export const AI_BLEND_FLOOR = 2
+export const AI_BLEND_FLOOR = 3
 
 /**
  * Mean difference at or above which nothing of the previous fill is kept.
@@ -41,6 +62,13 @@ export const AI_BLEND_FLOOR = 2
  * A cut, a whip pan or anything the detector would call a scene change lands far above
  * this; ordinary motion about a watermark sits between this and the floor and gets a
  * proportional share.
+ *
+ * This is the dial that keeps the blend honest where there is real movement, and the
+ * measurement says so: on a region whose windows changed by 7.5 to 12 levels a frame, the
+ * rule keeps between a quarter and none of the previous fill, the fill moves 5.1 to 5.2
+ * levels a frame either way, and it never sits more than 0.9 levels from that frame's own
+ * answer. Raising the ceiling is what would start to hold motion back, and it takes far more
+ * than ordinary footage to reach it.
  */
 export const AI_BLEND_CEILING = 10
 

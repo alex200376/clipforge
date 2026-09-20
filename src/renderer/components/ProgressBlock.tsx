@@ -16,13 +16,23 @@ import { Progress } from './ui/progress'
  */
 export function ProgressBlock({
   view,
-  note
+  note,
+  cooling = 0
 }: {
   view: ExportProgressView
   /** What the running stage is doing while it reports no progress of its own, such as
    *  reading 208 MB of weights before the first frame can be painted. Without it the
    *  card has nothing to say for the longest wait of the whole export. */
   note: string | null
+  /**
+   * Milliseconds the inpainting loop is deliberately resting for, or 0.
+   *
+   * A paced AI pass spends a large share of its time working for the opposite reason every
+   * other stage has a progress bar: to keep the GPU from holding its maximum temperature
+   * for the whole export. Resting looks exactly like hanging, so it is drawn as its own
+   * line, counting down - the one thing on this card that is *meant* to stand still.
+   */
+  cooling?: number
 }): JSX.Element {
   const { t } = useI18n()
 
@@ -76,6 +86,13 @@ export function ProgressBlock({
           {unmeasured ? '' : `${Math.round(view.fraction * 100)}%`}
         </span>
       </div>
+
+      {cooling > 0 && (
+        <div className="progress-meta progress-cooling">
+          <span>{t('export.progress.cooling', { seconds: Math.max(1, Math.ceil(cooling / 1000)) })}</span>
+          <span />
+        </div>
+      )}
 
       <div className="progress-meta">
         <span>{t('export.elapsed', { time: formatDuration(view.elapsed) ?? '0s' })}</span>
