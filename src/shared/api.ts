@@ -1,9 +1,13 @@
+import type { InstalledCopy } from './leftovers'
+import type { NotifyWhen } from './notifications'
 import type {
   AiAssets,
   AiDetectRequest,
   AiDetectResult,
   AiPrepareRequest,
   AiPrepareResult,
+  AiPreviewRequest,
+  AiPreviewResult,
   AppSettings,
   BinaryName,
   CropDetection,
@@ -48,6 +52,14 @@ export interface CropRequest {
 export interface NotifyRequest {
   title: string
   body: string
+  /** The finished file, so clicking the notification can show it. */
+  path?: string | null
+  /** The preference in force for this export; the main process applies it. */
+  when: NotifyWhen
+  /** Whether the window held the focus when the export finished. */
+  focused: boolean
+  /** Whether the notification should make a sound. */
+  sound?: boolean
 }
 
 export interface ClipForgeApi {
@@ -87,7 +99,39 @@ export interface ClipForgeApi {
   /** Finds the real picture area inside letterboxing; null when already tight. */
   detectCrop(request: CropRequest): Promise<CropDetection>
   revealInFolder(filePath: string): Promise<void>
+  /**
+   * A single frame with the marks filled in, for the before/after comparison.
+   *
+   * The frames come back as PNG bytes rather than as files: they are shown once and thrown
+   * away, and writing them into the app's temp folders would leave something to clean up.
+   */
+  aiPreview(request: AiPreviewRequest): Promise<AiPreviewResult>
+  /** Opens the finished file in whatever the system plays it with. */
+  openFile(filePath: string): Promise<string>
   openOutputFolder(): Promise<void>
+  /**
+   * Every copy of the app installed on this machine.
+   *
+   * More than one can exist after the move to per-user installation, and the extras are
+   * worth telling the user about - see `shared/leftovers.ts`.
+   */
+  installedCopies(): Promise<InstalledCopy[]>
+  /**
+   * The other installed copy worth telling the user about, or null.
+   *
+   * Decided in the main process, which is the only side that knows where this copy is
+   * running from - the comparison that separates "another installation" from "this one"
+   * cannot be made without that.
+   */
+  leftoverInstall(): Promise<InstalledCopy | null>
+  /**
+   * Runs the given copy's own uninstaller.
+   *
+   * The path is looked up from this process's own probe rather than trusted from the
+   * renderer, and the uninstaller raises its own administrator prompt. Resolves with '' on
+   * success or with the reason it could not be started.
+   */
+  removeInstalledCopy(location: string): Promise<string>
   registerMedia(filePath: string): Promise<RegisteredMedia>
   copyImageToClipboard(filePath: string): Promise<void>
   /** Native drag so a finished export can be dropped into Discord or Slack. */

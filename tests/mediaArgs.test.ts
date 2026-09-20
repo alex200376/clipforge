@@ -1,5 +1,9 @@
+import { readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
+import { aiPreviewFrameArgs } from '../src/shared/aiArgs'
 import {
   FILMSTRIP_TILE_HEIGHT,
   filmstripArgs,
@@ -18,6 +22,54 @@ import {
 } from '../src/shared/mediaArgs'
 
 const gifOptions = { start: 1.5, end: 5.25, fps: 24, width: 480, quality: 90 }
+
+/**
+ * ffmpeg's own option names are not stable across major versions, and this app ships its own
+ * build rather than using whatever is on PATH - so an option that build has removed is a
+ * failure at run time and says nothing at type-check time.
+ *
+ * That happened: the before/after preview asked for `-vsync 0`, which ffmpeg 9 removed, so
+ * every preview failed with "Unrecognized option 'vsync'" while the tests stayed green. The
+ * bundled build is the authority, and this is the cheap way to hold the code to it.
+ */
+describe('ffmpeg argument compatibility', () => {
+  const sources = (directory: string): string[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(directory, entry.name)
+      if (entry.isDirectory()) return sources(full)
+      return /\.tsx?$/.test(entry.name) ? [full] : []
+    })
+
+  it('nothing asks the bundled ffmpeg for an option it removed', () => {
+    // Removed in ffmpeg 8 and 9 respectively; the bundled build is 9.0.1.
+    const removed = ['-vsync', '-same_quant']
+    // Whole-line comments are dropped first, because the note explaining why an option is
+    // *not* used has to name it, and a guard that forbids naming it would delete the reason.
+    const code = (file: string): string =>
+      readFileSync(file, 'utf8')
+        .split(/\r?\n/)
+        .filter((line) => !/^\s*(\/\*|\*|\/\/)/.test(line))
+        .join('\n')
+    const offenders: string[] = []
+    for (const file of sources(path.join(process.cwd(), 'src'))) {
+      for (const option of removed) {
+        if (code(file).includes(option)) offenders.push(`${path.basename(file)}: ${option}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('grabs exactly one frame for the before/after preview', () => {
+    const args = aiPreviewFrameArgs('in.mp4', 'frame.png', 2.5)
+    expect(args).toContain('-frames:v')
+    expect(args[args.indexOf('-frames:v') + 1]).toBe('1')
+    // Seeking before the input is what keeps this one decode rather than a decode of
+    // everything up to the requested time.
+    expect(args.indexOf('-ss')).toBeLessThan(args.indexOf('-i'))
+    expect(args[args.indexOf('-fps_mode') + 1]).toBe('passthrough')
+    expect(args[args.length - 1]).toBe('frame.png')
+  })
+})
 
 describe('gif argument builders', () => {
   it('builds a palettegen filter chain with the requested resolution', () => {

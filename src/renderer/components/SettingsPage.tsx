@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Cpu, FolderOpen, Gauge, Info, Palette, SlidersHorizontal, Wrench } from 'lucide-react'
+import { Cpu, FileText, FolderOpen, Gauge, Info, Palette, SlidersHorizontal, Wrench } from 'lucide-react'
 
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -18,6 +18,14 @@ import { DITHER_MODES, GIF_COLOR_STEPS, type GifDither } from '../../shared/gifT
 import { RESOLUTION_PRESETS } from '../../shared/resolutions'
 import { THEMES } from '../../shared/types'
 import { VIDEO_SIZE_OPTIONS } from '../../shared/videoSize'
+import { NOTIFY_WHEN, type NotifyWhen } from '../../shared/notifications'
+import {
+  DEFAULT_OUTPUT_TEMPLATE,
+  OUTPUT_TOKENS,
+  renderOutputName,
+  unknownTokens,
+  type OutputNaming
+} from '../../shared/outputName'
 import type { TranslationKey } from '../i18n'
 import type {
   AppSettings,
@@ -75,6 +83,14 @@ type SettingsTab = 'output' | 'defaults' | 'tools' | 'system'
 
 interface Props {
   settings: AppSettings
+  /**
+   * The context the next export would be named with, or null when nothing is loaded.
+   *
+   * Handed in rather than built here so the name this page shows and the name the export
+   * writes come from one place - the workspace, which is where the output geometry and the
+   * encoder are decided.
+   */
+  namingPreview: Omit<OutputNaming, 'template'> | null
   defaultDir: string
   dependencies: DependencyState[]
   versions: ToolVersion[]
@@ -112,6 +128,7 @@ interface Props {
 
 export function SettingsPage({
   settings,
+  namingPreview,
   defaultDir,
   dependencies,
   versions,
@@ -165,9 +182,22 @@ export function SettingsPage({
       draft.gifColors !== settings.gifColors ||
       draft.gifDither !== settings.gifDither ||
       draft.gifLossy !== settings.gifLossy ||
+      draft.outputTemplate !== settings.outputTemplate ||
+      draft.notifyWhen !== settings.notifyWhen ||
+      draft.notifySound !== settings.notifySound ||
       draft.keepUpdateInstaller !== settings.keepUpdateInstaller,
     [draft, settings]
   )
+
+  /** The name the template in the box would produce, with the file's extension on it. */
+  const namePreview = useMemo(() => {
+    if (!namingPreview) return null
+    const base = renderOutputName(draft.outputTemplate, namingPreview)
+    return `${base}.${namingPreview.format}`
+  }, [draft.outputTemplate, namingPreview])
+
+  /** Placeholders in the box that this build cannot fill in, which drop out of the name. */
+  const unknown = useMemo(() => unknownTokens(draft.outputTemplate), [draft.outputTemplate])
 
   const missing = dependencies.filter((entry) => !entry.available)
   /** Only these are what the "install now" action would actually fetch. */
@@ -288,6 +318,50 @@ export function SettingsPage({
           <Card>
             <CardHeader>
               <CardTitle>
+                <CardHeading icon={FileText}>{t('settings.naming.title')}</CardHeading>
+              </CardTitle>
+              <CardDescription>{t('settings.naming.description')}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  className="url-input"
+                  value={draft.outputTemplate}
+                  spellCheck={false}
+                  aria-label={t('settings.naming.label')}
+                  placeholder={DEFAULT_OUTPUT_TEMPLATE}
+                  onChange={(event) => setDraft({ ...draft, outputTemplate: event.target.value })}
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => setDraft({ ...draft, outputTemplate: DEFAULT_OUTPUT_TEMPLATE })}
+                >
+                  {t('settings.naming.reset')}
+                </Button>
+              </div>
+              <p className="text-[0.8125rem] text-dim">
+                {t('settings.naming.tokens', { tokens: OUTPUT_TOKENS.join('  ') })}
+              </p>
+              {/* A typo here would silently drop out of the name, so it is worth saying. */}
+              {unknown.length > 0 && (
+                <p className="naming-warning">
+                  {t('settings.naming.unknown', { tokens: unknown.join('  ') })}
+                </p>
+              )}
+              {/* The name itself, not a description of it: the point of a template is seeing
+                  what it produces, and it updates as the box is typed in. */}
+              <p className="naming-preview">
+                <FileText aria-hidden />
+                {namePreview
+                  ? t('settings.naming.preview', { name: namePreview })
+                  : t('settings.naming.previewUnknown')}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>
                 <CardHeading icon={SlidersHorizontal}>{t('settings.behavior.title')}</CardHeading>
               </CardTitle>
             </CardHeader>
@@ -303,6 +377,36 @@ export function SettingsPage({
                   <em>{t('settings.behavior.cleanupHint')}</em>
                 </span>
               </label>
+              <div className="setting-field">
+                <Label>{t('settings.behavior.notify')}</Label>
+                <Select
+                  value={draft.notifyWhen}
+                  onValueChange={(value) => setDraft({ ...draft, notifyWhen: value as NotifyWhen })}
+                >
+                  <SelectTrigger aria-label={t('settings.behavior.notify')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {NOTIFY_WHEN.map((when) => (
+                      <SelectItem key={when} value={when}>
+                        {t(`settings.behavior.notify.${when}` as TranslationKey)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <em className="text-[0.8125rem] text-dim">{t('settings.behavior.notifyHint')}</em>
+                <div className="flex items-center gap-2.5">
+                  <Checkbox
+                    id="notify-sound"
+                    checked={draft.notifySound}
+                    disabled={draft.notifyWhen === 'off'}
+                    onCheckedChange={(checked) => setDraft({ ...draft, notifySound: checked === true })}
+                  />
+                  <Label htmlFor="notify-sound" className="font-normal">
+                    {t('settings.behavior.notifySound')}
+                  </Label>
+                </div>
+              </div>
               <div className="flex items-center gap-2.5">
                 <Checkbox
                   id="show-guide"

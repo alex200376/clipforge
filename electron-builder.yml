@@ -58,7 +58,20 @@ nsis:
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
   oneClick: false
-  perMachine: true
+  # Per-user rather than per-machine, so updates stop asking for administrator rights.
+  #
+  # `perMachine: true` put the app in `Program Files`, and electron-updater cannot write
+  # there as an ordinary user, so every single update raised UAC through its `elevate.exe`
+  # helper. Per-user installs into `%LOCALAPPDATA%\Programs`, which the updater can replace
+  # silently.
+  #
+  # The cost is a one-time migration: an upgrade cannot move an installation that already
+  # exists, so a machine updated from an older version keeps the old copy as well. The app
+  # notices that on startup and offers to run the old copy's own uninstaller - see
+  # `src/shared/leftovers.ts`.
+  perMachine: false
+  # Kept available because that cleanup does need administrator rights, and it is the old
+  # uninstaller that asks for them.
   allowElevation: true
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true

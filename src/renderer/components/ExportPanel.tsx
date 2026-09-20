@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Crop as CropIcon, Eraser, Gauge, Image, Layers, Plus, Scan, Trash2, Video } from 'lucide-react'
+import { ChevronDown, ChevronUp, Crop as CropIcon, Eraser, Eye, Gauge, Image, Layers, Plus, Scan, Trash2, Video } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -88,6 +88,14 @@ interface Props {
   onWatermarkEngine: (engine: WatermarkEngine) => void
   onDetectWatermark: () => void
   detectBusy: boolean
+  /**
+   * Renders the marks on the current frame so they can be judged before an export.
+   *
+   * Only offered for the AI engine: the instant one is immediate and predictable, and there
+   * is nothing about it a preview would reveal.
+   */
+  onPreviewFrame: () => void
+  previewBusy: boolean
   /** False when the bundled AI weights are missing from this build. */
   aiAvailable: boolean
   mute: boolean
@@ -201,6 +209,8 @@ export function ExportPanel(props: Props): JSX.Element {
     onWatermarkEngine,
     onDetectWatermark,
     detectBusy,
+    onPreviewFrame,
+    previewBusy,
     aiAvailable,
     mute,
     onMute,
@@ -467,6 +477,22 @@ export function ExportPanel(props: Props): JSX.Element {
                       : t('watermark.engine.missing')}
                 </em>
               </div>
+
+              {/*
+               * Only for the AI engine: "the fill is rebuilt from the surrounding picture"
+               * means nothing until it has been seen on this clip's own watermark, and an
+               * export is minutes of inference to find out. The instant engine is
+               * predictable enough to need no such thing.
+               */}
+              {watermarkEngine === 'ai' && (
+                <div className="field">
+                  <Button variant="secondary" onClick={onPreviewFrame} disabled={previewBusy || watermarks.length === 0}>
+                    <Eye />
+                    {previewBusy ? t('watermark.preview.busy') : t('watermark.preview.action')}
+                  </Button>
+                  <em className="field-hint">{t('watermark.preview.hint')}</em>
+                </div>
+              )}
             </>
           )}
         </Section>

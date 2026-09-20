@@ -17,7 +17,8 @@ import {
   y4mArgs
 } from '../shared/mediaArgs'
 import type { FilterOptions } from '../shared/mediaArgs'
-import { remoteSourceName } from '../shared/sources'
+import { outputBaseName, safeBaseName, type OutputNaming } from '../shared/outputName'
+import { sourceNameFor } from '../shared/sources'
 import type {
   ExportResult,
   GifRequest,
@@ -102,9 +103,19 @@ function failure(error: unknown): ExportResult {
   return { ok: false, error: payload.message, errorCode: payload.code }
 }
 
-function safeBaseName(name: string): string {
-  const base = name.replace(/\.[^.]+$/, '').replace(/[^\w .()-]+/g, '_').trim()
-  return base.length > 0 ? base : 'clipforge-output'
+/**
+ * The base name this export should write.
+ *
+ * The template and the output's geometry both arrive in the request, from the renderer,
+ * because that is where the panel decides the width, the frame rate and the encoder - so the
+ * name promised in Settings and the name written here come from one context. Substituting
+ * happens against the *source's* name rather than the copy in that context: for a link, the
+ * file that was downloaded is a scratch file called `source.mp4`, and the name to use is the
+ * link's own.
+ */
+function outputBase(name: string, naming: OutputNaming | undefined): string {
+  if (!naming) return safeBaseName(name)
+  return outputBaseName(naming, name)
 }
 
 /** Never silently overwrite a previous export. */
@@ -132,9 +143,8 @@ async function exportSource(
   source: string,
   isUrl: boolean,
   deps: ExportDeps
-): Promise<{ source: string; base: string }> {
-  if (!isUrl) return { source, base: safeBaseName(path.basename(source)) }
-  return { source: await materializeUrl(source, deps), base: safeBaseName(remoteSourceName(source)) }
+): Promise<{ source: string; name: string }> {
+  return { source: isUrl ? await materializeUrl(source, deps) : source, name: sourceNameFor(source, isUrl) }
 }
 
 /**
@@ -220,7 +230,7 @@ export async function exportGif(request: GifRequest, deps: ExportDeps): Promise<
   const ffmpeg = findBinary('ffmpeg')
   if (!ffmpeg) return failure(missingBinaryError('ffmpeg'))
 
-  let prepared: { source: string; base: string }
+  let prepared: { source: string; name: string }
   try {
     prepared = await exportSource(request.source, request.isUrl, deps)
   } catch (error) {
@@ -244,7 +254,7 @@ export async function exportGif(request: GifRequest, deps: ExportDeps): Promise<
   const window = Math.max(0.05, range.end - range.start)
   const rendered = Math.max(0.05, outputDuration(range, filters))
   const extension = format === 'webp' ? '.webp' : '.gif'
-  const output = uniqueOutput(request.outputDir, prepared.base, extension)
+  const output = uniqueOutput(request.outputDir, outputBase(prepared.name, request.naming), extension)
   // Animated WebP has its own encoder, so the GIF engine choice does not apply.
   const wantsGifski = format === 'gif' && request.engine !== 'palette'
 
@@ -279,7 +289,7 @@ export async function exportVideo(request: VideoRequest, deps: ExportDeps): Prom
   const ffmpeg = findBinary('ffmpeg')
   if (!ffmpeg) return failure(missingBinaryError('ffmpeg'))
 
-  let prepared: { source: string; base: string }
+  let prepared: { source: string; name: string }
   let aiFilters: AiExport | null
   try {
     aiFilters = aiExport(request, filtersOf(request))
@@ -291,7 +301,7 @@ export async function exportVideo(request: VideoRequest, deps: ExportDeps): Prom
 
   const filters = aiFilters?.filters ?? filtersOf(request)
   const range = aiFilters ? { start: 0, end: aiFilters.duration } : { start: request.start, end: request.end }
-  const output = uniqueOutput(request.outputDir, prepared.base, '.mp4')
+  const output = uniqueOutput(request.outputDir, outputBase(prepared.name, request.naming), '.mp4')
   const rendered = Math.max(0.05, outputDuration(range, filters))
 
   const encoders = await availableEncoders()

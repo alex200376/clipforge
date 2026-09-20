@@ -46,6 +46,20 @@ export function canOpenSource(
 }
 
 /**
+ * The name an export is built from - and the name the app shows for it.
+ *
+ * One rule for both sides on purpose. The main process writes the file and the Settings
+ * preview promises what it will be called, so any difference here is a preview that lies.
+ * A link is named after its own last path segment rather than after the file the download
+ * landed as: a fetched video is written to a scratch file called `source.mp4`, and an export
+ * of it called `source` would be named after our own bookkeeping.
+ */
+export function sourceNameFor(path: string, isUrl: boolean): string {
+  if (isUrl) return remoteSourceName(path)
+  return path.split(/[\\/]/).pop() ?? path
+}
+
+/**
  * A readable name for a link, without its query string or trailing slash. Sites
  * hand out URLs like `....mp4?4472175`, and that query is noise in the UI and an
  * invalid character in a file name.

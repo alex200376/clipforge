@@ -90,10 +90,29 @@ describe('blending the patches back in', () => {
   const graph = args[args.indexOf('-filter_complex') + 1]!
 
   it('overlays every patch at its own place', () => {
-    expect(graph).toContain('[0:v][1:v]overlay=x=76:y=26')
-    expect(graph).toContain('[v0][2:v]overlay=x=900:y=600')
+    expect(graph).toContain('[base][p1]overlay=x=76:y=26')
+    expect(graph).toContain('[v0][p2]overlay=x=900:y=600')
     expect(graph.endsWith('[out]')).toBe(true)
     expect(args[args.indexOf('-map') + 1]).toBe('[out]')
+  })
+
+  it('rebases both sides to zero before pairing frames', () => {
+    // The master is cut with `-ss`, so it carries the source's timestamps and a range that
+    // starts at 12s gives a master whose first frame is at 12s. `overlay` pairs by
+    // timestamp: without this, a removal of any range not starting at zero overlaid nothing
+    // at all and returned the clip with the watermark still in it - successfully.
+    expect(graph).toContain('[0:v]setpts=PTS-STARTPTS[base]')
+    expect(graph).toContain('[1:v]setpts=PTS-STARTPTS[p1]')
+    expect(graph).toContain('[2:v]setpts=PTS-STARTPTS[p2]')
+    // Every overlay must take its main input from a rebased branch, never the raw stream.
+    expect(graph).not.toMatch(/\[0:v\]overlay/)
+    expect(graph.match(/\[\d+:v\]overlay/g)).toBeNull()
+  })
+
+  it('still passes the picture through when there is nothing to paint', () => {
+    const none = aiCompositeArgs('/tmp/master.mkv', [], '/tmp/patched.mkv', { fps: 30, frames: 10 })
+    const bare = none[none.indexOf('-filter_complex') + 1]!
+    expect(bare).toBe('[0:v]null[out]')
   })
 
   it('lets the picture through rather than repeating the last patch', () => {

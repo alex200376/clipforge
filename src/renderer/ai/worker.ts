@@ -14,7 +14,8 @@
 // Types only: the runtime itself is loaded at run time from the file the app ships.
 import type * as Ort from 'onnxruntime-web/webgpu'
 
-import { AI_INPUT, AI_MASK_GROW, clampCoord, featherAlpha, growBox, modelReadback } from '../../shared/aiWindow'
+import { AI_INPUT, AI_MASK_GROW, clampCoord, featherAlpha, growBox, modelReadback, patchRamp } from '../../shared/aiWindow'
+import { blendFill, meanChannelDifference, temporalWeight } from '../../shared/aiTemporal'
 import { patchReverseSlices } from '../../shared/onnxGraph'
 import type { CropSpec } from '../../shared/types'
 import {
@@ -119,14 +120,43 @@ interface ReuseEntry {
   geometry: string
   pixels: Uint8ClampedArray
   patch: Uint8Array
+  /**
+   * The fill behind `patch`, kept as pixels as well as bytes.
+   *
+   * Reuse needs the bytes, because the whole point of the case it serves is that the
+   * inference is skipped and the answer sent on. Temporal blending needs the pixels, and
+   * needs the *blended* ones: the point of blending is to damp what each frame adds to the
+   * fill, so the frame after it has to carry on from where it left off rather than from
+   * the raw guess underneath - otherwise every frame would mix with the original wobble at
+   * the same weight and nothing would actually settle.
+   */
+  fill: Uint8ClampedArray | null
 }
 
 const lastWindow = new Map<number, ReuseEntry>()
 
 /** Everything about a request that would make a cached patch the wrong answer. */
 function geometryOf(region: AiInpaintRequest['region'], feather: number): string {
-  const { crop, box, scale, pad } = region
-  return [crop.x, crop.y, crop.width, crop.height, box.x, box.y, box.width, box.height, scale, pad.left, pad.top, pad.right, pad.bottom, feather].join(',')
+  const { crop, box, scale, pad, overlap, leading } = region
+  return [
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
+    box.x,
+    box.y,
+    box.width,
+    box.height,
+    scale,
+    pad.left,
+    pad.top,
+    pad.right,
+    pad.bottom,
+    overlap,
+    leading.left ? 1 : 0,
+    leading.top ? 1 : 0,
+    feather
+  ].join(',')
 }
 
 /**
@@ -582,7 +612,7 @@ async function runWithFallback<T>(which: 'lama' | 'detector', run: (session: Ses
  */
 async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array[]; note?: string }> {
   if (!lama) throw new Error('The inpainting model is not loaded yet.')
-  const { crop, box, modelBox, scale, pad } = request.region
+  const { crop, box, modelBox, scale, pad, overlap, leading } = request.region
   const scaled = {
     width: Math.max(1, Math.round(crop.width * scale)),
     height: Math.max(1, Math.round(crop.height * scale))
@@ -594,10 +624,16 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
   if (!windowCtx || !patchCtx) throw new Error('This build cannot create the canvas needed for AI removal.')
 
   const plane = AI_INPUT * AI_INPUT
-  // The mask covers the box *and* a few pixels past it: a mask that stops at the mark's
-  // edge leaves those edge pixels in the picture the fill is blended against, which is
-  // how a removed logo keeps its outline. The composite still only replaces the marked
+  // The mask covers the marked area *and* a few pixels past it: a mask that stops at the
+  // mark's edge leaves those edge pixels in the picture the fill is blended against, which
+  // is how a removed logo keeps its outline. The composite still only replaces the marked
   // box, so nothing outside it is invented.
+  //
+  // `modelBox` is the whole marked area as this window sees it rather than the slice this
+  // window owns, and the difference only appears on a mark large enough to be cut up: a
+  // window in the middle of one has the rest of the mark inside its own picture, and
+  // picture the network can see is context it builds the fill from - so a watermark left
+  // unmasked there comes back painted into the hole.
   const grown = growBox(modelBox, AI_MASK_GROW, AI_INPUT)
   const mask = new Float32Array(plane)
   for (let y = grown.y; y < grown.y + grown.height; y += 1) {
@@ -615,6 +651,8 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
   const spent = { prep: 0, model: 0, compose: 0, reused: 0 }
   const geometry = geometryOf(request.region, request.feather)
   let reused = 0
+  /** Frames whose fill was held partly still, which is the number that stops the boiling. */
+  let eased = 0
   for (const bytes of request.frames) {
     const frameStarted = Date.now()
     const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]))
@@ -650,7 +688,13 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
       const target = patchCtx.createImageData(Math.max(1, crop.width), Math.max(1, crop.height))
       for (let y = 0; y < crop.height; y += 1) {
         for (let x = 0; x < crop.width; x += 1) {
-          const alpha = featherAlpha([box], x, y, request.feather)
+          // Two rules in one number. `featherAlpha` says which pixels this window replaces
+          // outright and ramps the two just outside the box into the untouched picture;
+          // `patchRamp` fades this window in over the one before it wherever a mark was cut
+          // into pieces, and is exactly 1 when it was not.
+          const alpha = Math.round(
+            featherAlpha([box], x, y, request.feather) * patchRamp(box, x, y, { overlap, leading })
+          )
           const offset = (y * crop.width + x) * 4
           target.data[offset + 3] = alpha
           if (alpha === 0) continue
@@ -665,13 +709,26 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
           target.data[offset + 2] = toByte(sample(filled, 2, mx, my))
         }
       }
+      // The fill about to be written wobbles from frame to frame even where the picture
+      // behind it has barely moved, and that wobble is what "the removed part shimmers"
+      // looks like: a still area that boils. A frame keeps most of the previous fill when
+      // little changed and none of it when a lot did, so a cut or a fast pan carries nothing
+      // across. The geometry check is what makes the comparison mean anything: a different
+      // plan asked a different question, and the old answer is not a fill of the same hole.
+      if (cached && cached.geometry === geometry && cached.fill && cached.fill.length === target.data.length) {
+        const weight = temporalWeight(meanChannelDifference(pixels, cached.pixels))
+        if (weight > 0) {
+          blendFill(target.data, cached.fill, weight)
+          eased += 1
+        }
+      }
       patchCtx.putImageData(target, 0, 0)
       const blob = await patch.convertToBlob({ type: 'image/png' })
       const painted = new Uint8Array(await blob.arrayBuffer())
       out.push(painted)
       // `getImageData` hands back a copy rather than a view into the canvas, so this is
       // the picture as it was drawn, safe to compare against the next frame's.
-      lastWindow.set(request.region.index, { geometry, pixels, patch: painted })
+      lastWindow.set(request.region.index, { geometry, pixels, patch: painted, fill: target.data })
       spent.compose += Date.now() - modelEnded
     } finally {
       bitmap.close()
@@ -681,7 +738,7 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
     const count = request.frames.length
     const per = (value: number): string => (value / count / 1000).toFixed(2)
     notes.push(
-      `Inpainting: ${(spent.prep + spent.model + spent.compose + spent.reused) / count / 1000}s a frame over ${count} frame(s) - ${per(spent.model)}s in the network, ${per(spent.prep)}s reading the window, ${per(spent.compose)}s writing the fill back, ${reused} of ${count} frame(s) already known, on ${ortThreads} thread(s)`
+      `Inpainting: ${(spent.prep + spent.model + spent.compose + spent.reused) / count / 1000}s a frame over ${count} frame(s) - ${per(spent.model)}s in the network, ${per(spent.prep)}s reading the window, ${per(spent.compose)}s writing the fill back, ${reused} of ${count} frame(s) already known, ${eased} held steady against the frame before, on ${ortThreads} thread(s)`
     )
   }
   // Notes collected while painting - the GPU giving up on a kernel, most of all - travel

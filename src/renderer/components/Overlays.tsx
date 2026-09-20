@@ -1,8 +1,9 @@
-import { AlertTriangle, CircleCheck, FolderOpen, Image as ImageIcon, X } from 'lucide-react'
-import { useEffect } from 'react'
+import { AlertTriangle, CircleCheck, FolderOpen, Image as ImageIcon, Play, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { Button } from './ui/button'
+import { Label } from './ui/label'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
 import type { ErrorNotice } from '../types'
@@ -88,6 +89,38 @@ export function Onboarding({ onDismiss }: { onDismiss: () => void }): JSX.Elemen
   )
 }
 
+/**
+ * The one-time notice that an older installation is still on this machine.
+ *
+ * Raised because updates no longer install for all users, and an upgrade cannot move a copy
+ * that is already there - so the two exist side by side until someone removes one. It says
+ * where it is and offers to start that copy's own uninstaller, which is what asks for
+ * administrator rights; the app never removes anything itself.
+ */
+export function LeftoverInstall({
+  location,
+  onRemove,
+  onDismiss
+}: {
+  location: string
+  onRemove: () => void
+  onDismiss: () => void
+}): JSX.Element {
+  const { t } = useI18n()
+  return (
+    <GuideCard
+      title={t('leftover.title')}
+      onDismiss={onDismiss}
+      actions={[
+        { label: t('leftover.remove'), onClick: onRemove },
+        { label: t('leftover.keep'), onClick: onDismiss, variant: 'ghost' }
+      ]}
+    >
+      <p className="guide-line">{t('leftover.body', { dir: location })}</p>
+    </GuideCard>
+  )
+}
+
 export function SessionPrompt({
   name,
   onResume,
@@ -154,11 +187,13 @@ export interface ToastState {
 export function Toast({
   toast,
   onClose,
-  onReveal
+  onReveal,
+  onOpen
 }: {
   toast: ToastState | null
   onClose: () => void
   onReveal: (filePath: string) => void
+  onOpen: (filePath: string) => void
 }): JSX.Element | null {
   const { t } = useI18n()
   useEffect(() => {
@@ -176,9 +211,19 @@ export function Toast({
         <span>{toast.body}</span>
       </div>
       <div className="toast-actions">
-        {/* One action, not two: revealing the file already opens the folder that holds it. */}
+        {/*
+         * Watching the clip used to mean going and finding it: the only action here opened
+         * the folder that holds it. Opening the file is the action most people want at the
+         * moment it is ready, so it leads, and revealing stays beside it for the other case.
+         */}
         {toast.path && (
-          <Button size="sm" variant="secondary" onClick={() => onReveal(toast.path!)}>
+          <Button size="sm" onClick={() => onOpen(toast.path!)}>
+            <Play />
+            {t('toast.open')}
+          </Button>
+        )}
+        {toast.path && (
+          <Button size="sm" variant="ghost" onClick={() => onReveal(toast.path!)}>
             <FolderOpen />
             {t('toast.reveal')}
           </Button>
@@ -202,6 +247,102 @@ const SHORTCUTS: Array<{ keys: string; label: TranslationKey }> = [
   { keys: 'F11', label: 'shortcuts.fullscreen' },
   { keys: '?', label: 'shortcuts.help' }
 ]
+
+/**
+ * The before/after comparison for an AI removal, on one frame.
+ *
+ * A wipe rather than two pictures side by side: the two images are identical everywhere
+ * except inside the marked area, so the only way to judge the fill is to have the same pixels
+ * on both sides of a line and drag it. Beside each other, the eye spends its time finding the
+ * seam between two panes and none of it on the removal.
+ *
+ * The divider is a range input, which is the whole interaction - draggable with a mouse,
+ * movable with the arrow keys, and reachable by tab - instead of a pointer handler that would
+ * have to reimplement all three.
+ */
+export function FrameCompare({
+  preview,
+  onClose
+}: {
+  preview: { before: string; after: string; width: number; height: number; seconds: number; windows: number } | null
+  onClose: () => void
+}): JSX.Element | null {
+  const { t } = useI18n()
+  const [split, setSplit] = useState(50)
+
+  useEffect(() => {
+    if (!preview) return
+    setSplit(50)
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [preview, onClose])
+
+  if (!preview) return null
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div
+        className="sheet compare-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('watermark.preview.title')}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="sheet-head">
+          <strong>{t('watermark.preview.title')}</strong>
+          <span className="compare-time">
+            {preview.windows > 1
+              ? t('watermark.preview.tookWindows', { seconds: preview.seconds.toFixed(1), windows: preview.windows })
+              : t('watermark.preview.took', { seconds: preview.seconds.toFixed(1) })}
+          </span>
+          <Button size="icon-sm" variant="ghost" className="btn-quiet" onClick={onClose} aria-label={t('shortcuts.close')}>
+            <X />
+          </Button>
+        </div>
+
+        <div
+          className="compare-stage"
+          style={{ aspectRatio: `${preview.width} / ${preview.height}` }}
+        >
+          <img className="compare-image" src={preview.before} alt={t('watermark.preview.before')} />
+          {/*
+           * The 'after' picture is clipped rather than resized: its wrapper is the split
+           * width and hides its overflow, while the picture itself stays the width of the
+           * whole stage - which is `100 / split` of its wrapper. Both pictures are therefore
+           * pixel-for-pixel aligned, and the drag only moves where one stops being drawn.
+           */}
+          <div className="compare-after" style={{ width: `${split}%` }}>
+            <img
+              className="compare-image"
+              src={preview.after}
+              alt={t('watermark.preview.after')}
+              style={{ width: split > 0 ? `${10000 / split}%` : '100%' }}
+            />
+          </div>
+          <span className="compare-line" style={{ left: `${split}%` }} aria-hidden />
+          <span className="compare-label compare-label-before">{t('watermark.preview.before')}</span>
+          <span className="compare-label compare-label-after">{t('watermark.preview.after')}</span>
+        </div>
+
+        <div className="compare-controls">
+          <Label>{t('watermark.preview.drag')}</Label>
+          <input
+            className="compare-slider"
+            type="range"
+            min={0}
+            max={100}
+            value={split}
+            aria-label={t('watermark.preview.drag')}
+            onChange={(event) => setSplit(Number(event.target.value))}
+          />
+          <span className="compare-hint">{t('watermark.preview.hint')}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export function ShortcutSheet({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element | null {
   const { t } = useI18n()

@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest'
 
 import {
   AI_INPUT,
+  AI_TILE_CONTEXT,
+  AI_TILE_OVERLAP,
   boxInModel,
   contextMargin,
   featherAlpha,
   fitMargin,
   growBox,
+  intersectBox,
   modelReadback,
+  patchRamp,
   patchSize,
   planMargins,
+  planPatches,
   planWindow
 } from '../src/shared/aiWindow'
 import type { CropSpec } from '../src/shared/types'
@@ -222,5 +227,226 @@ describe('the blend ramp inside a marked box', () => {
 
   it('ignores everything when there is nothing to blend', () => {
     expect(featherAlpha([], 20, 20, 2)).toBe(0)
+  })
+})
+
+describe('a mark too large for the model gets more than one window', () => {
+  const big = box(400, 300, 900, 400)
+
+  it('leaves a mark that fits as exactly one window', () => {
+    // The regression that matters most here: the ordinary case - a logo far smaller than
+    // the model's square - has to produce the same window it always did, or every removal
+    // in the app changes at once.
+    const region = box(100, 50, 200, 80)
+    const single = planWindow(region, frame, { margin: contextMargin(region) })!
+    const patches = planPatches([region], frame)
+    expect(patches).toHaveLength(1)
+    expect(patches[0]!.crop).toEqual(single.crop)
+    expect(patches[0]!.scale).toBe(single.scale)
+    expect(patches[0]!.pad).toEqual(single.pad)
+    expect(patches[0]!.slice).toEqual(region)
+    expect(patches[0]!.box).toEqual({ x: region.x - single.crop.x, y: region.y - single.crop.y, width: 200, height: 80 })
+    expect(patches[0]!.overlap).toBe(0)
+    expect(patches[0]!.leading).toEqual({ left: false, top: false })
+  })
+
+  it('cuts a mark wider than the square into pieces, each drawn 1:1', () => {
+    const patches = planPatches([big], frame)
+    expect(patches.length).toBeGreaterThan(1)
+    for (const patch of patches) {
+      // The whole point: no window is scaled any more, so the pixels the fill blends into
+      // are the picture's own rather than a resampled copy of them.
+      expect(patch.scale).toBe(1)
+      expect(Math.max(patch.crop.width, patch.crop.height)).toBeLessThanOrEqual(AI_INPUT)
+      expect(patch.crop.width).toBeLessThanOrEqual(big.width + AI_TILE_CONTEXT * 2)
+    }
+  })
+
+  it('covers the mark exactly, with no gap and nothing beyond it', () => {
+    const patches = planPatches([big], frame)
+    const left = Math.min(...patches.map((patch) => patch.slice.x))
+    const top = Math.min(...patches.map((patch) => patch.slice.y))
+    const right = Math.max(...patches.map((patch) => patch.slice.x + patch.slice.width))
+    const bottom = Math.max(...patches.map((patch) => patch.slice.y + patch.slice.height))
+    expect({ left, top, right, bottom }).toEqual({
+      left: big.x,
+      top: big.y,
+      right: big.x + big.width,
+      bottom: big.y + big.height
+    })
+    // And every pixel of the mark is inside some window's slice, so nothing is skipped.
+    for (let y = big.y; y < big.y + big.height; y += 24) {
+      for (let x = big.x; x < big.x + big.width; x += 24) {
+        const covered = patches.some(
+          (patch) =>
+            x >= patch.slice.x &&
+            x < patch.slice.x + patch.slice.width &&
+            y >= patch.slice.y &&
+            y < patch.slice.y + patch.slice.height
+        )
+        expect([x, y, covered]).toEqual([x, y, true])
+      }
+    }
+  })
+
+  it('overlaps neighbouring windows and fades only the later one in', () => {
+    const patches = planPatches([big], frame)
+    const first = patches[0]!
+    const second = patches[1]!
+    expect(second.overlap).toBe(AI_TILE_OVERLAP)
+    expect(second.leading).toEqual({ left: true, top: false })
+    // Reading order is composite order, and the earlier window is the opaque one.
+    expect(second.slice.x).toBe(first.slice.x + first.slice.width - AI_TILE_OVERLAP)
+    expect(first.leading).toEqual({ left: false, top: false })
+  })
+
+  it('never lets the mark show through the join between two windows', () => {
+    // The reason the ramp is lopsided: with both windows fading - one out, one in - the
+    // blend leaves a fraction of the *original* pixels standing, and inside a mark the
+    // original is the watermark. Laid out along the whole mark, every pixel has to be
+    // replaced outright by at least one window.
+    const patches = planPatches([big], frame)
+    for (let y = big.y; y < big.y + big.height; y += 7) {
+      for (let x = big.x; x < big.x + big.width; x += 7) {
+        const strongest = Math.max(
+          ...patches.map((patch) => {
+            const local = { x: x - patch.crop.x, y: y - patch.crop.y }
+            return Math.round(
+              featherAlpha([patch.box], local.x, local.y, 2) *
+                patchRamp(patch.box, local.x, local.y, { overlap: patch.overlap, leading: patch.leading })
+            )
+          })
+        )
+        expect([x, y, strongest]).toEqual([x, y, 255])
+      }
+    }
+  })
+
+  it('masks the whole mark as each window sees it, not only its own slice', () => {
+    // A window in the middle of a large mark has the rest of the mark in its own picture.
+    // Picture the network can see is context it builds the fill from, so a watermark left
+    // unmasked there is a watermark painted back into the hole.
+    const patches = planPatches([big], frame)
+    const middle = patches[Math.floor(patches.length / 2)]!
+    const seen = intersectBox(big, middle.crop)
+    expect(seen).not.toBeNull()
+    expect(middle.mask).toEqual({ x: seen!.x - middle.crop.x, y: seen!.y - middle.crop.y, width: seen!.width, height: seen!.height })
+    expect(middle.mask.width).toBeGreaterThanOrEqual(middle.box.width)
+  })
+
+  it('handles a mark that is only too wide, and one only too tall', () => {
+    const wide = planPatches([box(100, 400, 1200, 120)], frame)
+    expect(wide.length).toBeGreaterThan(1)
+    expect(wide.every((patch) => patch.scale === 1)).toBe(true)
+    const tall = planPatches([box(700, 100, 120, 900)], frame)
+    expect(tall.length).toBeGreaterThan(1)
+    expect(tall.every((patch) => patch.scale === 1)).toBe(true)
+  })
+
+  it('splits only the axis that is actually too long', () => {
+    // A banner along the bottom of the frame is wide and short. Splitting its height as well
+    // would double the inferences per frame for nothing, and the height of a mark this size
+    // fits the input once the collar is fitted to what is left.
+    const patches = planPatches([box(100, 400, 700, 430)], frame)
+    expect(patches).toHaveLength(2)
+    expect(patches.every((patch) => patch.scale === 1)).toBe(true)
+    for (const patch of patches) {
+      expect(patch.slice.height).toBe(430)
+      expect(patch.crop.height).toBeLessThanOrEqual(AI_INPUT)
+      expect(patch.leading.top).toBe(false)
+    }
+    expect(patches[0]!.leading.left).toBe(false)
+    expect(patches[1]!.leading.left).toBe(true)
+  })
+
+  it('shrinks the collar rather than the picture for a mark just over the square', () => {
+    // 470 wide cannot take a full 48-pixel collar in a 512 square, and it does not need to:
+    // the collar is what gives, because giving it up costs nothing while scaling the window
+    // costs exactly the softness this path exists to avoid.
+    const region = box(100, 100, 470, 300)
+    const patches = planPatches([region], frame)
+    expect(patches).toHaveLength(1)
+    expect(patches[0]!.scale).toBe(1)
+    expect(patches[0]!.crop.width).toBeLessThanOrEqual(AI_INPUT)
+    expect(patches[0]!.crop.width).toBeGreaterThan(region.width)
+  })
+
+  it('gives every window a collar, except where the frame itself ends', () => {
+    // A window that is nothing but mark leaves the network no picture to build the fill
+    // from, so a mark this large is cut up rather than squeezed into one square - which is
+    // what makes a 512-pixel mark take more than one window instead of one window with no
+    // collar at all.
+    const patches = planPatches([box(100, 100, 512, 512)], frame)
+    expect(patches.length).toBeGreaterThan(1)
+    for (const patch of patches) {
+      // A gap of zero is only allowed where there is no frame left to take one from.
+      const sides = [
+        { gap: patch.box.x, flush: patch.crop.x === 0 },
+        {
+          gap: patch.crop.width - (patch.box.x + patch.box.width),
+          flush: patch.crop.x + patch.crop.width === frame.width
+        },
+        { gap: patch.box.y, flush: patch.crop.y === 0 },
+        {
+          gap: patch.crop.height - (patch.box.y + patch.box.height),
+          flush: patch.crop.y + patch.crop.height === frame.height
+        }
+      ]
+      for (const side of sides) {
+        expect([side.gap >= 16 || side.flush, side]).toEqual([true, side])
+      }
+    }
+  })
+
+  it('keeps the pieces inside the frame when the mark touches an edge', () => {
+    const edge = box(0, 0, 1000, 700)
+    const patches = planPatches([edge], frame)
+    for (const patch of patches) {
+      expect(patch.crop.x).toBeGreaterThanOrEqual(0)
+      expect(patch.crop.y).toBeGreaterThanOrEqual(0)
+      expect(patch.crop.x + patch.crop.width).toBeLessThanOrEqual(frame.width)
+      expect(patch.crop.y + patch.crop.height).toBeLessThanOrEqual(frame.height)
+      expect(patch.scale).toBe(1)
+    }
+  })
+})
+
+describe('the fade-in ramp between windows', () => {
+  const patchBox = box(0, 0, 400, 400)
+
+  it('does nothing at all when the mark was a single window', () => {
+    for (const [x, y] of [
+      [0, 0],
+      [1, 1],
+      [200, 200],
+      [399, 399]
+    ] as const) {
+      expect(patchRamp(patchBox, x, y, { overlap: 0, leading: { left: true, top: true } })).toBe(1)
+    }
+  })
+
+  it('is zero at the leading edge and complete by the end of the band', () => {
+    const leading = { left: true, top: false }
+    expect(patchRamp(patchBox, 0, 10, { overlap: AI_TILE_OVERLAP, leading })).toBeLessThan(0.05)
+    expect(patchRamp(patchBox, AI_TILE_OVERLAP - 1, 10, { overlap: AI_TILE_OVERLAP, leading })).toBeGreaterThan(0.9)
+    expect(patchRamp(patchBox, AI_TILE_OVERLAP + 200, 10, { overlap: AI_TILE_OVERLAP, leading })).toBe(1)
+  })
+
+  it('rises the whole way across the band', () => {
+    const leading = { left: true, top: false }
+    let previous = -1
+    for (let x = 0; x <= AI_TILE_OVERLAP; x += 1) {
+      const value = patchRamp(patchBox, x, 0, { overlap: AI_TILE_OVERLAP, leading })
+      expect(value).toBeGreaterThanOrEqual(previous)
+      previous = value
+    }
+    expect(previous).toBe(1)
+  })
+
+  it('only fades on the edges that really have a neighbour', () => {
+    // The grid's outer edges must keep the ordinary box feather, or the removal would end
+    // in a hard line exactly where the mark does.
+    expect(patchRamp(patchBox, 0, 0, { overlap: AI_TILE_OVERLAP, leading: { left: false, top: false } })).toBe(1)
+    expect(patchRamp(patchBox, 0, 0, { overlap: AI_TILE_OVERLAP, leading: { left: true, top: true } })).toBeLessThan(0.001)
   })
 })

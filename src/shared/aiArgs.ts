@@ -18,7 +18,7 @@
  * costs no extra lossy generation - the same single encode a normal export does.
  */
 
-import { planMargins } from './aiWindow'
+import { planMargins, planPatches } from './aiWindow'
 import type { CropSpec } from './types'
 
 /** Everything the patches depend on. Any change means fresh inference. */
@@ -53,6 +53,32 @@ export function aiSessionKey(input: AiSessionInput): string {
     )
     .sort()
     .join(';')
+  // The windows themselves, not only the boxes they came from: a mark too large for one
+  // window is cut into a grid of them, and the grid is what decides which pixels each
+  // inference is asked about. Sorted so that marking the same two areas in the other order
+  // is still a free re-run, which is what the sorted boxes above already did for margins.
+  // `regionIndex` is deliberately absent: it labels which mark a window belongs to and has
+  // no say in what the window contains or how it blends, so including it would make marking
+  // the same two areas in the other order cost a full re-inference for identical work.
+  const patches = planPatches(input.regions, input.frame)
+    .map((patch) =>
+      [
+        Math.round(patch.crop.x),
+        Math.round(patch.crop.y),
+        Math.round(patch.crop.width),
+        Math.round(patch.crop.height),
+        Math.round(patch.box.x),
+        Math.round(patch.box.y),
+        Math.round(patch.box.width),
+        Math.round(patch.box.height),
+        Math.round(patch.overlap),
+        patch.leading.left ? 1 : 0,
+        patch.leading.top ? 1 : 0,
+        patch.scale.toFixed(3)
+      ].join(',')
+    )
+    .sort()
+    .join(';')
   return [
     input.source,
     round(input.start),
@@ -63,6 +89,7 @@ export function aiSessionKey(input: AiSessionInput): string {
     // margins happen to round to the same number.
     `${Math.round(input.frame.width)}x${Math.round(input.frame.height)}`,
     regions,
+    patches,
     input.model
   ].join('|')
 }
@@ -123,6 +150,16 @@ export function aiWindowArgs(master: string, pattern: string, crop: CropSpec): s
  * `eof_action=pass` is the safe failure: if a patch sequence ever turns out shorter
  * than the master, the remaining frames pass through untouched instead of repeating
  * the last patch - which would look like a watermark stuck on the screen.
+ *
+ * Both sides are rebased to zero with `setpts=PTS-STARTPTS`, and that is not tidiness.
+ * The master is cut with `-ss`, so it carries the source's timestamps: selecting a range
+ * that starts at 12s produced a master whose first frame sits at 12s, while the patch
+ * PNG sequence starts at zero. `overlay` pairs frames by timestamp, so the two never
+ * met - and the failure was invisible, because the graph is still valid and the output
+ * is still the clip: the export finished, reported success, and handed back the clip with
+ * the watermark exactly where it had been. Rebasing both sides makes the pairing hold for
+ * any start time, and it is also what makes the documented "the AI master is already
+ * trimmed, so the range starts at zero" true of the file itself rather than of a hope.
  */
 export function aiCompositeArgs(
   master: string,
@@ -131,12 +168,16 @@ export function aiCompositeArgs(
   options: { fps: number; frames: number }
 ): string[] {
   const inputs = patches.flatMap((patch) => ['-framerate', options.fps.toFixed(3), '-i', patch.pattern])
+  const rebased = patches.map((_patch, index) => `[${index + 1}:v]setpts=PTS-STARTPTS[p${index + 1}]`)
   const chains = patches.map((patch, index) => {
-    const source = index === 0 ? '[0:v]' : `[v${index - 1}]`
+    const source = index === 0 ? '[base]' : `[v${index - 1}]`
     const label = index === patches.length - 1 ? '[out]' : `[v${index}]`
-    return `${source}[${index + 1}:v]overlay=x=${patch.x}:y=${patch.y}:eof_action=pass:format=auto${label}`
+    return `${source}[p${index + 1}]overlay=x=${patch.x}:y=${patch.y}:eof_action=pass:format=auto${label}`
   })
-  const graph = patches.length === 0 ? '[0:v]null[out]' : chains.join(';')
+  const graph =
+    patches.length === 0
+      ? '[0:v]null[out]'
+      : ['[0:v]setpts=PTS-STARTPTS[base]', ...rebased, ...chains].join(';')
   return [
     '-y',
     '-i',
@@ -186,6 +227,32 @@ export function aiSampleArgs(
     '-frames:v',
     String(Math.max(1, options.count)),
     pattern
+  ]
+}
+
+/**
+ * Exactly one frame of the clip, as a PNG.
+ *
+ * Seeks before the input so ffmpeg jumps to the nearest keyframe and decodes forward to
+ * the requested time - a seek into a long clip is otherwise a full decode from the start,
+ * for a picture the user asked to see *now*.
+ *
+ * `-fps_mode passthrough` rather than the older `-vsync 0`: the bundled ffmpeg is version 9,
+ * which removed `-vsync` outright, so every before/after preview failed with "Unrecognized
+ * option 'vsync'" until this matched the option name the rest of this file uses.
+ */
+export function aiPreviewFrameArgs(source: string, output: string, time: number): string[] {
+  return [
+    '-y',
+    '-ss',
+    Math.max(0, time).toFixed(3),
+    '-i',
+    source,
+    '-frames:v',
+    '1',
+    '-fps_mode',
+    'passthrough',
+    output
   ]
 }
 

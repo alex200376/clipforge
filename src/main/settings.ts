@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
 import { DEFAULT_GIF_TUNING, normalizeGifTuning } from '../shared/gifTuning'
+import { isNotifyWhen } from '../shared/notifications'
+import { DEFAULT_OUTPUT_TEMPLATE } from '../shared/outputName'
 import { RESOLUTION_PRESETS } from '../shared/resolutions'
 import type { AppSettings, EncoderChoice, GifEngine, Language, OutputFormat } from '../shared/types'
 import { THEMES } from '../shared/types'
@@ -12,6 +14,13 @@ const DEFAULTS: AppSettings = {
   language: 'en',
   theme: 'midnight',
   autoCleanup: true,
+  // `{name}` is what every earlier version wrote, so an existing user's names do not change
+  // under them the moment they install an update.
+  outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
+  // The rule this app shipped with, now that it is a choice rather than a hard-coded one.
+  notifyWhen: 'unfocused',
+  notifySound: true,
+  leftoverInstallSeen: '',
   defaultEngine: 'gifski',
   defaultFps: 24,
   defaultWidth: 480,
@@ -59,6 +68,16 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     language: pick(raw.language, LANGUAGES, DEFAULTS.language),
     theme: pick(raw.theme, [...THEMES], DEFAULTS.theme),
     autoCleanup: raw.autoCleanup !== false,
+    // A template is free text - it is the one setting whose whole point is that the user
+    // writes it - so it is bounded rather than checked against a list. An empty one falls
+    // back to the default instead of writing files with no name at all.
+    outputTemplate:
+      typeof raw.outputTemplate === 'string' && raw.outputTemplate.trim().length > 0
+        ? raw.outputTemplate.slice(0, 200)
+        : DEFAULTS.outputTemplate,
+    notifyWhen: isNotifyWhen(raw.notifyWhen) ? raw.notifyWhen : DEFAULTS.notifyWhen,
+    notifySound: raw.notifySound !== false,
+    leftoverInstallSeen: typeof raw.leftoverInstallSeen === 'string' ? raw.leftoverInstallSeen : '',
     defaultEngine: pick(raw.defaultEngine, ENGINES, DEFAULTS.defaultEngine),
     defaultFps: Number.isFinite(fps) ? Math.max(10, Math.min(30, Math.round(fps))) : DEFAULTS.defaultFps,
     defaultWidth: pick(raw.defaultWidth, WIDTHS, DEFAULTS.defaultWidth),

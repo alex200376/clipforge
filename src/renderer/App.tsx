@@ -12,9 +12,12 @@ import {
   outputDuration
 } from '../shared/mediaArgs'
 import { DEFAULT_GIF_TUNING, type GifTuning } from '../shared/gifTuning'
-import { isRemoteUrl } from '../shared/sources'
+import { isWorthMentioning, type InstalledCopy } from '../shared/leftovers'
+import { DEFAULT_OUTPUT_TEMPLATE, type OutputNaming } from '../shared/outputName'
+import { isRemoteUrl, sourceNameFor } from '../shared/sources'
 import { videoSizeBytes } from '../shared/videoSize'
-import { findWatermarks, onAiNote, preloadModels, runAiRemoval } from './ai/client'
+import { findWatermarks, onAiNote, preloadModels, previewRemoval, runAiRemoval } from './ai/client'
+import type { AiFramePreview } from './ai/client'
 import type {
   AiAssets,
   AppSettings,
@@ -42,7 +45,16 @@ import { planSteps } from './progress'
 import { useExportProgress } from './useProgress'
 import { InstallCard } from './components/InstallCard'
 import type { InstallSummary } from './components/InstallCard'
-import { DropZone, ErrorCard, Onboarding, SessionPrompt, ShortcutSheet, Toast } from './components/Overlays'
+import {
+  DropZone,
+  ErrorCard,
+  FrameCompare,
+  LeftoverInstall,
+  Onboarding,
+  SessionPrompt,
+  ShortcutSheet,
+  Toast
+} from './components/Overlays'
 import type { ToastState } from './components/Overlays'
 import { OutputPanel } from './components/OutputPanel'
 import type { OutputResult } from './components/OutputPanel'
@@ -78,6 +90,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   language: 'en',
   theme: 'midnight',
   autoCleanup: true,
+  outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
+  notifyWhen: 'unfocused',
+  notifySound: true,
+  leftoverInstallSeen: '',
   defaultEngine: 'gifski',
   defaultFps: 24,
   defaultWidth: 480,
@@ -184,6 +200,9 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [logs, setLogs] = useState<LogEntryList>([])
   const [notice, setNotice] = useState<string | null>(null)
   const [errorNotice, setErrorNotice] = useState<ErrorNotice | null>(null)
+  const [framePreview, setFramePreview] = useState<AiFramePreview | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
+  const [leftover, setLeftover] = useState<InstalledCopy | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const [lastOutput, setLastOutput] = useState<string | null>(null)
   const [lastSize, setLastSize] = useState(0)
@@ -292,8 +311,11 @@ export function App({ initialSettings }: Props): JSX.Element {
 
   useEffect(() => {
     void (async () => {
+      /** Read here so the installation check below can compare against it. */
+      let leftoverSeen = ''
       try {
         const loaded = await window.clipforge.getSettings()
+        leftoverSeen = loaded.leftoverInstallSeen
         setSettings(loaded)
         if (!defaultsApplied.current) {
           // The stored export defaults seed the panel exactly once, so they never
@@ -315,6 +337,14 @@ export function App({ initialSettings }: Props): JSX.Element {
         setDefaultDir(await window.clipforge.defaultOutputDir())
       } catch {
         setDefaultDir('')
+      }
+      try {
+        // Worth raising once, and only once per folder: see `shared/leftovers.ts`. A cheap
+        // filesystem probe, so it is safe on the path to the first paint.
+        const copy = await window.clipforge.leftoverInstall()
+        if (isWorthMentioning(copy, leftoverSeen)) setLeftover(copy)
+      } catch {
+        /* nothing to say about installations we could not look at */
       }
       try {
         const session = await window.clipforge.loadSession()
@@ -966,6 +996,67 @@ export function App({ initialSettings }: Props): JSX.Element {
   const effectiveFps = budget !== 'off' && estimate.fitted ? estimate.fitted.fps : fps
   const effectiveWidth = budget !== 'off' && estimate.fitted ? estimate.fitted.width : width
 
+  /**
+   * What the next export would be called.
+   *
+   * Assembled here rather than in the main process because every piece that matters is
+   * decided on this side: the pixel size after the crop and any budget fitting, the rate, the
+   * encoder, the format. The Settings page is handed this same context, so the name it shows
+   * as you edit the template is the name the export writes - one context, two readers, and no
+   * way for the promise and the file to disagree.
+   */
+  /**
+   * Renders the marked areas on the frame under the playhead.
+   *
+   * Deliberately on the current frame rather than on the first one: someone who has scrubbed
+   * to a spot where the fill looks risky wants an answer about that spot, and the frame the
+   * playhead is on is the one they are looking at.
+   */
+  const runFramePreview = useCallback(async (): Promise<void> => {
+    if (!source || activeWatermarks.length === 0 || previewBusy) return
+    setPreviewBusy(true)
+    try {
+      const assets = aiAssetsState ?? (await window.clipforge.aiAssets())
+      const shots = await previewRemoval(
+        {
+          source: source.path,
+          time: currentTime,
+          regions: activeWatermarks,
+          width: source.width,
+          height: source.height
+        },
+        AI_FEATHER,
+        assets
+      )
+      setFramePreview(shots)
+      pushLog(
+        t('watermark.preview.log', { seconds: shots.seconds.toFixed(1), windows: shots.windows }),
+        'raw'
+      )
+    } catch (error) {
+      pushLog(errorMessage(error), 'error')
+    } finally {
+      setPreviewBusy(false)
+    }
+  }, [source, activeWatermarks, previewBusy, currentTime, aiAssetsState, pushLog, t])
+
+  const naming = useMemo<Omit<OutputNaming, 'now'> | null>(() => {
+    if (!source) return null
+    return {
+      template: settings.outputTemplate,
+      name: sourceNameFor(source.path, source.kind === 'url'),
+      width: outputFrame?.width ?? null,
+      height: outputFrame?.height ?? null,
+      fps: isGif ? effectiveFps : source.fps > 0 ? source.fps : null,
+      format: isGif ? format : 'mp4',
+      engine: !isGif
+        ? (hardware?.videoEncoder ?? 'libx264')
+        : format === 'webp'
+          ? 'webp'
+          : engine
+    }
+  }, [source, settings.outputTemplate, outputFrame, isGif, effectiveFps, format, engine, hardware])
+
   const summary: Summary = useMemo(
     () => ({
       duration: formatTime(clipSeconds),
@@ -1067,7 +1158,10 @@ export function App({ initialSettings }: Props): JSX.Element {
             aiToken,
             speed,
             boomerang,
-            optimize: optimize && format === 'gif'
+            optimize: optimize && format === 'gif',
+            // The date and the time are pinned at the moment of the export rather than when
+            // the context was last rebuilt, so `{date}` means the day the file was written.
+            naming: naming ? { ...naming, now: Date.now() } : undefined
           })
         : await window.clipforge.exportVideo({
             source: source.path,
@@ -1084,7 +1178,8 @@ export function App({ initialSettings }: Props): JSX.Element {
             aiToken,
             speed,
             boomerang,
-            encoder
+            encoder,
+            naming: naming ? { ...naming, now: Date.now() } : undefined
           })
 
       if (result.ok && result.output) {
@@ -1111,12 +1206,17 @@ export function App({ initialSettings }: Props): JSX.Element {
           body: t('toast.done.body', { name: baseName(result.output), size: formatBytes(result.sizeBytes ?? 0) }),
           path: result.output
         })
-        if (!document.hasFocus()) {
-          void window.clipforge.notify({
-            title: t('toast.done.title'),
-            body: t('toast.done.body', { name: baseName(result.output), size: formatBytes(result.sizeBytes ?? 0) })
-          })
-        }
+        // The renderer sends what it knows - the preference and whether this window had the
+        // focus - and the main process decides, because it is the side that can also ask
+        // whether notifications work at all on this machine.
+        void window.clipforge.notify({
+          title: t('toast.done.title'),
+          body: t('toast.done.body', { name: baseName(result.output), size: formatBytes(result.sizeBytes ?? 0) }),
+          path: result.output,
+          when: settings.notifyWhen,
+          focused: document.hasFocus(),
+          sound: settings.notifySound
+        })
       } else {
         failExport(result)
       }
@@ -1524,6 +1624,7 @@ export function App({ initialSettings }: Props): JSX.Element {
         {page === 'settings' ? (
           <SettingsPage
             settings={settings}
+            namingPreview={naming}
             defaultDir={defaultDir}
             dependencies={dependencies}
             versions={versions}
@@ -1593,6 +1694,31 @@ export function App({ initialSettings }: Props): JSX.Element {
                   onCheck={() => void window.clipforge.checkForUpdates().then(setUpdate)}
                   onInstall={() => void window.clipforge.installUpdate()}
                   onDismiss={() => setUpdateHidden(true)}
+                />
+              )}
+
+              {leftover && (
+                <LeftoverInstall
+                  location={leftover.location}
+                  onDismiss={() => {
+                    // Remembered by folder, so this one is not raised again but a different
+                    // stray copy later still would be.
+                    setLeftover(null)
+                    saveSettings({ leftoverInstallSeen: leftover.location })
+                  }}
+                  onRemove={() => {
+                    void window.clipforge.removeInstalledCopy(leftover.location).then((problem) => {
+                      if (problem) {
+                        pushLog(t('leftover.failed', { reason: problem }), 'error')
+                        return
+                      }
+                      // The uninstaller is now the user's window to answer; this copy records
+                      // the decision so it is not raised again either way.
+                      pushLog(t('leftover.started'), 'done')
+                      setLeftover(null)
+                      saveSettings({ leftoverInstallSeen: leftover.location })
+                    })
+                  }}
                 />
               )}
 
@@ -1725,6 +1851,8 @@ export function App({ initialSettings }: Props): JSX.Element {
                       onDetectWatermark={() => void detectWatermarks()}
                       detectBusy={detectBusy}
                       aiAvailable={aiAvailable}
+                      onPreviewFrame={() => void runFramePreview()}
+                      previewBusy={previewBusy}
                       mute={mute}
                       onMute={setMute}
                       loudnorm={loudnorm}
@@ -1763,10 +1891,21 @@ export function App({ initialSettings }: Props): JSX.Element {
 
         <DropZone visible={dropping} />
         <ShortcutSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <FrameCompare preview={framePreview} onClose={() => setFramePreview(null)} />
+
         <Toast
           toast={toast}
           onClose={() => setToast(null)}
           onReveal={(filePath) => void window.clipforge.revealInFolder(filePath)}
+          onOpen={(filePath) => {
+            void window.clipforge.openFile(filePath).then((problem) => {
+              // `shell.openPath` answers with '' when the system took it, and with the reason
+              // it did not otherwise. A failure is logged and the toast stays, because the
+              // other action on it - show in folder - is still the way to find the file.
+              if (problem) pushLog(problem, 'error')
+              else setToast(null)
+            })
+          }}
         />
       </div>
     </TooltipProvider>

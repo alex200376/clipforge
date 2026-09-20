@@ -30,6 +30,8 @@ echo     VERSION=1.2.3            set package.json to this version before commit
 echo     PUBLIC=1                 create a new repository as public instead of private
 echo     SKIP_CHECKS=1            skip typecheck and unit tests
 echo     SKIP_BINARIES=1          keep the existing resources\bin payload
+echo     REQUIRE_SIGNED=1         refuse to publish unless the installer's signature verifies
+echo     CSC_LINK / CSC_KEY_PASSWORD   code-signing certificate, so the build is signed
 echo     NO_TAG=1                 commit and push, then stop before building or publishing
 echo     COMMIT_MSG="..."         override the generated commit message
 echo     NO_PAUSE=1               exit without waiting for a keypress
@@ -86,12 +88,14 @@ if errorlevel 1 goto :failed
 call :resolve_token
 if errorlevel 1 goto :failed
 call :resolve_version
+call :resolve_signing
 if errorlevel 1 goto :failed
 
 echo   Repository: !OWNER!/!REPO_NAME!
 echo   Version   : !VERSION!  ^(release tag v!VERSION!^)
 if "!TAG!"=="0" echo   Tagging   : disabled ^(NO_TAG=1^)
 echo   Token     : !TOKEN_STATE!
+echo   Signing   : !SIGN_STATE!
 echo.
 
 if /i "%~1"=="check" (
@@ -200,6 +204,39 @@ if not exist "release\latest.yml" goto :no_feed
 for %%F in ("release\ClipForge-Setup-*.exe") do set "ARTIFACT=%%~fF"
 if not defined ARTIFACT goto :no_artifact
 
+rem The signature is checked on the file that was just built, not on how the build was
+rem configured: a missing, expired or refused certificate leaves a clean log and an unsigned
+rem installer, and the release notes would then be claiming something untrue.
+echo.
+echo   Checking the installer's signature...
+set "SIGN_ARG="
+if /i "%REQUIRE_SIGNED%"=="1" set "SIGN_ARG=--require"
+node "scripts\verify-signature.mjs" "!ARTIFACT!" !SIGN_ARG! --out "release\signature.txt"
+if errorlevel 1 goto :signature_failed
+
+rem electron-builder creates the release with an empty body, so what changed is written from
+rem the commits since the previous tag rather than left blank.
+echo.
+echo   Writing the release notes...
+if /i "%SKIP_NOTES%"=="1" (
+    echo         Skipped ^(SKIP_NOTES=1^).
+) else (
+    node "scripts\release-footer.mjs" --version v!VERSION! --installer "!ARTIFACT!" --signature-file "release\signature.txt" --out "release\.release-notes.md"
+    if errorlevel 1 goto :notes_failed
+    where gh >nul 2>nul
+    if errorlevel 1 (
+        echo         The GitHub CLI is not installed, so the notes were written to
+        echo         release\.release-notes.md instead of onto the release.
+    ) else (
+        call gh release edit "v!VERSION!" --notes-file "release\.release-notes.md"
+        if errorlevel 1 (
+            echo         gh could not update the notes; they are in release\.release-notes.md.
+        ) else (
+            call :mark "release notes written"
+        )
+    )
+)
+
 :done
 echo.
 if defined ARTIFACT (
@@ -237,6 +274,21 @@ echo   is available ^(private unless PUBLIC=1^), or initialises one and adds the
 echo   remote so the first commit can be pushed.
 set "CODE=1"
 goto :finish
+
+:signature_failed
+echo.
+echo   FAILED: the installer's signature does not verify, so this release is not published
+echo   as a trustworthy build. Set CSC_LINK and CSC_KEY_PASSWORD to sign it, or leave
+echo   REQUIRE_SIGNED unset to publish an unsigned installer deliberately.
+set "CODE=1"
+>>"%LOG%" echo [%DATE% %TIME%] signature check FAILED
+goto :finish
+
+:notes_failed
+echo.
+echo   WARNING: the release is published, but its notes could not be written.
+call :mark "release notes FAILED"
+goto :done
 
 :step_failed
 echo.
@@ -480,6 +532,32 @@ echo.
 echo   ERROR: could not work out the GitHub owner and repository from the origin remote.
 echo   Expected something like https://github.com/owner/name.git
 exit /b 1
+
+rem A signed release needs a certificate before the build starts, because that is the last
+rem point where refusing is free. The artifact itself is checked again after the build, when
+rem the question changes from "was one configured" to "did it actually sign this file".
+:resolve_signing
+if not "%CSC_LINK%"=="" goto :signing_configured
+if /i "%REQUIRE_SIGNED%"=="1" goto :no_cert
+set "SIGN_STATE=none - the installer will be unsigned"
+exit /b 0
+
+:signing_configured
+rem electron-builder fails loudly on a certificate it cannot use, so the only check worth
+rem making here is the cheap one: a CSC_LINK that is plainly a path and is not there would
+rem otherwise surface minutes later, after the commit and the push. A URL or a base64 blob is
+rem equally legitimate, so neither is mistaken for a missing file.
+set "SIGN_STATE=certificate configured"
+if not exist "%CSC_LINK%" echo   Note: CSC_LINK is not an existing file; electron-builder will fetch it.
+exit /b 0
+
+:no_cert
+ echo.
+ echo   ERROR: REQUIRE_SIGNED=1 but no code-signing certificate was configured.
+ echo   Set CSC_LINK to the certificate ^(.pfx path, base64 blob or URL^) and
+ echo   CSC_KEY_PASSWORD to its password, or drop REQUIRE_SIGNED to publish unsigned.
+ set "CODE=1"
+ exit /b 1
 
 rem electron-builder publishes with GH_TOKEN; a signed-in GitHub CLI already has one,
 rem so reuse it instead of making the user copy a token around.

@@ -6,12 +6,15 @@ import { formatBytes } from '../shared/bytes'
 import { ClipForgeError } from '../shared/errors'
 
 import { remuxPreviewArgs, transcodePreviewArgs } from '../shared/mediaArgs'
+import { normalizeDir } from '../shared/leftovers'
+import { shouldNotify } from '../shared/notifications'
 import { playsDirectly } from '../shared/playable'
 import { isRemoteUrl } from '../shared/sources'
 import type { CropRequest, NotifyRequest } from '../shared/api'
 import type {
   AiDetectRequest,
   AiPrepareRequest,
+  AiPreviewRequest,
   AppSettings,
   BinaryName,
   FilmstripRequest,
@@ -24,13 +27,23 @@ import type {
   VideoRequest,
   WindowState
 } from '../shared/types'
-import { aiAssets, compositeAiSession, prepareAiSession, readAiFrames, releaseAiSessions, sampleFrames, writeAiPatches } from './ai'
+import {
+  aiAssets,
+  compositeAiSession,
+  prepareAiSession,
+  previewAiFrame,
+  readAiFrames,
+  releaseAiSessions,
+  sampleFrames,
+  writeAiPatches
+} from './ai'
 import { detectCrop } from './autocrop'
 import { ALL_BINARIES, dependencyStates, findBinary, missingBinaries, missingBinaryError, toolVersions } from './binaries'
 import { loadSession, saveSession } from './session'
 import { exportGif, exportVideo } from './exportJobs'
 import { buildFilmstrip } from './filmstrip'
 import { detectHardware } from './hardware'
+import { installedCopies, leftoverCopy } from './installed'
 import { installMissing } from './installer'
 import { registerMediaToken, resolveMediaToken } from './mediaProtocol'
 import { effectiveOutputDir, loadSettings, saveSettings } from './settings'
@@ -351,6 +364,11 @@ export function registerIpc(getWindow: WindowGetter): void {
     compositeAiSession(request.token, { emit, log, registerJob: track })
   )
 
+  /** One frame, windows cut, for the before/after preview. */
+  ipcMain.handle('clipforge:ai:preview', (_event, request: AiPreviewRequest) =>
+    previewAiFrame(request, { emit, log, registerJob: track })
+  )
+
   /** Sample frames for the detectors; both of them read the same handful. */
   ipcMain.handle('clipforge:ai:samples', (_event, request: AiDetectRequest) =>
     sampleFrames({ ...request, source: requireLocalSource(request.source) }, { emit, log, registerJob: track })
@@ -456,8 +474,28 @@ export function registerIpc(getWindow: WindowGetter): void {
   })
 
   ipcMain.handle('clipforge:app:notify', (_event, request: NotifyRequest) => {
-    if (!Notification.isSupported()) return
-    new Notification({ title: request.title, body: request.body, silent: false }).show()
+    // The renderer sends the facts - the preference, and whether the window had the focus -
+    // and the decision is made here, in one place, where support can be asked about too.
+    if (!shouldNotify(request.when, { focused: request.focused, supported: Notification.isSupported() })) {
+      return
+    }
+    const notification = new Notification({
+      title: request.title,
+      body: request.body,
+      silent: request.sound === false
+    })
+    // Clicking it should show the file it is talking about. Without this the notification is
+    // a dead end that tells the user something happened and leaves them to go and find it.
+    notification.on('click', () => {
+      const window = getWindow()
+      if (window) {
+        if (window.isMinimized()) window.restore()
+        window.show()
+        window.focus()
+      }
+      if (request.path) shell.showItemInFolder(request.path)
+    })
+    notification.show()
   })
 
   ipcMain.handle('clipforge:window:fullscreen', () => {
@@ -560,6 +598,28 @@ export function registerIpc(getWindow: WindowGetter): void {
 
   ipcMain.handle('clipforge:shell:reveal', (_event, filePath: string) => {
     shell.showItemInFolder(filePath)
+  })
+
+  /** Hands the file to the system. Returns '' on success, or why it could not. */
+  ipcMain.handle('clipforge:shell:open', (_event, filePath: string) => shell.openPath(filePath))
+
+  /** Other installed copies; see `shared/leftovers.ts` for what is done with them. */
+  ipcMain.handle('clipforge:install:copies', () => installedCopies())
+  ipcMain.handle('clipforge:install:leftover', () => leftoverCopy())
+
+  /**
+   * Starts the given copy's own uninstaller.
+   *
+   * The uninstaller is found from this process's own probe rather than taken from the
+   * request: a path that arrived over IPC and was run would be a way to launch anything on
+   * the machine. It is started rather than waited on - it copies itself to a temporary folder
+   * and exits, and the window it opens is the user's to answer.
+   */
+  ipcMain.handle('clipforge:install:remove', async (_event, location: string) => {
+    const target = normalizeDir(location)
+    const copy = installedCopies().find((entry) => normalizeDir(entry.location) === target)
+    if (!copy?.uninstaller) return 'No uninstaller was found for that installation.'
+    return shell.openPath(copy.uninstaller)
   })
 
   ipcMain.handle('clipforge:shell:open-output', () => {

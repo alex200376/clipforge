@@ -1,4 +1,11 @@
-import type { AiPrepareRequest, AiPrepareResult, AiRegionPlan, AiAssets, CropSpec } from '../../shared/types'
+import type {
+  AiAssets,
+  AiPrepareRequest,
+  AiPrepareResult,
+  AiRegionPlan,
+  CropSpec,
+  WatermarkRegion
+} from '../../shared/types'
 import { AI_BACKEND_FAILURE, AI_LOAD_TIMEOUT } from './protocol'
 import type { AiCandidate, AiWorkerRequest, AiWorkerRequestInput, AiWorkerResponse } from './protocol'
 import { createQueue } from './queue'
@@ -373,23 +380,32 @@ export async function runAiRemoval(
       : `AI removal is running on the CPU with ${activeThreads} thread${activeThreads === 1 ? '' : 's'}: correct, but slower than a GPU would be`
   )
 
-  const regions = prepared.regions
-  const totalFrames = prepared.frames * regions.length
+  // Every window the main process cut, in the order they are composited. A mark that fits
+  // the model's square is one entry; a mark larger than it is several, each drawn at the
+  // picture's own resolution instead of being scaled down and painted back up.
+  const windows = prepared.regions
+  const areas = new Set(windows.map((window) => window.regionIndex)).size
+  if (windows.length > areas) {
+    handlers.onNote(
+      `The marked area is wider than the model's 512-pixel window, so it is being removed in ${windows.length} overlapping windows per frame instead of one scaled-down pass: sharper, and one inference each`
+    )
+  }
+  const totalFrames = prepared.frames * windows.length
   handlers.onPhase('painting')
   let done = 0
   // Timed because the rate is the whole story of this stage: it decides whether a clip
   // is a short wait or an afternoon, and it is what tells the difference between a slow
   // machine and a runtime that quietly lost its threads.
   const startedAt = Date.now()
-  for (const region of regions) {
+  for (const plan of windows) {
     for (let from = 0; from < prepared.frames; from += BATCH) {
-      const frames = await window.clipforge.aiFrames({ token: prepared.token, index: region.index, from, count: BATCH })
+      const frames = await window.clipforge.aiFrames({ token: prepared.token, index: plan.index, from, count: BATCH })
       if (frames.length === 0) break
-      const painted = await inpaintBatch(region, frames, feather)
+      const painted = await inpaintBatch(plan, frames, feather)
       // Said as soon as it happens: a run that fell back mid-batch still produces the
       // right pixels, and the user deserves to know why it got slower.
       if (painted.note) handlers.onNote(painted.note)
-      await window.clipforge.aiPatches({ token: prepared.token, index: region.index, from, patches: painted.patches })
+      await window.clipforge.aiPatches({ token: prepared.token, index: plan.index, from, patches: painted.patches })
       done += frames.length
       handlers.onInpaint(done, totalFrames)
     }
@@ -400,6 +416,78 @@ export async function runAiRemoval(
       (totalFrames > 0 ? ` (${(seconds / totalFrames).toFixed(2)}s per frame)` : '')
   )
   return prepared
+}
+
+/**
+ * One frame removed and put beside its original, for the preview dialog.
+ *
+ * Both images are data URLs: they are shown once and thrown away, so there is nothing here
+ * worth writing to a temp file, and nothing left behind when the dialog closes.
+ */
+export interface AiFramePreview {
+  before: string
+  after: string
+  width: number
+  height: number
+  /** Seconds the network took, which is the number that decides whether this is usable. */
+  seconds: number
+  /** How many windows had to be painted, so a cut-up mark explains its own cost. */
+  windows: number
+}
+
+/**
+ * Renders the marks on a single frame, without touching the clip.
+ *
+ * The whole point is that this is *evidence* rather than a promise: "the fill is built from
+ * the surrounding picture" is true of every inpainting network and tells the user nothing
+ * about whether their own logo comes out clean. The windows, the geometry and the network are
+ * the ones the export would use, so looking at this frame is looking at the export.
+ */
+export async function previewRemoval(
+  request: { source: string; time: number; regions: WatermarkRegion[]; width: number; height: number },
+  feather: number,
+  assets: AiAssets
+): Promise<AiFramePreview> {
+  const started = Date.now()
+  await prepareModels(assets, 'lama')
+  const frame = await window.clipforge.aiPreview(request)
+  if (frame.patches.length === 0) throw new Error('Nothing to preview yet.')
+
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, frame.view.width)
+  canvas.height = Math.max(1, frame.view.height)
+  const before = canvas.getContext('2d')
+  const after = document.createElement('canvas')
+  after.width = canvas.width
+  after.height = canvas.height
+  const composed = after.getContext('2d')
+  if (!before || !composed) throw new Error('This build cannot draw the preview.')
+
+  const source = await createImageBitmap(new Blob([frame.before as BlobPart]))
+  before.drawImage(source, 0, 0)
+  composed.drawImage(source, 0, 0)
+  source.close()
+
+  for (const patch of frame.patches) {
+    const painted = await inpaintBatch(patch.plan, [patch.window], feather)
+    const bytes = painted.patches[0]
+    if (!bytes) continue
+    const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]))
+    // Placed where the window was cut from, and in the order the export composites them - so
+    // the windows of a mark too large for one square fade into each other here exactly as
+    // they will in the file.
+    composed.drawImage(bitmap, patch.plan.crop.x - frame.view.x, patch.plan.crop.y - frame.view.y)
+    bitmap.close()
+  }
+
+  return {
+    before: canvas.toDataURL('image/png'),
+    after: after.toDataURL('image/png'),
+    width: canvas.width,
+    height: canvas.height,
+    seconds: (Date.now() - started) / 1000,
+    windows: frame.patches.length
+  }
 }
 
 /** Asks both detectors where the watermark is. Returns boxes in source pixels. */

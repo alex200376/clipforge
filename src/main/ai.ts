@@ -1,9 +1,16 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { AI_MASTER_EXTENSION, aiCompositeArgs, aiMasterArgs, aiSampleArgs, aiWindowArgs } from '../shared/aiArgs'
-import { AI_INPUT, boxInModel, planMargins, planWindow } from '../shared/aiWindow'
-import { aiSessionKey } from '../shared/aiArgs'
+import {
+  AI_MASTER_EXTENSION,
+  aiCompositeArgs,
+  aiMasterArgs,
+  aiPreviewFrameArgs,
+  aiSampleArgs,
+  aiSessionKey,
+  aiWindowArgs
+} from '../shared/aiArgs'
+import { boxInModel, planPatches } from '../shared/aiWindow'
 import { normalizeWatermarks } from '../shared/mediaArgs'
 import type {
   AiAssets,
@@ -11,6 +18,9 @@ import type {
   AiDetectResult,
   AiPrepareRequest,
   AiPrepareResult,
+  AiPreviewRequest,
+  AiPreviewResult,
+  AiPreviewWindow,
   AiRegionPlan,
   AiSampleFrame,
   CropSpec,
@@ -60,11 +70,11 @@ export interface AiSession {
   fps: number
   duration: number
   frames: number
-  /** One margin per marked box, in the same order as `regions`. */
-  margins: number[]
+  /** One entry per window, in composite order. */
   regions: AiRegionPlan[]
+  /** The window each entry is cut at, in the same order. */
   windows: CropSpec[]
-  /** Patch frames written per region. */
+  /** Patch frames written per window. */
   written: number[]
   job: MediaJob | null
 }
@@ -73,6 +83,8 @@ const sessions = new Map<string, AiSession>()
 let assetTokens: AiAssets | null = null
 /** The last detection search's sampled frames, released when the next one replaces them. */
 let lastDetectDir: string | null = null
+/** The last preview's frames, released when the next one replaces them. */
+let lastPreviewDir: string | null = null
 
 const modelPath = (name: string): string => path.join(modelsDir(), name)
 
@@ -178,12 +190,16 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
 
   const regions = normalizeWatermarks(request.regions, request.width, request.height)
   if (regions.length === 0) throw new Error('Mark the area to remove first.')
-  // As much real picture around each box as the model input can hold, which is what the
-  // fill is built from - per box, since one margin for all of them is sized by whichever
-  // box came first and forces every other window to be scaled or starved. `fitMargin`
-  // then cuts it back wherever the picture itself is smaller than the input, keeping the
-  // round trip one-to-one pixels rather than a scale up and back down.
-  const margins = planMargins(regions, { width: request.width, height: request.height })
+  // Every window to cut and paint, in the order they are composited.
+  //
+  // A mark that fits the model's square is one window here, with the geometry this has
+  // always produced: as much real picture around the box as the input can hold, cut back
+  // per box wherever the picture itself is smaller, so the round trip is one-to-one
+  // pixels rather than a scale up and back down. A mark too large for the square cannot
+  // have that at any margin, and it used to be scaled down and painted back up - the
+  // softness, and the whole reason this list can now hold more than one entry per mark.
+  const windows = planPatches(regions, { width: request.width, height: request.height })
+  if (windows.length === 0) throw new Error('A marked area is outside the picture.')
 
   const key = aiSessionKey({
     source: request.source,
@@ -224,31 +240,39 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
 
   // Windows are cut from the master rather than the source, so both sides of the
   // later blend share one frame numbering even when the source was variable rate.
-  const plans: AiWindowPlanEntry[] = []
-  for (let index = 0; index < regions.length; index += 1) {
-    const region = regions[index]!
-    const plan = planWindow(region, { width: request.width, height: request.height }, { margin: margins[index] ?? 0, input: AI_INPUT })
-    if (!plan) throw new Error('A marked area is outside the picture.')
+  const cuts: CropSpec[] = []
+  for (let index = 0; index < windows.length; index += 1) {
+    const plan = windows[index]!
     const pattern = framePath(dir, 'window', index, 0).replace('000000', '%06d')
     const extracted = await job.run(
       { command: ffmpeg, args: aiWindowArgs(master, pattern, plan.crop) },
-      { stage: `Cutting window ${index + 1} of ${regions.length}`, duration: request.duration }
+      { stage: `Cutting window ${index + 1} of ${windows.length}`, duration: request.duration }
     )
     if (!extracted.ok) throw new Error(extracted.error ?? 'Could not cut the marked area out of the clip')
     if (job.isCancelled) throw new Error('Cancelled')
-    plans.push({ plan, region })
+    cuts.push(plan.crop)
   }
 
   const frames = countFrames(dir, 'window', 0)
   if (frames < 1) throw new Error('The clip produced no frames to inpaint.')
 
-  const regionPlans: AiRegionPlan[] = plans.map(({ plan, region }, index) => ({
+  const regionPlans: AiRegionPlan[] = windows.map((patch, index) => ({
     index,
-    crop: plan.crop,
-    box: { x: region.x - plan.crop.x, y: region.y - plan.crop.y, width: region.width, height: region.height },
-    modelBox: boxInModel(plan, region),
-    scale: plan.scale,
-    pad: plan.pad,
+    regionIndex: patch.regionIndex,
+    crop: patch.crop,
+    slice: patch.slice,
+    box: patch.box,
+    mask: patch.mask,
+    // The mask is the marked area as this window sees it, mapped into the model's square:
+    // for a small mark that is the box itself, and for a window inside a large one it also
+    // covers the rest of the mark that falls inside the window. Picture the network can see
+    // is context it builds the fill from, so a mark left visible there is a mark painted
+    // back into the hole.
+    modelBox: boxInModel(patch, patch.mask),
+    scale: patch.scale,
+    pad: patch.pad,
+    overlap: patch.overlap,
+    leading: patch.leading,
     total: frames,
     done: 0
   }))
@@ -262,14 +286,18 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
     fps: request.fps,
     duration: request.duration,
     frames,
-    margins,
     regions: regionPlans,
-    windows: plans.map(({ plan }) => plan.crop),
-    written: regions.map(() => 0),
+    windows: cuts,
+    written: windows.map(() => 0),
     job
   }
   sessions.set(key, session)
-  sdk.log(`${frames} frames to inpaint across ${regions.length} marked ${regions.length === 1 ? 'area' : 'areas'}`)
+  const areas = `${regions.length} marked ${regions.length === 1 ? 'area' : 'areas'}`
+  sdk.log(
+    windows.length === regions.length
+      ? `${frames} frames to inpaint across ${areas}`
+      : `${frames} frames to inpaint across ${areas}, in ${windows.length} windows - the mark is wider than the model's window, so it is removed in overlapping pieces at full resolution instead of one scaled-down pass`
+  )
 
   return {
     token: session.token,
@@ -281,11 +309,6 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
     height: request.height,
     regions: regionPlans
   }
-}
-
-interface AiWindowPlanEntry {
-  plan: NonNullable<ReturnType<typeof planWindow>>
-  region: WatermarkRegion
 }
 
 /**
@@ -341,6 +364,20 @@ export async function sampleFrames(request: AiDetectRequest, sdk: AiSdk): Promis
   }))
   const scale = width / Math.max(1, request.width)
   return { frames, width, height: Math.max(2, Math.round(request.height * scale)) }
+}
+
+/** One rectangle of a still, re-encoded as lossless PNG so nothing is lost to the preview. */
+function previewCropArgs(input: string, output: string, crop: CropSpec): string[] {
+  return [
+    '-y',
+    '-i',
+    input,
+    '-vf',
+    `crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`,
+    '-frames:v',
+    '1',
+    output
+  ]
 }
 
 /** Frames of one window, for the worker to inpaint. */
@@ -403,6 +440,100 @@ export async function compositeAiSession(token: string, sdk: AiSdk): Promise<str
   session.patched = output
   sdk.log('AI removal is ready')
   return output
+}
+
+/**
+ * One frame's windows, cut out and ready for the network, for the before/after preview.
+ *
+ * The fill is the one thing about a removal that cannot be described: "LaMa paints the
+ * missing picture" is true and tells nobody whether *their* logo comes out clean. This is how
+ * the user gets to see it before committing to an export of the whole clip - a single frame,
+ * the same windows and the same network the export would use, and the result side by side
+ * with the original.
+ *
+ * It deliberately shares `planPatches` with the export rather than approximating it. A
+ * preview built from different geometry would be a preview of a different removal, and the
+ * place that matters most is a mark too large for one window, where the cut-up grid is what
+ * decides the result.
+ */
+export async function previewAiFrame(request: AiPreviewRequest, sdk: AiSdk): Promise<AiPreviewResult> {
+  const ffmpeg = findBinary('ffmpeg')
+  if (!ffmpeg) throw missingBinaryError('ffmpeg')
+  if (request.width <= 0 || request.height <= 0) throw new Error('The frame size is unknown, so the marked areas cannot be mapped.')
+  const regions = normalizeWatermarks(request.regions, request.width, request.height)
+  if (regions.length === 0) throw new Error('Mark the area to remove first.')
+
+  const patches = planPatches(regions, { width: request.width, height: request.height })
+  if (patches.length === 0) throw new Error('A marked area is outside the picture.')
+  const bounds = boundingBox(patches.map((patch) => patch.crop))
+
+  releaseWorkDir(lastPreviewDir)
+  const dir = workDir('ai-preview')
+  lastPreviewDir = dir
+  const job = new MediaJob('Rendering a preview of the removal', sdk.emit, sdk.log)
+  sdk.registerJob(job)
+
+  // One frame, then every window cut out of that PNG rather than out of the clip: the second
+  // and later cuts are then a decode of a still, which is milliseconds, instead of another
+  // seek into the video.
+  const frameFile = path.join(dir, 'frame.png')
+  const grabbed = await job.run({
+    command: ffmpeg,
+    args: aiPreviewFrameArgs(request.source, frameFile, request.time)
+  })
+  if (!grabbed.ok) throw new Error(grabbed.error ?? 'Could not read a frame from the clip')
+
+  const viewFile = path.join(dir, 'view.png')
+  if (bounds.x !== 0 || bounds.y !== 0 || bounds.width !== request.width || bounds.height !== request.height) {
+    const cut = await job.run({ command: ffmpeg, args: previewCropArgs(frameFile, viewFile, bounds) })
+    if (!cut.ok) throw new Error(cut.error ?? 'Could not cut the marked area out of the frame')
+  }
+
+  const out: AiPreviewWindow[] = []
+  for (let index = 0; index < patches.length; index += 1) {
+    const patch = patches[index]!
+    const windowFile = path.join(dir, `window_${index}.png`)
+    const cut = await job.run({ command: ffmpeg, args: previewCropArgs(frameFile, windowFile, patch.crop) })
+    if (!cut.ok) throw new Error(cut.error ?? 'Could not cut the marked area out of the frame')
+    out.push({
+      plan: {
+        index,
+        regionIndex: patch.regionIndex,
+        crop: patch.crop,
+        slice: patch.slice,
+        box: patch.box,
+        mask: patch.mask,
+        modelBox: boxInModel(patch, patch.mask),
+        scale: patch.scale,
+        pad: patch.pad,
+        overlap: patch.overlap,
+        leading: patch.leading,
+        total: 1,
+        done: 0
+      },
+      window: readFileSync(windowFile)
+    })
+  }
+
+  return {
+    time: request.time,
+    frame: { width: request.width, height: request.height },
+    view: bounds,
+    // The picture behind the fills, so the renderer can put the two side by side. Read from
+    // the full frame when the marks cover all of it, which is the common case for one small
+    // logo and saves a cut.
+    before: readFileSync(bounds.width === request.width && bounds.height === request.height ? frameFile : viewFile),
+    patches: out
+  }
+}
+
+/** The smallest rectangle holding every given box. */
+export function boundingBox(boxes: CropSpec[]): CropSpec {
+  const left = Math.min(...boxes.map((box) => box.x))
+  const top = Math.min(...boxes.map((box) => box.y))
+  const right = Math.max(...boxes.map((box) => box.x + box.width))
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height))
+  return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
 /** Used by the Settings page to say whether the bundled models are actually there. */

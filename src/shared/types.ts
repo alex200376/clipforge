@@ -1,5 +1,7 @@
 import type { ErrorCode } from './errors'
 import type { GifDither, GifTuning } from './gifTuning'
+import type { OutputNaming } from './outputName'
+import type { NotifyWhen } from './notifications'
 
 export type ExportMode = 'gif' | 'video'
 /** gifski and palette encode directly; gifsicle runs as an optimising second pass. */
@@ -91,20 +93,37 @@ export type WatermarkRegion = CropSpec
  */
 export type WatermarkEngine = 'delogo' | 'ai'
 
-/** One region's window, as planned by the main process and used by the worker. */
+/**
+ * One window of the inpainting work, as planned by the main process and used by the worker.
+ *
+ * A marked area that fits inside the model's input is one window. A mark larger than that
+ * is several, cut into an overlapping grid so each is drawn at the picture's own resolution
+ * instead of being scaled down and painted back up. The list is in the order the windows
+ * are composited - reading order - and the later ones fade in over the earlier ones.
+ */
 export interface AiRegionPlan {
-  /** Index into the request's region list. */
+  /** Index into this list, which is the window index and its frame-folder. */
   index: number
+  /** Which marked area this window belongs to, for labels and progress. */
+  regionIndex: number
   /** The window cut out of the frame, in source pixels. */
   crop: CropSpec
-  /** The marked box inside that window, in source pixels. */
+  /** The part of the marked area this window owns, in source pixels. */
+  slice: CropSpec
+  /** That part in the window's own coordinates: the pixels replaced outright. */
   box: CropSpec
+  /** The whole marked area as this window sees it, in the window's coordinates. */
+  mask: CropSpec
   /** The same box in model coordinates, for the mask. */
   modelBox: CropSpec
   /** Uniform factor applied to the window before inference. 1 = untouched. */
   scale: number
   /** Model-space padding around the scaled window. */
   pad: { left: number; top: number; right: number; bottom: number }
+  /** Fade-in band at this window's leading edges, in source pixels. 0 = none. */
+  overlap: number
+  /** Whether another window sits to the left / above, and so paints over this one. */
+  leading: { left: boolean; top: boolean }
   /** How many frames this window has, and how many are already inpainted. */
   total: number
   done: number
@@ -132,6 +151,40 @@ export interface AiPrepareResult {
   width: number
   height: number
   regions: AiRegionPlan[]
+}
+
+/**
+ * A single frame's worth of AI removal, for the before/after preview.
+ *
+ * The whole clip is not touched: this exists so the user can look at what the fill does to
+ * their own watermark before committing to minutes of inference. The windows it returns are
+ * the ones the export would use, from the same plan, so what is shown is what would happen.
+ */
+export interface AiPreviewRequest {
+  source: string
+  /** Where in the clip to look, in seconds. */
+  time: number
+  regions: WatermarkRegion[]
+  width: number
+  height: number
+}
+
+/** One window of a preview: what to paint, and the picture to paint it into. */
+export interface AiPreviewWindow {
+  /** Geometry for the worker, in the same shape the export sends. */
+  plan: AiRegionPlan
+  /** The window's own PNG bytes - exactly what the export would feed the network. */
+  window: Uint8Array
+}
+
+export interface AiPreviewResult {
+  time: number
+  frame: { width: number; height: number }
+  /** The rectangle of the frame the preview covers, in source pixels. */
+  view: CropSpec
+  /** That rectangle as it is now, as PNG bytes. */
+  before: Uint8Array
+  patches: AiPreviewWindow[]
 }
 
 /** Where the bundled AI models live, as clipforge:// URLs the renderer can fetch. */
@@ -210,6 +263,14 @@ export interface GifRequest extends RangeSpec {
   watermarkEngine?: WatermarkEngine
   /** A prepared AI session whose patched master replaces `source`. */
   aiToken?: string
+  /**
+   * How the output is named.
+   *
+   * Built by the renderer, because that is where the output geometry, the frame rate and
+   * the encoder are decided - the same numbers the panel shows - so the name the Settings
+   * preview promises and the name this export writes are computed from one context.
+   */
+  naming?: OutputNaming
 }
 
 export interface VideoRequest extends RangeSpec {
@@ -230,6 +291,8 @@ export interface VideoRequest extends RangeSpec {
   watermarkEngine?: WatermarkEngine
   /** A prepared AI session whose patched master replaces `source`. */
   aiToken?: string
+  /** How the output is named; see `GifRequest.naming`. */
+  naming?: OutputNaming
 }
 
 export interface ExportResult {
@@ -339,6 +402,24 @@ export interface AppSettings {
   language: Language
   theme: Theme
   autoCleanup: boolean
+  /**
+   * How exported files are named. See `src/shared/outputName.ts` for the tokens.
+   *
+   * Stored as the template itself rather than as resolved text, so changing it changes what
+   * the next export is called and nothing that is already on disk.
+   */
+  outputTemplate: string
+  /** When the app raises a desktop notification for a finished export. */
+  notifyWhen: NotifyWhen
+  /** Whether that notification makes a sound. */
+  notifySound: boolean
+  /**
+   * The extra installation already mentioned to the user, if any.
+   *
+   * Keyed by folder rather than a plain flag, so the same one is not raised twice while a
+   * *different* one later still is. Empty means nothing has been raised.
+   */
+  leftoverInstallSeen: string
   /**
    * Export defaults. Kept flat on purpose: settings.ts merges shallowly, so a
    * nested object would silently keep stale values when new keys are added.

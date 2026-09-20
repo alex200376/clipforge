@@ -1,12 +1,15 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 import type { ClipForgeApi, CropRequest, InstallResult, NotifyRequest } from '../shared/api'
+import type { InstalledCopy } from '../shared/leftovers'
 import type {
   AiAssets,
   AiDetectRequest,
   AiDetectResult,
   AiPrepareRequest,
   AiPrepareResult,
+  AiPreviewRequest,
+  AiPreviewResult,
   AppSettings,
   BinaryName,
   CropDetection,
@@ -54,6 +57,7 @@ const api: ClipForgeApi = {
     ipcRenderer.invoke('clipforge:ai:patches', request) as Promise<number>,
   aiComposite: (request: { token: string }) => ipcRenderer.invoke('clipforge:ai:composite', request) as Promise<string>,
   aiSamples: (request: AiDetectRequest) => ipcRenderer.invoke('clipforge:ai:samples', request) as Promise<AiDetectResult>,
+  aiPreview: (request: AiPreviewRequest) => ipcRenderer.invoke('clipforge:ai:preview', request) as Promise<AiPreviewResult>,
   cancelJob: () => ipcRenderer.invoke('clipforge:job:cancel') as Promise<void>,
   dependencyStates: () => ipcRenderer.invoke('clipforge:deps:status') as Promise<DependencyState[]>,
   installDependencies: (names: BinaryName[]) =>
@@ -63,7 +67,12 @@ const api: ClipForgeApi = {
   hardwareProfile: () => ipcRenderer.invoke('clipforge:hardware') as Promise<HardwareProfile>,
   detectCrop: (request: CropRequest) => ipcRenderer.invoke('clipforge:media:crop', request) as Promise<CropDetection>,
   revealInFolder: (filePath: string) => ipcRenderer.invoke('clipforge:shell:reveal', filePath) as Promise<void>,
+  openFile: (filePath: string) => ipcRenderer.invoke('clipforge:shell:open', filePath) as Promise<string>,
   openOutputFolder: () => ipcRenderer.invoke('clipforge:shell:open-output') as Promise<void>,
+  installedCopies: () => ipcRenderer.invoke('clipforge:install:copies') as Promise<InstalledCopy[]>,
+  leftoverInstall: () => ipcRenderer.invoke('clipforge:install:leftover') as Promise<InstalledCopy | null>,
+  removeInstalledCopy: (location: string) =>
+    ipcRenderer.invoke('clipforge:install:remove', location) as Promise<string>,
   registerMedia: (filePath: string) => ipcRenderer.invoke('clipforge:media:register', filePath) as Promise<RegisteredMedia>,
   copyImageToClipboard: (filePath: string) =>
     ipcRenderer.invoke('clipforge:clipboard:image', filePath) as Promise<void>,
