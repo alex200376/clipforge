@@ -20,6 +20,16 @@ import type {
   WatermarkRegion
 } from '../../shared/types'
 import { clampSpeed, MAX_SPEED, MIN_SPEED } from '../../shared/mediaArgs'
+import {
+  DEFAULT_GIF_TUNING,
+  DITHER_MODES,
+  GIF_COLOR_STEPS,
+  gifSizeFactor,
+  type GifDither,
+  type GifTuning
+} from '../../shared/gifTuning'
+import { RESOLUTION_PRESETS } from '../../shared/resolutions'
+import { sizeFitsClip, smallestSizeForClip, VIDEO_SIZE_OPTIONS, videoSizeBytes } from '../../shared/videoSize'
 import { formatBytes, formatLength } from '../format'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
@@ -39,6 +49,9 @@ interface Props {
   onWidth: (width: number | null) => void
   quality: number
   onQuality: (quality: number) => void
+  /** Palette size, dither and lossy strength for a GIF. */
+  tuning: GifTuning
+  onTuning: (tuning: GifTuning) => void
   optimize: boolean
   onOptimize: (value: boolean) => void
   gifsicleReady: boolean
@@ -98,8 +111,9 @@ interface Props {
   onPreset: (preset: PresetId) => void
 }
 
-const RESOLUTIONS: Array<number | null> = [320, 480, 640, 720, null]
 const SPEEDS = [0.5, 1, 2]
+/** Radix needs a string value; `null` is the native size, so it travels as this token. */
+const NATIVE = 'native'
 const ASPECTS: Array<{ label: string; value: number | null }> = [
   { label: 'original', value: null },
   { label: '9:16', value: 9 / 16 },
@@ -153,6 +167,8 @@ export function ExportPanel(props: Props): JSX.Element {
     onWidth,
     quality,
     onQuality,
+    tuning,
+    onTuning,
     optimize,
     onOptimize,
     gifsicleReady,
@@ -222,6 +238,30 @@ export function ExportPanel(props: Props): JSX.Element {
     estimate.bytes === null
       ? t('export.estimate.unknown')
       : t(capped ? 'export.estimate.upTo' : 'export.estimate', { size: formatBytes(estimate.bytes) })
+
+  // The target is a bitrate in disguise, so a long clip aimed at a small preset cannot be
+  // encoded at all. Warn here, where the menu is, rather than when Export is pressed.
+  const targetTooSmall = capped && clipSeconds !== null && sizeFitsClip(size, clipSeconds, { mute }) === false
+  const smallestFitting = clipSeconds === null ? null : smallestSizeForClip(clipSeconds, { mute })
+
+  // Which stage can apply the lossy strength differs by engine, and saying so matters: on
+  // the palette engine it does nothing at all unless the gifsicle pass is on.
+  const lossyPercent = tuning.lossy
+  const lossyHint =
+    optimize && gifsicleReady
+      ? t('export.lossy.gifsicle')
+      : isWebp
+        ? t('export.lossy.none')
+        : engine === 'palette'
+          ? t('export.lossy.needsOptimise')
+          : t('export.lossy.gifski')
+
+  // A ratio of two model factors, which is exactly what the estimate does with them, so
+  // the saving and the predicted bytes cannot disagree.
+  const optimizeNow = optimize && gifsicleReady
+  const tunedShare = gifSizeFactor({ tuning, engine, optimize: optimizeNow })
+  const defaultShare = gifSizeFactor({ tuning: DEFAULT_GIF_TUNING, engine, optimize: optimizeNow })
+  const savedPercent = tunedShare < defaultShare ? Math.round((1 - tunedShare / defaultShare) * 100) : 0
 
   return (
     <>
@@ -474,11 +514,26 @@ export function ExportPanel(props: Props): JSX.Element {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="original">{t('export.size.original')}</SelectItem>
-                    <SelectItem value="10mb">{t('export.size.10mb')}</SelectItem>
-                    <SelectItem value="25mb">{t('export.size.25mb')}</SelectItem>
+                    {VIDEO_SIZE_OPTIONS.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {t(`export.size.${option.id}` as TranslationKey)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                {/* A target is a bitrate in disguise and the encoder has a floor, so a
+                    long clip aimed at 5 MB can only fail. Saying which preset would work
+                    is more use than letting the export refuse later. */}
+                {targetTooSmall && (
+                  <em className="field-hint warn">
+                    {smallestFitting
+                      ? t('export.size.tooSmall', {
+                          size: formatBytes(videoSizeBytes(size) ?? 0),
+                          smallest: t(`export.size.${smallestFitting}` as TranslationKey)
+                        })
+                      : t('export.size.noneFit')}
+                  </em>
+                )}
               </div>
 
               <label className="check-row">
@@ -550,21 +605,90 @@ export function ExportPanel(props: Props): JSX.Element {
 
             <div className="field">
               <Label>{t('export.resolution')}</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {RESOLUTIONS.map((option) => (
-                  <Button
-                    key={String(option)}
-                    size="sm"
-                    variant={width === option ? 'default' : 'secondary'}
-                    aria-pressed={width === option}
-                    onClick={() => onWidth(option)}
-                  >
-                    {option === null ? t('export.native') : `${option}p`}
-                  </Button>
-                ))}
-                <div />
-              </div>
+              <Select
+                value={width === null ? NATIVE : String(width)}
+                onValueChange={(value) => onWidth(value === NATIVE ? null : Number(value))}
+              >
+                <SelectTrigger aria-label={t('export.resolution')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RESOLUTION_PRESETS.map((option) => (
+                    <SelectItem key={String(option)} value={option === null ? NATIVE : String(option)}>
+                      {option === null ? t('export.native') : `${option}p`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+
+            {!isWebp && (
+              <>
+                <div className="field-row">
+                  <div className="field">
+                    <Label>{t('export.colors')}</Label>
+                    <Select
+                      value={String(tuning.colors)}
+                      onValueChange={(value) => onTuning({ ...tuning, colors: Number(value) })}
+                    >
+                      <SelectTrigger aria-label={t('export.colors')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {GIF_COLOR_STEPS.map((value) => (
+                          <SelectItem key={value} value={String(value)}>
+                            {t('export.colors.value', { count: value })}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="field">
+                    <Label>{t('export.dither')}</Label>
+                    {/* gifski and gifsicle run their own quantiser, so the dither is
+                        only meaningful for the ffmpeg palette engine. */}
+                    <Select
+                      value={tuning.dither}
+                      disabled={engine !== 'palette'}
+                      onValueChange={(value) => onTuning({ ...tuning, dither: value as GifDither })}
+                    >
+                      <SelectTrigger aria-label={t('export.dither')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DITHER_MODES.map((mode) => (
+                          <SelectItem key={mode} value={mode}>
+                            {t(`export.dither.${mode}` as TranslationKey)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <div className="field-row">
+                    <Label>{t('export.lossy')}</Label>
+                    <span className="muted tabular-nums">{lossyPercent}%</span>
+                  </div>
+                  <Slider
+                    value={[tuning.lossy]}
+                    min={0}
+                    max={100}
+                    step={5}
+                    aria-label={t('export.lossy')}
+                    onValueChange={(value) => onTuning({ ...tuning, lossy: value[0] ?? tuning.lossy })}
+                  />
+                  <em className="field-hint">{lossyHint}</em>
+                </div>
+
+                {/* The estimate already follows the knobs; this says by how much, so a
+                    choice that looks free is visibly not one. */}
+                {savedPercent > 0 && (
+                  <em className="field-hint">{t('export.tuning.saving', { percent: savedPercent })}</em>
+                )}
+              </>
+            )}
 
             {!isWebp && (
               <label className="check-row">

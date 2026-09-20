@@ -6,13 +6,19 @@ import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 import { Checkbox } from './ui/checkbox'
 import { InstallCard } from './InstallCard'
+import { StoragePanel } from './StoragePanel'
 import type { InstallSummary } from './InstallCard'
 import { Label } from './ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
+import { Slider } from './ui/slider'
 import { UpdatePanel } from './UpdatePanel'
 import { WindowControls } from './WindowControls'
+import { DITHER_MODES, GIF_COLOR_STEPS, type GifDither } from '../../shared/gifTuning'
+import { RESOLUTION_PRESETS } from '../../shared/resolutions'
 import { THEMES } from '../../shared/types'
+import { VIDEO_SIZE_OPTIONS } from '../../shared/videoSize'
+import type { TranslationKey } from '../i18n'
 import type {
   AppSettings,
   BinaryName,
@@ -31,8 +37,14 @@ import type {
 import { useI18n } from '../i18n'
 
 const FPS_OPTIONS = [10, 15, 20, 24, 30]
-const WIDTHS: Array<number | null> = [null, 320, 480, 640, 720]
 const NATIVE = 'native'
+
+/** Local date and time for the stamp, so it reads as "when" rather than as an ISO string. */
+function formatBuildTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+}
 
 /** A card heading with an icon, so the page can be scanned rather than read. */
 function CardHeading({ icon: Icon, children }: { icon: typeof Cpu; children: string }): JSX.Element {
@@ -82,8 +94,16 @@ interface Props {
   onRevealLast: () => void
   onNotice: (text: string) => void
   maximized: boolean
+  /**
+   * The transient confirmation line. It is rendered here as well as in the workspace
+   * because this page is a full takeover: actions taken from it - copying diagnostics,
+   * clearing storage - produced a notice that nothing on screen could show.
+   */
+  notice: string | null
   /** Real version from the packaged manifest, not a constant that can drift. */
   version: string
+  /** When the running bundle was written, from its own timestamp. */
+  buildTime: string | null
   update: UpdateState
   onAutoUpdate: (value: boolean) => void
   onCheckUpdate: () => void
@@ -110,7 +130,9 @@ export function SettingsPage({
   onRevealLast,
   onNotice,
   maximized,
+  notice,
   version,
+  buildTime,
   update,
   onAutoUpdate,
   onCheckUpdate,
@@ -139,7 +161,10 @@ export function SettingsPage({
       draft.defaultEngine !== settings.defaultEngine ||
       draft.defaultFps !== settings.defaultFps ||
       draft.defaultWidth !== settings.defaultWidth ||
-      draft.defaultVideoSize !== settings.defaultVideoSize,
+      draft.defaultVideoSize !== settings.defaultVideoSize ||
+      draft.gifColors !== settings.gifColors ||
+      draft.gifDither !== settings.gifDither ||
+      draft.gifLossy !== settings.gifLossy,
     [draft, settings]
   )
 
@@ -178,6 +203,7 @@ export function SettingsPage({
   const copyDiagnostics = (): void => {
     const lines = [
       `ClipForge ${version || 'unknown'}`,
+      `Built: ${buildTime ?? 'unknown'}`,
       `Update: ${update.status}${update.version ? ` (${update.version})` : ''}${update.error ? ` — ${update.error}` : ''}`,
       `Platform: ${hardware?.platform ?? 'unknown'}`,
       `CPU: ${hardware?.cores ?? 0} cores · RAM: ${hardware ? hardware.memoryGb.toFixed(1) : '0'} GB`,
@@ -206,6 +232,7 @@ export function SettingsPage({
           <h2 className="text-lg font-bold">{t('settings.title')}</h2>
           <p className="text-[0.8125rem] text-dim">{t('settings.subtitle')}</p>
         </div>
+        {notice && <span className="notice">{notice}</span>}
         <Button variant="secondary" className="ml-auto" onClick={onBack}>
           ← {t('settings.back')}
         </Button>
@@ -264,16 +291,17 @@ export function SettingsPage({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-2.5">
+              <label className="check-row">
                 <Checkbox
                   id="auto-cleanup"
                   checked={draft.autoCleanup}
                   onCheckedChange={(checked) => setDraft({ ...draft, autoCleanup: checked === true })}
                 />
-                <Label htmlFor="auto-cleanup" className="font-normal">
-                  {t('settings.behavior.cleanup')}
-                </Label>
-              </div>
+                <span>
+                  <strong>{t('settings.behavior.cleanup')}</strong>
+                  <em>{t('settings.behavior.cleanupHint')}</em>
+                </span>
+              </label>
               <div className="flex items-center gap-2.5">
                 <Checkbox
                   id="show-guide"
@@ -389,14 +417,13 @@ export function SettingsPage({
                   >
                     <SelectTrigger aria-label={t('settings.defaults.width')}>
                       <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WIDTHS.map((value) => (
-                        <SelectItem key={String(value)} value={value === null ? NATIVE : String(value)}>
-                          {value === null ? t('export.native') : `${value}p`}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
+                    </SelectTrigger>                      <SelectContent>
+                        {RESOLUTION_PRESETS.map((value) => (
+                          <SelectItem key={String(value)} value={value === null ? NATIVE : String(value)}>
+                            {value === null ? t('export.native') : `${value}p`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
                   </Select>
                 </div>
 
@@ -445,11 +472,65 @@ export function SettingsPage({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="original">{t('export.size.original')}</SelectItem>
-                      <SelectItem value="10mb">{t('export.size.10mb')}</SelectItem>
-                      <SelectItem value="25mb">{t('export.size.25mb')}</SelectItem>
+                      {VIDEO_SIZE_OPTIONS.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {t(`export.size.${option.id}` as TranslationKey)}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="setting-field">
+                  <Label>{t('export.colors')}</Label>
+                  <Select
+                    value={String(draft.gifColors)}
+                    onValueChange={(value) => setDraft({ ...draft, gifColors: Number(value) })}
+                  >
+                    <SelectTrigger aria-label={t('export.colors')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GIF_COLOR_STEPS.map((value) => (
+                        <SelectItem key={value} value={String(value)}>
+                          {t('export.colors.value', { count: value })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="setting-field">
+                  <Label>{t('export.dither')}</Label>
+                  <Select
+                    value={draft.gifDither}
+                    onValueChange={(value) => setDraft({ ...draft, gifDither: value as GifDither })}
+                  >
+                    <SelectTrigger aria-label={t('export.dither')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DITHER_MODES.map((mode) => (
+                        <SelectItem key={mode} value={mode}>
+                          {t(`export.dither.${mode}` as TranslationKey)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="setting-field">
+                  <Label>
+                    {t('export.lossy')} · {draft.gifLossy}%
+                  </Label>
+                  <Slider
+                    value={[draft.gifLossy]}
+                    min={0}
+                    max={100}
+                    step={5}
+                    aria-label={t('export.lossy')}
+                    onValueChange={(value) => setDraft({ ...draft, gifLossy: value[0] ?? draft.gifLossy })}
+                  />
                 </div>
               </div>
               <div>
@@ -574,6 +655,8 @@ export function SettingsPage({
             onInstall={onInstallUpdate}
           />
 
+          <StoragePanel update={update} onNotice={onNotice} />
+
           <Card>
             <CardHeader>
               <CardTitle>
@@ -582,6 +665,10 @@ export function SettingsPage({
               <CardDescription>{t('settings.about.body', { version: version || '—' })}</CardDescription>
             </CardHeader>
             <CardContent>
+              {/* Which build this is, to the minute. The question came up because an
+                  installed older build was behaving like code that had already been
+                  fixed: the fix was in the source and never in the binary. */}
+              <p className="muted">{t('settings.about.built', { time: buildTime ? formatBuildTime(buildTime) : '—' })}</p>
               <p className="text-[0.8125rem] text-dim">{t('settings.about.licenses')}</p>
               <div>
                 <Button variant="secondary" onClick={copyDiagnostics}>

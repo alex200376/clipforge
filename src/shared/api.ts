@@ -19,6 +19,8 @@ import type {
   PreviewSource,
   RegisteredMedia,
   SessionState,
+  StorageReport,
+  StorageTarget,
   ToolVersion,
   UpdateState,
   UrlMetadata,
@@ -108,11 +110,22 @@ export interface ClipForgeApi {
   onWindowState(listener: (state: WindowState) => void): () => void
   /** Version of the running build, straight from the packaged app manifest. */
   appVersion(): Promise<string>
+  /** ISO timestamp of the running bundle, or null when it cannot be read. */
+  buildTime(): Promise<string | null>
+  /**
+   * A one-off line about what the startup sweep reclaimed, or null when there was
+   * nothing to report. Read once, on mount.
+   */
+  startupNote(): Promise<string | null>
   updateState(): Promise<UpdateState>
   /** Resolves with the state the check ended in, not just whether it succeeded. */
   checkForUpdates(): Promise<UpdateState>
   /** Quits and installs a downloaded update; false when none is ready. */
   installUpdate(): Promise<boolean>
+  /** What the app is holding on disk, for the settings readout. */
+  storageStats(): Promise<StorageReport>
+  /** Clears one part of it and answers with the fresh figures. */
+  clearStorage(target: StorageTarget): Promise<StorageReport>
   onUpdateState(listener: (state: UpdateState) => void): () => void
   onProgress(listener: (event: JobProgress) => void): () => void
   onInstallProgress(listener: (event: InstallProgressEvent) => void): () => void

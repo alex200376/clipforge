@@ -69,19 +69,8 @@ export function resolveOutputDir(configured: string): string {
   return ensureDir(configured && configured.trim().length > 0 ? configured : defaultOutputDir())
 }
 
-/**
- * Stable scratch area for tool downloads. Sharing one path across attempts is what
- * lets an interrupted 111 MB FFmpeg download resume instead of starting over.
- */
-export function installCacheDir(): string {
-  return ensureDir(path.join(app.getPath('temp'), 'clipforge-install'))
-}
-
-/** Unique scratch directory; every job cleans up only inside its own folder. */
-export function workDir(prefix: string): string {
-  const name = `clipforge-${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-  return ensureDir(path.join(app.getPath('temp'), name))
-}
+// The temp folder's own helpers live in `scratch.ts`, which owns every folder the app
+// makes there: the tool download cache and the per-job scratch directories.
 
 export function settingsPath(): string {
   return path.join(app.getPath('userData'), 'settings.json')

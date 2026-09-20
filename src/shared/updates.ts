@@ -25,6 +25,18 @@ function firstMeaningfulLine(raw: string): string {
   return ''
 }
 
+/**
+ * The folder name electron-builder wrote into `app-update.yml`.
+ *
+ * electron-updater reads this itself to decide where its cache lives, and does not export
+ * the value, so the storage card has to read the same file to find the same folder. A
+ * one-line scan is enough: the file is generated, not hand-written.
+ */
+export function parseUpdaterCacheDirName(yml: string): string | null {
+  const match = /^\s*updaterCacheDirName:\s*(\S+)\s*$/m.exec(yml)
+  return match?.[1] ?? null
+}
+
 export function condenseUpdaterError(error: unknown): string {
   const raw =
     error instanceof Error

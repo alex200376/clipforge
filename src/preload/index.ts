@@ -21,6 +21,8 @@ import type {
   MediaInfo,
   RegisteredMedia,
   SessionState,
+  StorageReport,
+  StorageTarget,
   ToolVersion,
   PreviewSource,
   UpdateState,
@@ -84,9 +86,13 @@ const api: ClipForgeApi = {
     return () => ipcRenderer.removeListener('clipforge:window:changed', handler)
   },
   appVersion: () => ipcRenderer.invoke('clipforge:app:version') as Promise<string>,
+  buildTime: () => ipcRenderer.invoke('clipforge:app:build-time') as Promise<string | null>,
+  startupNote: () => ipcRenderer.invoke('clipforge:app:startup-note') as Promise<string | null>,
   updateState: () => ipcRenderer.invoke('clipforge:update:state') as Promise<UpdateState>,
   checkForUpdates: () => ipcRenderer.invoke('clipforge:update:check') as Promise<UpdateState>,
   installUpdate: () => ipcRenderer.invoke('clipforge:update:install') as Promise<boolean>,
+  storageStats: () => ipcRenderer.invoke('clipforge:storage:stats') as Promise<StorageReport>,
+  clearStorage: (target: StorageTarget) => ipcRenderer.invoke('clipforge:storage:clear', target) as Promise<StorageReport>,
   onUpdateState: (listener: (state: UpdateState) => void) => {
     const handler = (_event: unknown, payload: UpdateState): void => listener(payload)
     ipcRenderer.on('clipforge:update:changed', handler)

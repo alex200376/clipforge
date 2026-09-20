@@ -7,10 +7,9 @@
  * the last export of the same source.
  */
 
+import { gifSizeFactor, GIF_BYTES_PER_PIXEL, type GifSizeContext } from './gifTuning'
 import type { CropSpec, OutputFormat } from './types'
 
-/** Empirical bytes per pixel per frame for a dithered 256-colour GIF. */
-const GIF_BYTES_PER_PIXEL = 0.22
 /** Lossy animated WebP lands far lower, which is the whole reason to offer it. */
 const WEBP_BYTES_PER_PIXEL = 0.055
 /** Container, palette and frame-table overhead. */
@@ -47,14 +46,31 @@ export interface EstimateInput {
   seconds: number
   /** 1 = trust the model as-is; a measured ratio makes it sharper. */
   calibration?: number
+  /**
+   * The GIF size knobs and which encoder will use them.
+   *
+   * Without this the estimate is the model's picture of a 256-colour dithered GIF, which
+   * a user who has just asked for 64 colours and a strong optimiser is not going to get -
+   * measured, that combination is 27% of the model's figure. WebP ignores it: its encoder
+   * has its own quality knob and no palette stage.
+   */
+  gif?: GifSizeContext
 }
 
-export function estimateAnimatedBytes({ format, frame, fps, seconds, calibration = 1 }: EstimateInput): number {
+export function estimateAnimatedBytes({
+  format,
+  frame,
+  fps,
+  seconds,
+  calibration = 1,
+  gif
+}: EstimateInput): number {
   const frames = Math.max(1, Math.round(seconds * fps))
   const perPixel = format === 'webp' ? WEBP_BYTES_PER_PIXEL : GIF_BYTES_PER_PIXEL
   const pixels = Math.max(1, frame.width * frame.height)
   const raw = frames * (pixels * perPixel + FRAME_OVERHEAD)
-  return Math.round(raw * (calibration > 0 ? calibration : 1))
+  const tuning = format === 'gif' && gif ? gifSizeFactor(gif) : 1
+  return Math.round(raw * (calibration > 0 ? calibration : 1) * tuning)
 }
 
 /**
@@ -166,7 +182,8 @@ export function fitToBudget(
       frame,
       fps: candidate.fps,
       seconds: input.seconds,
-      calibration: input.calibration
+      calibration: input.calibration,
+      gif: input.gif
     })
     return {
       label: candidate.label,

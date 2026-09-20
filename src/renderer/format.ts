@@ -34,12 +34,8 @@ export function parseTime(value: string): number {
   return seconds
 }
 
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '—'
-  const mb = bytes / 1024 ** 2
-  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`
-  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
-}
+// Moved to shared so the main process formats sizes the same way in its log lines.
+export { formatBytes } from '../shared/bytes'
 
 /** Download speed for the install card; null while no sample is available yet. */
 export function formatSpeed(bytesPerSecond: number): string | null {

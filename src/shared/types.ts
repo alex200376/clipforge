@@ -1,9 +1,10 @@
 import type { ErrorCode } from './errors'
+import type { GifDither, GifTuning } from './gifTuning'
 
 export type ExportMode = 'gif' | 'video'
 /** gifski and palette encode directly; gifsicle runs as an optimising second pass. */
 export type GifEngine = 'palette' | 'gifski' | 'gifsicle'
-export type VideoSize = 'original' | '10mb' | '25mb'
+export type VideoSize = 'original' | '5mb' | '10mb' | '15mb' | '25mb' | '50mb' | '100mb'
 export type BinaryName = 'ffmpeg' | 'ffprobe' | 'yt-dlp' | 'gifski' | 'gifsicle'
 
 export interface RangeSpec {
@@ -197,6 +198,8 @@ export interface GifRequest extends RangeSpec {
   boomerang?: boolean
   /** Shrink the result with gifsicle after encoding (GIF only). */
   optimize?: boolean
+  /** Palette size, dither and lossy strength for a GIF. */
+  tuning?: GifTuning
   /** Logo boxes painted out before the crop and the resize. */
   watermarks?: WatermarkRegion[]
   /** Marked boxes are erased with `delogo` unless this asks for inpainting. */
@@ -342,6 +345,14 @@ export interface AppSettings {
   defaultVideoSize: VideoSize
   defaultFormat: OutputFormat
   defaultEncoder: EncoderChoice
+  /**
+   * GIF size defaults, stored as three flat keys rather than one `GifTuning` object for
+   * the reason above: a shallow merge would keep a whole stale object when the model
+   * gains a field.
+   */
+  gifColors: number
+  gifDither: GifDither
+  gifLossy: number
   /** Set once the first-run guide has been dismissed. */
   onboarded: boolean
   /** Check GitHub releases for a newer build shortly after startup. */
@@ -422,4 +433,35 @@ export interface UpdateState {
   error?: string
   /** When the last check finished, so the UI can say how fresh the answer is. */
   checkedAt?: number
+}
+
+/** Which part of the app's disk use a clear applies to. */
+export type StorageTarget = 'scratch' | 'updates'
+
+/**
+ * What the app is holding on disk.
+ *
+ * The update cache is reported separately from the rest because it is the one worth
+ * understanding before deleting: it holds both a downloaded update waiting for a restart
+ * and the previous installer, which the next update is patched against instead of being
+ * downloaded again.
+ */
+export interface StorageReport {
+  /** Job scratch folders under the system temp directory. */
+  scratchBytes: number
+  scratchCount: number
+  /** The tool download cache beside them, which is a resume point rather than a leftover. */
+  installCacheBytes: number
+  /** electron-updater's own cache: downloaded installers and block maps. */
+  updateBytes: number
+  updateFiles: number
+  /** Whether a downloaded update is waiting to be installed. */
+  updateReady: boolean
+  /** Whether a job or a tool download is running, which makes clearing unsafe right now. */
+  busy: boolean
+  /** Bytes the last clear action reclaimed, and why it did nothing when it refused. */
+  cleared?: number
+  /** Folders the last clear could not remove because something still had them open. */
+  failed?: number
+  refused?: 'busy' | 'ready'
 }

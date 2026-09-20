@@ -1,7 +1,8 @@
 import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 
+import { formatBytes } from '../shared/bytes'
 import { ClipForgeError } from '../shared/errors'
 
 import { remuxPreviewArgs, transcodePreviewArgs } from '../shared/mediaArgs'
@@ -17,6 +18,8 @@ import type {
   JobProgress,
   PreviewSource,
   SessionState,
+  StorageReport,
+  StorageTarget,
   VideoRequest,
   WindowState
 } from '../shared/types'
@@ -30,9 +33,11 @@ import { detectHardware } from './hardware'
 import { installMissing } from './installer'
 import { registerMediaToken, resolveMediaToken } from './mediaProtocol'
 import { effectiveOutputDir, loadSettings, saveSettings } from './settings'
-import { defaultOutputDir, resolveOutputDir, workDir } from './paths'
+import { defaultOutputDir, resolveOutputDir } from './paths'
+import { clearScratch, releaseAllWorkDirs, releaseWorkDir, scratchStats, workDir } from './scratch'
 import { probeLocalFile } from './probe'
 import { MediaJob } from './runner'
+import { clearUpdateCache, takeStartupNote, updateCacheStats } from './storage'
 import { cancelScheduledCheck, checkForUpdates, initUpdates, installUpdate, scheduleFirstCheck, updateState } from './updates'
 import { materializeUrl, releaseMaterializedUrls } from './urlSource'
 import { resolveMetadata } from './ytdlp'
@@ -42,6 +47,8 @@ const DIRECT_EXTENSIONS = new Set(['.mp4', '.m4v', '.webm'])
 let activeJob: MediaJob | null = null
 let activeInstall: AbortController | null = null
 let preparedPreview: string | null = null
+/** The last drag image's folder, released when the next drag replaces it. */
+let lastDragDir: string | null = null
 
 type WindowGetter = () => BrowserWindow | null
 
@@ -74,13 +81,38 @@ export function cancelActiveWork(): void {
 }
 
 /**
- * Everything the app wrote to the temp folder goes when the app does: a downloaded
- * link, and the master file and inpainted frames of an AI removal, which are
- * rebuildable but large.
+ * Everything the app wrote to the temp folder goes when the app does.
+ *
+ * The first two calls release the two sets that were already tracked by hand - a
+ * downloaded link, and the master file and inpainted frames of an AI removal. The third
+ * is what makes this complete: every scratch folder the run created is registered as it
+ * is made, so quitting no longer depends on remembering to list it here. Before that, the
+ * preview, filmstrip, clipboard, drag and detection folders were simply left behind.
  */
 export function releaseDownloads(): void {
   releaseMaterializedUrls()
   releaseAiSessions()
+  releaseAllWorkDirs()
+}
+
+/**
+ * What the app is holding on disk.
+ *
+ * `busy` is what stops the clear button from pulling files out from under a running job:
+ * a job holds its scratch folder open, and a tool download is writing into the cache.
+ */
+function storageReport(): StorageReport {
+  const scratch = scratchStats()
+  const updates = updateCacheStats()
+  return {
+    scratchBytes: scratch.bytes,
+    scratchCount: scratch.count,
+    installCacheBytes: scratch.installCacheBytes,
+    updateBytes: updates.bytes,
+    updateFiles: updates.files,
+    updateReady: updateState().status === 'ready',
+    busy: activeJob !== null || activeInstall !== null
+  }
 }
 
 export function registerIpc(getWindow: WindowGetter): void {
@@ -119,6 +151,10 @@ export function registerIpc(getWindow: WindowGetter): void {
   async function preparePreview(source: string, isUrl: boolean): Promise<PreviewSource> {
     const ffmpeg = findBinary('ffmpeg')
     if (!ffmpeg) throw missingBinaryError('ffmpeg')
+    // The preview is a full remuxed copy of the clip, so the previous one is dropped as
+    // this one is prepared rather than at quit: one clip open means one preview on disk,
+    // where before every clip opened in a session left its copy behind for good.
+    releaseWorkDir(preparedPreview ? path.dirname(preparedPreview) : null)
     const scratch = workDir('preview')
     const output = path.join(scratch, 'preview.mp4')
     const job = new MediaJob('Preparing preview', emit, log)
@@ -305,10 +341,14 @@ export function registerIpc(getWindow: WindowGetter): void {
   ipcMain.handle('clipforge:clipboard:image', async (_event, filePath: string) => {
     const direct = ['.png', '.jpg', '.jpeg'].includes(path.extname(filePath).toLowerCase())
     let imagePath = filePath
+    // Only the frame this handler writes lives in a folder of ours; a still output is the
+    // user's own file and is never touched.
+    let frameDir: string | null = null
     if (!direct) {
       const ffmpeg = findBinary('ffmpeg')
       if (!ffmpeg) throw missingBinaryError('ffmpeg')
       const scratch = workDir('clipboard')
+      frameDir = scratch
       const frame = path.join(scratch, 'frame.png')
       const job = new MediaJob('Grabbing a frame', emit, log)
       track(job)
@@ -327,6 +367,9 @@ export function registerIpc(getWindow: WindowGetter): void {
     const image = nativeImage.createFromPath(imagePath)
     if (image.isEmpty()) throw new ClipForgeError('unknown', 'Could not decode the image for the clipboard')
     clipboard.writeImage(image)
+    // The frame has been decoded into memory by now, so the file behind it is finished
+    // with: the Windows clipboard never reads it again.
+    releaseWorkDir(frameDir)
   })
 
   /** The renderer has no clipboard permission, so reads go through the main process. */
@@ -350,11 +393,16 @@ export function registerIpc(getWindow: WindowGetter): void {
   ipcMain.handle('clipforge:shell:start-drag', async (_event, filePath: string) => {
     const window = getWindow()
     if (!window || !existsSync(filePath)) return
+    // The previous drag image is released here rather than straight after the drag: the
+    // shell may still be reading the file while the cursor is over a drop target, and its
+    // replacement is the point at which it is provably finished with.
+    releaseWorkDir(lastDragDir)
     let icon = nativeImage.createFromPath(filePath)
     if (icon.isEmpty()) {
       const ffmpeg = findBinary('ffmpeg')
       if (ffmpeg) {
         const scratch = workDir('drag')
+        lastDragDir = scratch
         const frame = path.join(scratch, 'drag.png')
         const job = new MediaJob('Preparing the drag image', emit, log)
         track(job)
@@ -411,6 +459,63 @@ export function registerIpc(getWindow: WindowGetter): void {
   })
 
   ipcMain.handle('clipforge:app:version', () => app.getVersion())
+
+  /**
+   * When this bundle was written, from its own timestamp. The renderer pairs it with the
+   * version so "am I running the build I think I am" has an answer on screen - the
+   * question that cost a whole session when an installed older build was behaving like
+   * code whose fix only ever reached the working tree.
+   */
+  ipcMain.handle('clipforge:app:build-time', () => {
+    try {
+      return statSync(app.getAppPath()).mtime.toISOString()
+    } catch {
+      return null
+    }
+  })
+
+  /**
+   * What the startup sweep reclaimed, read once by the renderer when it mounts.
+   *
+   * The main process cannot push this: the sweep has already finished by the time the log
+   * listener exists, so a line sent to the window is dropped.
+   */
+  ipcMain.handle('clipforge:app:startup-note', () => takeStartupNote())
+
+  /**
+   * What this app is using on disk, so the settings can show it instead of leaving two
+   * copies of the installer to be discovered in a temp-folder listing.
+   */
+  ipcMain.handle('clipforge:storage:stats', () => storageReport())
+
+  /**
+   * The explicit clear. Scratch is never removed while a job or a tool download is
+   * running, and a downloaded update is kept while the app is offering to install it.
+   */
+  ipcMain.handle('clipforge:storage:clear', (_event, target: StorageTarget) => {
+    if (target === 'updates') {
+      const result = clearUpdateCache({ updateReady: updateState().status === 'ready' })
+      log(
+        result.refused
+          ? 'The downloaded update is kept until it is installed.'
+          : `Cleared the update cache (${formatBytes(result.bytes)}).`
+      )
+      return { ...storageReport(), cleared: result.refused ? 0 : result.bytes, refused: result.refused }
+    }
+    if (activeJob || activeInstall) {
+      log('Clearing temp files is skipped while a job is running.')
+      return { ...storageReport(), cleared: 0, refused: 'busy' as const }
+    }
+    const result = clearScratch()
+    log(`Cleared ${result.count} temporary folder${result.count === 1 ? '' : 's'} (${formatBytes(result.bytes)}).`)
+    // A folder that is still open somewhere is said so rather than counted as reclaimed:
+    // the empty-folder shells in a real temp directory were exactly this case going
+    // unreported.
+    if (result.failed > 0) {
+      log(`${result.failed} folder${result.failed === 1 ? '' : 's'} is still in use and will be removed on the next start.`)
+    }
+    return { ...storageReport(), cleared: result.bytes, failed: result.failed }
+  })
 
   ipcMain.handle('clipforge:update:state', () => updateState())
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  GIFSICLE_LOSSY,
   MAX_SPEED,
   MAX_WATERMARKS,
   MIN_SPEED,
@@ -308,8 +307,21 @@ describe('output duration', () => {
 describe('gifsicle and cropdetect', () => {
   it('runs a lossy optimising pass', () => {
     const args = gifsicleOptimizeArgs('in.gif', 'out.gif')
-    expect(args).toContain(`--lossy=${GIFSICLE_LOSSY}`)
+    // 40 on the 0-100 strength scale is the old hard-coded `--lossy=80`, which is what
+    // the defaults have to keep meaning.
+    expect(args).toContain('--lossy=80')
+    expect(args).toContain('256')
     expect(args[args.length - 1]).toBe('out.gif')
+  })
+
+  it('carries the chosen palette and strength into the pass', () => {
+    const args = gifsicleOptimizeArgs('in.gif', 'out.gif', { lossy: 100, colors: 64 })
+    expect(args).toContain('--lossy=200')
+    expect(args).toContain('64')
+  })
+
+  it('turns the loss off completely at strength zero', () => {
+    expect(gifsicleOptimizeArgs('in.gif', 'out.gif', { lossy: 0, colors: 256 })).toContain('--lossy=0')
   })
 
   it('reads the last crop ffmpeg reported', () => {

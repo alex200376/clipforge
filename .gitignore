@@ -5,8 +5,7 @@ release/
 # Editor/agent scratch state, not part of the app.
 .freebuff/
 .shots/
-.probe-*.mjs
-# Captured output from a local release run (`cmd /c release.bat > .release-run.out`).
+.probe-*# Captured output from a local release run (`cmd /c release.bat > .release-run.out`).
 # release.bat commits with `git add -A`, so this has to be ignored or the run logs
 # itself into the release commit and then fails its own post-commit clean-tree check.
 .release-run.out

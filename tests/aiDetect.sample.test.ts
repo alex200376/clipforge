@@ -9,11 +9,11 @@
  *   CLIPFORGE_SAMPLE_VIDEO="C:/path/to/clip.mp4" npx vitest run tests/aiDetect.sample.test.ts
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 
 import {
   componentBoxes,
@@ -30,6 +30,15 @@ import type { Detection } from '../src/renderer/ai/detect'
 const VIDEO = process.env.CLIPFORGE_SAMPLE_VIDEO ?? ''
 const ENABLED = VIDEO.length > 0
 const SAMPLES = 8
+/**
+ * The sampled PNGs this run wrote, removed when it ends.
+ *
+ * They used to stay: this test files its frames under a `clipforge-` name, which is the
+ * prefix the app sweeps, so a few diagnostic runs looked exactly like the app's own
+ * leftovers - when the app's temp folder was being counted up, two of the folders in it
+ * were this file's.
+ */
+let scratchDir = ''
 
 const FFMPEG = path.join(process.cwd(), 'resources', 'bin', 'ffmpeg.exe')
 const FFPROBE = path.join(process.cwd(), 'resources', 'bin', 'ffprobe.exe')
@@ -116,11 +125,16 @@ const show = (box: { x: number; y: number; width: number; height: number }, fram
   `x=${Math.round(box.x)} y=${Math.round(box.y)} ${Math.round(box.width)}x${Math.round(box.height)} (${((box.width / frame.width) * 100).toFixed(1)}% wide)`
 
 describe.skipIf(!ENABLED)('what detection finds in a real clip', () => {
+  afterAll(() => {
+    if (scratchDir) rmSync(scratchDir, { recursive: true, force: true })
+  })
+
   it(
     'reports the scene, the still parts of it, and both detectors',
     async () => {
       const meta = probe(VIDEO)
       const dir = mkdtempSync(path.join(tmpdir(), 'clipforge-detect-'))
+      scratchDir = dir
       const frames: { data: Uint8Array; width: number; height: number }[] = []
       for (let index = 0; index < SAMPLES; index += 1) {
         const seconds = (meta.duration * (index + 0.5)) / SAMPLES

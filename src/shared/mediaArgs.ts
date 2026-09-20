@@ -6,6 +6,7 @@
  * order in one place: retime → resample → logo removal → crop → scale → ping-pong.
  */
 
+import { DEFAULT_GIF_TUNING, gifskiLossyQuality, gifsicleLossy, type GifTuning } from './gifTuning'
 import type { CropSpec, VideoEncoder, WatermarkRegion } from './types'
 
 export interface GifOptions {
@@ -14,6 +15,8 @@ export interface GifOptions {
   fps: number
   width: number | null
   quality: number
+  /** Palette size, dither and lossy strength. Absent means the app's defaults. */
+  tuning?: GifTuning
 }
 
 export interface VideoOptions {
@@ -49,8 +52,16 @@ export interface VideoEncodeOptions extends VideoOptions, FilterOptions {
 /** Thumbnails rendered into the trim timeline; shared by main and renderer. */
 export const FILMSTRIP_FRAMES = 40
 export const FILMSTRIP_TILE_HEIGHT = 112
-/** Lossy strength for the optional gifsicle pass. */
-export const GIFSICLE_LOSSY = 80
+
+/** The app's fixed audio bitrate, in kbps, matching `targetSizeArgs`. */
+export const AUDIO_KBPS = 128
+/**
+ * The encoder's floor for the picture, in kbps. Below this a re-encode is mush, so the
+ * app refuses rather than pretending - see `minimumTargetBytes`.
+ */
+export const MIN_VIDEO_KBPS = 32
+/** The share of a target the encoder aims at, leaving room for the container. */
+export const TARGET_SIZE_SAFETY = 0.94
 
 const sec = (value: number): string => value.toFixed(3)
 
@@ -291,14 +302,24 @@ export type FilterKind = 'palette' | 'frames' | 'animated' | 'video'
  * The complete `-vf` value for each output kind. Every variant stays a single
  * input/single output graph so ffmpeg's simple filtergraph parser accepts it.
  */
-export function videoFilter(kind: FilterKind, size: SizeSpec, filters: FilterOptions = {}): string {
+export function videoFilter(
+  kind: FilterKind,
+  size: SizeSpec,
+  filters: FilterOptions = {},
+  gif: GifTuning = DEFAULT_GIF_TUNING
+): string {
   const chain = buildChain(size, filters)
   switch (kind) {
     case 'frames':
       // gifski eats raw frames, so the graph just has to end on the video output.
       return chain.head
-    case 'palette':
-      return `${append(chain, 'split[s0][s1]')};[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=floyd_steinberg`
+    case 'palette': {
+      // `stats_mode=diff` builds the palette from what changes rather than from every
+      // frame, which is what the app has always used; the two knobs are the palette size
+      // and the dither, both of which move the file size directly (see gifTuning.ts).
+      const { colors, dither } = gif
+      return `${append(chain, 'split[s0][s1]')};[s0]palettegen=max_colors=${colors}:stats_mode=diff[p];[s1][p]paletteuse=dither=${dither}`
+    }
     case 'animated':
       // Animated WebP keeps its own encoder quality; no palette stage is needed.
       return append(chain, 'format=yuv420p')
@@ -322,7 +343,7 @@ export function paletteArgs(source: string, output: string, options: GifOptions 
     '-i',
     source,
     '-vf',
-    videoFilter('palette', { fps: options.fps, width: options.width }, options),
+    videoFilter('palette', { fps: options.fps, width: options.width }, options, options.tuning ?? DEFAULT_GIF_TUNING),
     '-loop',
     '0',
     output
@@ -340,7 +361,7 @@ export function webpArgs(source: string, output: string, options: GifOptions & F
     '-i',
     source,
     '-vf',
-    videoFilter('animated', { fps: options.fps, width: options.width }, options),
+    videoFilter('animated', { fps: options.fps, width: options.width }, options, options.tuning ?? DEFAULT_GIF_TUNING),
     '-c:v',
     'libwebp_anim',
     '-q:v',
@@ -352,7 +373,20 @@ export function webpArgs(source: string, output: string, options: GifOptions & F
   ]
 }
 
-export function frameArgs(source: string, pattern: string, options: GifOptions & FilterOptions): string[] {
+/**
+ * Raw frames written to stdout as a YUV4MPEG stream, for gifski to read from its stdin.
+ *
+ * The obvious alternative - render each frame to a PNG and name every one of them on
+ * gifski's command line - does not survive a normal clip: the command line is capped
+ * (around 34 KB on Windows), and a 25-second GIF at 20 fps is already 500 paths, so the
+ * spawn fails with `ENAMETOOLONG` before any encoding happens. A pipe keeps the argument
+ * list fixed and constant instead of growing with the clip's length, and removing the
+ * PNG round-trip removes a full directory of intermediate files with it.
+ *
+ * `evenDims` is not optional here: yuv420p cannot represent an odd width or height, so
+ * a crop that leaves an odd edge has to be rounded before the frames leave ffmpeg.
+ */
+export function y4mArgs(source: string, options: GifOptions & FilterOptions): string[] {
   return [
     '-y',
     '-ss',
@@ -362,18 +396,51 @@ export function frameArgs(source: string, pattern: string, options: GifOptions &
     '-i',
     source,
     '-vf',
-    videoFilter('frames', { fps: options.fps, width: options.width }, options),
-    pattern
+    videoFilter('frames', { fps: options.fps, width: options.width, evenDims: true }, options),
+    '-pix_fmt',
+    'yuv420p',
+    '-an',
+    '-f',
+    'yuv4mpegpipe',
+    '-'
   ]
 }
 
-export function gifskiArgs(frames: string[], output: string, options: GifOptions): string[] {
-  return ['--fps', String(options.fps), '--quality', String(options.quality), '-o', output, ...frames]
+/**
+ * gifski's own options plus its inputs. A single `-` means "read the frames from
+ * stdin", which is what the export uses; a list of PNG paths also works and is what the
+ * golden test uses against a file it rendered itself.
+ */
+export function gifskiArgs(inputs: string[], output: string, options: GifOptions): string[] {
+  const tuning = options.tuning ?? DEFAULT_GIF_TUNING
+  const lossyQuality = gifskiLossyQuality(tuning.lossy)
+  return [
+    '--fps',
+    String(options.fps),
+    '--quality',
+    String(options.quality),
+    // Omitted entirely at strength 0, because the flag always implies some loss.
+    ...(lossyQuality === null ? [] : ['--lossy-quality', String(lossyQuality)]),
+    '-o',
+    output,
+    ...inputs
+  ]
 }
 
-/** Post-pass that typically shrinks a GIF by a third with no visible change. */
-export function gifsicleOptimizeArgs(input: string, output: string, lossy = GIFSICLE_LOSSY): string[] {
-  return ['-O3', `--lossy=${lossy}`, '--colors', '256', input, '-o', output]
+/**
+ * Post-pass that typically shrinks a GIF by more than half, and by far the strongest
+ * lever here: measured at 9373 KB before and 3857 KB after on a 4-second 480p clip.
+ *
+ * The colour count is repeated here as well as in the palette stage because this pass
+ * has its own quantiser, and leaving it at 256 would undo the saving the user just asked
+ * for - measured, `--colors 64` on top of `--lossy 80` takes 3857 KB to 2563 KB.
+ */
+export function gifsicleOptimizeArgs(
+  input: string,
+  output: string,
+  options: { lossy: number; colors: number } = { lossy: DEFAULT_GIF_TUNING.lossy, colors: DEFAULT_GIF_TUNING.colors }
+): string[] {
+  return ['-O3', `--lossy=${gifsicleLossy(options.lossy)}`, '--colors', String(options.colors), input, '-o', output]
 }
 
 /** Scans a window of the source to find letterboxing. */
@@ -464,15 +531,31 @@ export function trimArgs(source: string, output: string, options: VideoEncodeOpt
 export function targetVideoBitrate(
   durationSeconds: number,
   targetBytes: number,
-  audioKbps = 128,
-  safety = 0.94
+  audioKbps = AUDIO_KBPS,
+  safety = TARGET_SIZE_SAFETY
 ): number {
   if (durationSeconds <= 0) throw new Error('Duration must be positive')
   if (targetBytes <= 0) throw new Error('Target size must be positive')
   const totalKbps = (targetBytes * 8) / durationSeconds / 1000
   const videoKbps = totalKbps * safety - (audioKbps > 0 ? audioKbps : 0)
-  if (videoKbps < 32) throw new Error('Target size is too small for this clip length')
+  if (videoKbps < MIN_VIDEO_KBPS) throw new Error('Target size is too small for this clip length')
   return Math.round(videoKbps)
+}
+
+/**
+ * The smallest target this clip could be encoded to, in bytes - the inverse of
+ * `targetVideoBitrate` at its floor.
+ *
+ * The refusal above is correct but it used to arrive only when Export was pressed. This
+ * is what lets the panel say "this clip needs at least 25 MB" while the size menu is
+ * still open, which matters now that the menu offers 5 MB: a ten-minute clip aimed at
+ * 5 MB would ask the encoder for about 5 kbps of picture.
+ */
+export function minimumTargetBytes(seconds: number, options: { mute?: boolean } = {}): number {
+  if (!(seconds > 0)) return 0
+  const audio = options.mute ? 0 : AUDIO_KBPS
+  const neededKbps = (MIN_VIDEO_KBPS + audio) / TARGET_SIZE_SAFETY
+  return Math.ceil((neededKbps * 1000 * seconds) / 8)
 }
 
 export function targetSizeArgs(source: string, output: string, options: TargetSizeOptions & FilterOptions & { encoder?: VideoEncoder; loudnorm?: boolean }): string[] {

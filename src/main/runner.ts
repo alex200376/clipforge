@@ -23,12 +23,39 @@ export interface RunOutcome {
   stdout: string
 }
 
+export interface PipelineOptions {
+  /** Label for the producing command, which reports progress against the clip. */
+  stage: string
+  /** Label for the consuming command, which reports its own units. */
+  consumerStage: string
+  /** Clip length in seconds, so the producer's out_time becomes a percentage. */
+  duration?: number
+  /**
+   * Frames the range will produce, when the caller knows it.
+   *
+   * A consumer reading a pipe cannot count its input in advance, so its own total only
+   * reflects what it has decoded so far and keeps growing - "frame 206 of 256" of a
+   * GIF that is really 720 frames long. Given the real number, the consumer's count
+   * becomes honest progress through the encode instead.
+   */
+  frames?: number
+}
+
 type Emit = (event: JobProgress) => void
 type Log = (line: string) => void
 
 let counter = 0
 
 const isFfmpeg = (command: string): boolean => /ffmpeg(\.exe)?$/i.test(command)
+
+/**
+ * ffmpeg gets the same two flags on every invocation: no banner, and its progress
+ * stream on stderr instead of mixed into stdout. That last part matters for the piped
+ * case - stdout there is the frames themselves, and a stray progress line landing in
+ * them would corrupt the stream gifski is decoding.
+ */
+const preparedArgs = (command: Command): string[] =>
+  isFfmpeg(command.command) ? ['-hide_banner', '-nostats', '-progress', 'pipe:2', ...command.args] : command.args
 
 /**
  * Kill the whole process tree. On Windows a plain kill leaves children of a
@@ -88,8 +115,8 @@ export class MediaJob {
     this.log(line)
   }
 
-  private spawnTracked(command: string, args: string[]): ChildProcess {
-    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  private spawnTracked(command: string, args: string[], stdin: 'ignore' | 'pipe' = 'ignore'): ChildProcess {
+    const child = spawn(command, args, { windowsHide: true, stdio: [stdin, 'pipe', 'pipe'] })
     this.children.push(child)
     if (this.cancelled) killTree(child)
     return child
@@ -105,7 +132,14 @@ export class MediaJob {
   private consume(
     child: ChildProcess,
     options: RunOptions,
-    onPercent: (value: number, detail?: JobProgressDetail) => void
+    onPercent: (value: number, detail?: JobProgressDetail) => void,
+    /**
+     * A private tail for this stream. In a pipeline both sides write into one job's log,
+     * so the shared tail would blame whichever command complained last - the encoder
+     * telling you to recompile gifski, when the real error is that the frames could not
+     * be read in the first place.
+     */
+    tail?: string[]
   ): void {
     const handle = (chunk: Buffer): void => {
       for (const raw of chunk.toString('utf8').split(/\r\n|\r|\n/)) {
@@ -132,7 +166,13 @@ export class MediaJob {
           continue
         }
         // Progress stats update the bar above; only real messages belong in the log.
-        if (!isProgressLine(line)) this.record(line)
+        if (!isProgressLine(line)) {
+          this.record(line)
+          if (tail) {
+            tail.push(line)
+            if (tail.length > 25) tail.shift()
+          }
+        }
       }
     }
     child.stdout?.on('data', handle)
@@ -141,10 +181,7 @@ export class MediaJob {
 
   async run(command: Command, options: RunOptions = {}): Promise<RunOutcome> {
     const stage = options.stage ?? this.stage
-    const finalArgs = isFfmpeg(command.command)
-      ? ['-hide_banner', '-nostats', '-progress', 'pipe:2', ...command.args]
-      : command.args
-    const child = this.spawnTracked(command.command, finalArgs)
+    const child = this.spawnTracked(command.command, preparedArgs(command))
     let stdout = ''
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8')
@@ -176,6 +213,83 @@ export class MediaJob {
         resolve({ ok: false, code, error: detail || `Process exited with code ${code}`, stdout })
       })
     })
+  }
+
+  /**
+   * Runs a producer whose stdout feeds a consumer's stdin, with both reporting
+   * progress while they run.
+   *
+   * This exists because a list of frame files cannot be handed to the encoder as
+   * arguments: the command line has a hard ceiling - about 34 KB on Windows - and a
+   * GIF of a normal-length clip passes it easily, at which point the spawn itself
+   * fails with `ENAMETOOLONG` and nothing is exported at all. Streaming the frames
+   * through a pipe keeps the command line a fixed handful of arguments no matter how
+   * long the clip is, and skips writing thousands of intermediate PNGs to disk on the
+   * way.
+   *
+   * Both sides are watched. A consumer that finishes first is not success if the
+   * producer failed midway - the encoder would happily close a truncated stream and
+   * leave a short GIF behind - so the producer's own exit is awaited before the
+   * outcome is reported.
+   */
+  async pipe(producer: Command, consumer: Command, options: PipelineOptions): Promise<RunOutcome> {
+    const from = this.spawnTracked(producer.command, preparedArgs(producer))
+    const to = this.spawnTracked(consumer.command, preparedArgs(consumer), 'pipe')
+    if (!from.stdout || !to.stdin) {
+      return { ok: false, code: null, error: 'The frames could not be piped to the encoder.', stdout: '' }
+    }
+
+    // A producer that dies closes the pipe under the consumer; without a listener the
+    // resulting EPIPE would surface as an unhandled stream error.
+    to.stdin.on('error', () => undefined)
+    from.stdout.on('error', () => undefined)
+    from.stdout.pipe(to.stdin)
+
+    const producerTail: string[] = []
+    this.consume(
+      from,
+      options,
+      (percent, detail) => this.report(options.stage, percent, options.stage, detail),
+      producerTail
+    )
+    this.consume(to, { duration: 0, stage: options.consumerStage }, (percent, detail) => {
+      const expected = options.frames ?? 0
+      // The consumer counts against its own growing total here; the caller's number is
+      // the truthful denominator.
+      if (expected > 0 && detail?.kind === 'frames') {
+        const done = Math.min(detail.done, expected)
+        this.report(options.consumerStage, (done / expected) * 100, options.consumerStage, {
+          kind: 'frames',
+          done,
+          total: expected
+        })
+        return
+      }
+      this.report(options.consumerStage, percent, options.consumerStage, detail)
+    })
+    this.report(options.stage, 0, options.stage)
+
+    let producerError: string | null = null
+    const producerSettled = new Promise<void>((resolve) => {
+      from.on('error', (error) => {
+        producerError = error.message
+        resolve()
+      })
+      from.on('close', (code) => {
+        if (!this.cancelled && code !== 0) {
+          producerError = producerTail.slice(-4).join(' | ') || `${options.stage} exited with code ${code}`
+        }
+        resolve()
+      })
+    })
+
+    const consumerOutcome = await this.wait(to)
+    await producerSettled
+    // The producer's failure is reported ahead of the consumer's: a broken pipe makes
+    // the encoder complain about its input, and its advice is not the reason the export
+    // failed. Whatever the frames could not be read from is the real error.
+    if (producerError) return { ok: false, code: null, error: producerError, stdout: consumerOutcome.stdout }
+    return consumerOutcome
   }
 
   cancel(): void {

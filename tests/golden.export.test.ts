@@ -12,8 +12,8 @@
  * binaries are not on disk rather than failing a checkout without them.
  */
 
-import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -22,13 +22,13 @@ import {
   FILMSTRIP_FRAMES,
   cropdetectArgs,
   filmstripArgs,
-  frameArgs,
   gifskiArgs,
   paletteArgs,
   parseCropDetect,
   targetSizeArgs,
   trimArgs,
-  webpArgs
+  webpArgs,
+  y4mArgs
 } from '../src/shared/mediaArgs'
 
 const EXT = process.platform === 'win32' ? '.exe' : ''
@@ -45,6 +45,38 @@ let source = ''
 function run(command: string, args: string[]): { ok: boolean; output: string } {
   const result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
   return { ok: result.status === 0, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+}
+
+/**
+ * The producer→consumer pipeline the GIF export uses: the first command writes its
+ * stdout into the second command's stdin. `spawnSync` cannot express this, so this is
+ * the one case in the file that runs asynchronously - and it is the case worth checking,
+ * because the whole point of the pipe is that the arguments stay constant while the clip
+ * grows.
+ */
+async function runPipeline(
+  producer: string,
+  producerArgs: string[],
+  consumer: string,
+  consumerArgs: string[]
+): Promise<{ ok: boolean; output: string }> {
+  const from = spawn(producer, producerArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+  const to = spawn(consumer, consumerArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
+  let output = ''
+  const collect = (chunk: Buffer): void => {
+    output += chunk.toString('utf8')
+  }
+  from.stderr?.on('data', collect)
+  to.stderr?.on('data', collect)
+  to.stdout?.on('data', collect)
+  // A producer that fails closes the pipe under the consumer.
+  to.stdin?.on('error', () => undefined)
+  from.stdout?.pipe(to.stdin!)
+
+  const closed = (child: ReturnType<typeof spawn>): Promise<number | null> =>
+    new Promise((resolve) => child.on('close', (code) => resolve(code)))
+  const [producerCode, consumerCode] = await Promise.all([closed(from), closed(to)])
+  return { ok: producerCode === 0 && consumerCode === 0, output }
 }
 
 interface Probe {
@@ -221,27 +253,17 @@ describe.skipIf(!haveTools)('golden exports', () => {
     expect(info.width).toBeGreaterThan(2000)
   }, TIMEOUT)
 
-  it.skipIf(!existsSync(gifski))('gifski assembles the rendered frames', () => {
-    const pattern = join(scratch, 'frame_%06d.png')
+  it.skipIf(!existsSync(gifski))('gifski encodes the frames piped in from ffmpeg', async () => {
     const options = { start: 1, end: 2, fps: 10, width: 160, quality: 90 }
-    const frames = run(ffmpeg, frameArgs(source, pattern, options))
-    expect(frames.ok, frames.output.slice(-800)).toBe(true)
-
-    const files = readdirSync(scratch)
-      .filter((file) => file.startsWith('frame_') && file.endsWith('.png'))
-      .sort()
-      .map((file) => join(scratch, file))
-    // 1 second at 10fps.
-    expect(files.length).toBeGreaterThanOrEqual(8)
-    expect(files.length).toBeLessThanOrEqual(12)
-
     const output = join(scratch, 'gifski.gif')
-    const result = run(gifski, gifskiArgs(files, output, options))
+    const result = await runPipeline(ffmpeg, y4mArgs(source, options), gifski, gifskiArgs(['-'], output, options))
     expect(result.ok, result.output.slice(-800)).toBe(true)
 
     const info = probe(output)
     expect(info.width).toBe(160)
     expect(info.fps).toBeCloseTo(10, 0)
+    // 1 second at 10fps, and no frames were dropped on the way through the pipe.
     expect(info.frames).toBeGreaterThanOrEqual(8)
+    expect(info.frames).toBeLessThanOrEqual(12)
   }, TIMEOUT)
 })

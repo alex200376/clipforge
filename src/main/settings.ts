@@ -1,7 +1,10 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
-import type { AppSettings, EncoderChoice, GifEngine, Language, OutputFormat, VideoSize } from '../shared/types'
+import { DEFAULT_GIF_TUNING, normalizeGifTuning } from '../shared/gifTuning'
+import { RESOLUTION_PRESETS } from '../shared/resolutions'
+import type { AppSettings, EncoderChoice, GifEngine, Language, OutputFormat } from '../shared/types'
 import { THEMES } from '../shared/types'
+import { VIDEO_SIZES } from '../shared/videoSize'
 import { defaultOutputDir, settingsPath } from './paths'
 
 const DEFAULTS: AppSettings = {
@@ -15,17 +18,24 @@ const DEFAULTS: AppSettings = {
   defaultVideoSize: 'original',
   defaultFormat: 'gif',
   defaultEncoder: 'auto',
+  gifColors: DEFAULT_GIF_TUNING.colors,
+  gifDither: DEFAULT_GIF_TUNING.dither,
+  gifLossy: DEFAULT_GIF_TUNING.lossy,
   onboarded: false,
   autoUpdate: true
 }
 
 const LANGUAGES: Language[] = ['en', 'zh-TW']
 const ENGINES: GifEngine[] = ['gifski', 'palette']
-const VIDEO_SIZES: VideoSize[] = ['original', '10mb', '25mb']
 const FORMATS: OutputFormat[] = ['gif', 'webp']
 const ENCODERS: EncoderChoice[] = ['auto', 'cpu', 'gpu']
-/** Matches the resolution buttons offered by the export panel. */
-const WIDTHS: Array<number | null> = [null, 320, 480, 640, 720]
+/**
+ * Both allowlists come from the modules the UI renders, rather than being written out
+ * again here. They were separate copies, which is how a preset ends up selectable in the
+ * panel and rejected on the way back in - `pick` would then quietly reset it.
+ */
+const WIDTHS: Array<number | null> = [...RESOLUTION_PRESETS]
+const SIZES = [...VIDEO_SIZES]
 
 let cache: AppSettings | null = null
 
@@ -39,6 +49,9 @@ function pick<T>(candidate: T | undefined, allowed: T[], fallback: T): T {
  */
 export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
   const fps = Number(raw.defaultFps)
+  // One reader for the three GIF knobs: they came from a file, and an unknown palette
+  // size would reach `palettegen` as an invalid argument and fail every export.
+  const gif = normalizeGifTuning({ colors: raw.gifColors, dither: raw.gifDither, lossy: raw.gifLossy })
   return {
     outputDir: typeof raw.outputDir === 'string' ? raw.outputDir : '',
     language: pick(raw.language, LANGUAGES, DEFAULTS.language),
@@ -47,9 +60,12 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     defaultEngine: pick(raw.defaultEngine, ENGINES, DEFAULTS.defaultEngine),
     defaultFps: Number.isFinite(fps) ? Math.max(10, Math.min(30, Math.round(fps))) : DEFAULTS.defaultFps,
     defaultWidth: pick(raw.defaultWidth, WIDTHS, DEFAULTS.defaultWidth),
-    defaultVideoSize: pick(raw.defaultVideoSize, VIDEO_SIZES, DEFAULTS.defaultVideoSize),
+    defaultVideoSize: pick(raw.defaultVideoSize, SIZES, DEFAULTS.defaultVideoSize),
     defaultFormat: pick(raw.defaultFormat, FORMATS, DEFAULTS.defaultFormat),
     defaultEncoder: pick(raw.defaultEncoder, ENCODERS, DEFAULTS.defaultEncoder),
+    gifColors: gif.colors,
+    gifDither: gif.dither,
+    gifLossy: gif.lossy,
     onboarded: raw.onboarded === true,
     autoUpdate: raw.autoUpdate !== false
   }

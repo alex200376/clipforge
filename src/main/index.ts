@@ -1,8 +1,11 @@
 import { BrowserWindow, app, crashReporter, session, shell } from 'electron'
 
+import { formatBytes } from '../shared/bytes'
 import { cancelActiveWork, registerIpc, releaseDownloads, trackWindowState } from './ipc'
 import { handleMediaProtocol, registerMediaScheme, setAppRoot } from './mediaProtocol'
 import { appUrl, iconPath, isDev, preloadEntry, rendererDir, rendererEntry } from './paths'
+import { sweepStaleWorkDirs } from './scratch'
+import { pruneUpdateCache, setStartupNote } from './storage'
 
 /**
  * Asks for the discrete GPU on a machine that has both.
@@ -28,6 +31,24 @@ registerMediaScheme()
 crashReporter.start({ productName: 'ClipForge', uploadToServer: false, compress: true })
 
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * Cleans up after earlier runs: scratch folders a crash or a force-quit left behind, and
+ * update downloads that never finished.
+ *
+ * Nothing here touches a folder whose owning process is still running, so a second copy
+ * of the app is safe, and nothing runs at all when automatic cleanup is switched off.
+ */
+function reclaimFromEarlierRuns(): void {
+  const swept = sweepStaleWorkDirs()
+  const pruned = pruneUpdateCache({ busy: false })
+  const bytes = swept.bytes + pruned.bytes
+  if (swept.removed.length === 0 && pruned.files === 0) return
+  const folders = swept.removed.length + pruned.files
+  // Held until the renderer asks for it, because the sweep runs before there is anything
+  // listening on the other end.
+  setStartupNote(`Reclaimed ${folders} leftover temp file${folders === 1 ? '' : 's'} (${formatBytes(bytes)}) from an earlier run.`)
+}
 
 /**
  * One bad job must not take the app down with it. A renderer crash is reported
@@ -129,6 +150,7 @@ function applyContentSecurityPolicy(): void {
 }
 
 app.whenReady().then(() => {
+  reclaimFromEarlierRuns()
   // The built renderer is served over the app's own scheme, so it needs to know where
   // it lives before the first load.
   setAppRoot(rendererDir())

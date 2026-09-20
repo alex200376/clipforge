@@ -771,6 +771,30 @@ export function noiseFloor(deviation: ArrayLike<number>, percentile = 0.05): num
 const TUNED_SAMPLE_WIDTH = 640
 
 /**
+ * How far out the picture a pixel is compared against is sampled, in sample pixels.
+ *
+ * A neighbourhood, not a proportion of the picture - and making it a proportion is the
+ * correction here. It used to be `14 * width / 640`, so a *bigger* sample asked a
+ * *looser* question: at the 1080 wide a 1080p clip is actually analysed at it reached
+ * 24 px, and what it measured then was not the mark's own surroundings but whatever the
+ * frame was doing a couple of dozen pixels away. Ordinary scenery sits within 24 px of
+ * some edge, `localContrast` reports that edge as standing out, and the mask stops being
+ * a picture of the mark and becomes a picture of every boundary in the frame.
+ *
+ * Measured across ten real clips, the regions offered as watermarks fall from 26 at the
+ * old setting to 11 here, while both of the clips carrying an identifiable mark are still
+ * found - the same box, at every distance from 4 to 16 - and the two clips the detector
+ * ought to be quiet on go to none at all. The response is flat across that whole range,
+ * which is what makes ten a value from the data rather than a fitted number.
+ *
+ * Ten rather than a small fraction, because of what caps the analysis: `SAMPLE_WIDTH` in
+ * the main process and `STATIC_WIDTH` in the worker both stop at 1280, so this never runs
+ * wider than twice the width it was tuned at. A stroke or a border - the thing the ring is
+ * measuring - is a few pixels across at any of those widths.
+ */
+const RING_DISTANCE = 10
+
+/**
  * The settings the built-in detector is called with, for the size it is analysing.
  *
  * Two of these are distances, and a distance in pixels means something different at every
@@ -796,7 +820,7 @@ export function detectionSettings(width: number, height: number, maxResults: num
     // a gap of 8 left one handle as three separate regions. The background the mark is
     // compared against is sampled further out than that, so it stays outside the whole line.
     groupGap: Math.max(4, Math.round(16 * scale)),
-    ringDistance: Math.max(1, Math.round(14 * scale)),
+    ringDistance: RING_DISTANCE,
     maxResults
   }
 }

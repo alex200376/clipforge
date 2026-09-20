@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { AI_MASTER_EXTENSION, aiCompositeArgs, aiMasterArgs, aiSampleArgs, aiWindowArgs } from '../shared/aiArgs'
@@ -19,7 +19,8 @@ import type {
 } from '../shared/types'
 import { findBinary, missingBinaryError } from './binaries'
 import { registerMediaDirectory, registerMediaToken } from './mediaProtocol'
-import { modelsDir, ortDir, workDir } from './paths'
+import { modelsDir, ortDir } from './paths'
+import { releaseWorkDir, workDir } from './scratch'
 import { MediaJob } from './runner'
 
 /**
@@ -69,6 +70,8 @@ export interface AiSession {
 
 const sessions = new Map<string, AiSession>()
 let assetTokens: AiAssets | null = null
+/** The last detection search's sampled frames, released when the next one replaces them. */
+let lastDetectDir: string | null = null
 
 const modelPath = (name: string): string => path.join(modelsDir(), name)
 
@@ -129,7 +132,7 @@ function evictOldest(): void {
   if (sessions.size < MAX_SESSIONS) return
   const oldest = [...sessions.values()].sort((a, b) => a.token.localeCompare(b.token))[0]
   if (!oldest) return
-  rmSync(oldest.dir, { recursive: true, force: true })
+  releaseWorkDir(oldest.dir)
   sessions.delete(oldest.key)
 }
 
@@ -150,7 +153,7 @@ export function aiSourceFor(token: string | undefined): string | null {
 export function releaseAiSessions(): void {
   for (const session of sessions.values()) {
     session.job?.cancel()
-    rmSync(session.dir, { recursive: true, force: true })
+    releaseWorkDir(session.dir)
   }
   sessions.clear()
 }
@@ -312,6 +315,11 @@ export async function sampleFrames(request: AiDetectRequest, sdk: AiSdk): Promis
   if (!ffmpeg) throw missingBinaryError('ffmpeg')
   if (!(request.duration > 0)) throw new Error('Load a clip before looking for a watermark.')
   const dir = workDir('detect')
+  // The previous search's frames are only kept while the renderer is showing them, so
+  // they go as soon as another search replaces them. Without this the sampled PNGs of
+  // every search in a session stayed in the temp folder until the app quit.
+  releaseWorkDir(lastDetectDir)
+  lastDetectDir = dir
   const count = Math.max(3, Math.min(12, Math.round(request.samples)))
   const width = Math.max(2, Math.floor(Math.min(SAMPLE_WIDTH, Math.max(2, request.width)) / 2) * 2)
   const pattern = path.join(dir, 'sample_%03d.png')

@@ -16,7 +16,8 @@ import {
 } from '../shared/installPlan'
 import type { BinaryName, InstallPhase, InstallProgressEvent, InstallToolProgress } from '../shared/types'
 import { versionOf } from './binaries'
-import { binDir, installCacheDir } from './paths'
+import { binDir } from './paths'
+import { installCacheDir } from './scratch'
 
 export interface InstallOptions {
   /** Receives a complete snapshot after every meaningful change. */

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { ClipForgeError } from '../shared/errors'
 import { ytdlpDownloadArgs } from '../shared/mediaArgs'
 import type { JobProgress } from '../shared/types'
-import { workDir } from './paths'
+import { releaseWorkDir, workDir } from './scratch'
 import { MediaJob } from './runner'
 import { ytdlpPath } from './ytdlp'
 
@@ -70,6 +70,6 @@ export async function materializeUrl(url: string, deps: UrlSourceDeps): Promise<
 
 /** Removes every download made during this run; called as the app quits. */
 export function releaseMaterializedUrls(): void {
-  for (const { dir } of downloads.values()) rmSync(dir, { recursive: true, force: true })
+  for (const { dir } of downloads.values()) releaseWorkDir(dir)
   downloads.clear()
 }

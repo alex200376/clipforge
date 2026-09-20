@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { MediaJob } from '../src/main/runner'
-import { gifskiArgs, trimArgs } from '../src/shared/mediaArgs'
+import { gifskiArgs, trimArgs, y4mArgs } from '../src/shared/mediaArgs'
 import type { JobProgress } from '../src/shared/types'
 
 const EXT = process.platform === 'win32' ? '.exe' : ''
@@ -139,6 +139,74 @@ describe.skipIf(!haveFfmpeg)('runner progress', () => {
 
       // gifski's bar is machine chatter: it drives the display, never the log.
       expect(log.some((line) => /Frame\s+\d+\s*\/\s*\d+/.test(line))).toBe(false)
+    },
+    TIMEOUT
+  )
+
+  it.skipIf(!haveGifski)(
+    'pipes frames into gifski and counts them against the real total',
+    async () => {
+      const output = join(scratch, 'piped.gif')
+      const options = { start: 0, end: 2, fps: 20, width: 160, quality: 80 }
+      // 2 seconds at 20 fps. The old shape named every frame on the command line and
+      // overflowed it on a clip of ordinary length; the pipe keeps it at a fixed size.
+      const expected = 40
+      const { events, log, emit, logLine } = recorder()
+      const job = new MediaJob('Rendering frames', emit, logLine)
+      const outcome = await job.pipe(
+        { command: ffmpeg, args: y4mArgs(source, options) },
+        { command: gifski, args: gifskiArgs(['-'], output, options) },
+        { stage: 'Rendering frames', consumerStage: 'Building GIF', duration: 2, frames: expected }
+      )
+
+      expect(outcome.ok, outcome.error).toBe(true)
+      expect(existsSync(output)).toBe(true)
+
+      const stages = new Set(events.map((event) => event.stage))
+      expect(stages).toContain('Rendering frames')
+      expect(stages).toContain('Building GIF')
+
+      // The producer's own progress is measured in seconds of the clip.
+      const timed = events.filter((event) => event.detail?.kind === 'time')
+      expect(timed[timed.length - 1]?.detail).toMatchObject({ kind: 'time', total: 2 })
+
+      // The consumer's is measured in frames - against the count the caller supplied,
+      // not against the ever-growing number a pipe leaves it to infer.
+      const counted = events.filter((event) => event.detail?.kind === 'frames')
+      expect(counted.length).toBeGreaterThan(0)
+      for (const event of counted) {
+        expect(event.detail).toMatchObject({ kind: 'frames', total: expected })
+      }
+      const done = counted.map((event) => (event.detail?.kind === 'frames' ? event.detail.done : 0))
+      expect(Math.max(...done)).toBeGreaterThan(expected / 2)
+      // The bar only ever moves forward, however the two sides interleave.
+      const percents = events.map((event) => event.percent)
+      expect([...percents].sort((a, b) => a - b)).toEqual(percents)
+      expect(log.some((line) => /Frame\s+\d+\s*\/\s*\d+/.test(line))).toBe(false)
+    },
+    TIMEOUT
+  )
+
+  it.skipIf(!haveGifski)(
+    'reports the producer\'s error when the frames cannot be read, not the encoder\'s',
+    async () => {
+      const { log, emit, logLine } = recorder()
+      const job = new MediaJob('Rendering frames', emit, logLine)
+      const outcome = await job.pipe(
+        { command: ffmpeg, args: ['-y', '-i', join(scratch, 'does-not-exist.mp4'), '-f', 'yuv4mpegpipe', '-'] },
+        {
+          command: gifski,
+          args: gifskiArgs(['-'], join(scratch, 'broken.gif'), { start: 0, end: 2, fps: 20, width: 160, quality: 80 })
+        },
+        { stage: 'Rendering frames', consumerStage: 'Building GIF', duration: 2, frames: 40 }
+      )
+
+      expect(outcome.ok).toBe(false)
+      // A broken pipe makes gifski complain about its input; the real reason is that the
+      // source could not be opened.
+      expect(outcome.error ?? '').toMatch(/No such file|does-not-exist|Error opening input/i)
+      expect(outcome.error ?? '').not.toMatch(/recompile gifski/i)
+      expect(log.some((line) => line.includes('Rendering frames exited'))).toBe(false)
     },
     TIMEOUT
   )

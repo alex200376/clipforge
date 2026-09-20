@@ -5,6 +5,7 @@ import {
   filmstripArgs,
   gifskiArgs,
   isProgressLine,
+  y4mArgs,
   paletteArgs,
   parseGifskiFrames,
   parseProgressTime,
@@ -21,10 +22,11 @@ const gifOptions = { start: 1.5, end: 5.25, fps: 24, width: 480, quality: 90 }
 describe('gif argument builders', () => {
   it('builds a palettegen filter chain with the requested resolution', () => {
     const args = paletteArgs('in.mp4', 'out.gif', gifOptions)
-    const filter = args[args.indexOf('-vf') + 1]
+    const filter = args[args.indexOf('-vf') + 1] ?? ''
     expect(filter).toContain('fps=24')
     expect(filter).toContain('scale=480:-1:flags=lanczos')
-    expect(filter).toContain('palettegen=stats_mode=diff')
+    // The palette size is carried explicitly now, and 256 is the default it always was.
+    expect(filter).toContain('palettegen=max_colors=256:stats_mode=diff')
     expect(filter).toContain('paletteuse=dither=floyd_steinberg')
     expect(args[args.length - 1]).toBe('out.gif')
     expect(args).toContain('-loop')
@@ -37,8 +39,36 @@ describe('gif argument builders', () => {
 
   it('passes quality and fps to gifski', () => {
     const args = gifskiArgs(['a.png', 'b.png'], 'out.gif', gifOptions)
-    expect(args.slice(0, 6)).toEqual(['--fps', '24', '--quality', '90', '-o', 'out.gif'])
-    expect(args.slice(6)).toEqual(['a.png', 'b.png'])
+    // A strength of 40 is the default, which gifsicle would see as `--lossy=80`; gifski
+    // expresses the same loss as `--lossy-quality 84`, in its own direction.
+    expect(args.slice(0, 6)).toEqual(['--fps', '24', '--quality', '90', '--lossy-quality', '84'])
+    expect(args.slice(6)).toEqual(['-o', 'out.gif', 'a.png', 'b.png'])
+  })
+
+  it('hands gifski one stdin input rather than a path per frame', () => {
+    // The reason this shape exists: a path per frame overflows the command line on a
+    // clip of ordinary length, and the failure is a spawn error, not a bad GIF.
+    const args = gifskiArgs(['-'], 'out.gif', gifOptions)
+    expect(args[args.length - 1]).toBe('-')
+    expect(args.filter((arg) => arg.endsWith('.png'))).toHaveLength(0)
+  })
+
+  it('renders frames as a y4m stream whose length is independent of the clip', () => {
+    const short = y4mArgs('in.mp4', { start: 0, end: 2, fps: 24, width: 480, quality: 90 })
+    const long = y4mArgs('in.mp4', { start: 0, end: 600, fps: 24, width: 480, quality: 90 })
+    // A ten-minute range costs exactly as much command line as a two-second one: the
+    // only difference is the duration itself, never the number of arguments.
+    expect(long).toHaveLength(short.length)
+    expect(short).not.toContain('600.000')
+    expect(long[long.indexOf('-t') + 1]).toBe('600.000')
+    expect(short[short.length - 1]).toBe('-')
+    expect(short[short.indexOf('-f') + 1]).toBe('yuv4mpegpipe')
+    expect(short[short.indexOf('-pix_fmt') + 1]).toBe('yuv420p')
+  })
+
+  it('forces even dimensions, because yuv420p cannot hold an odd edge', () => {
+    const args = y4mArgs('in.mp4', { start: 0, end: 2, fps: 24, width: null, quality: 90 })
+    expect(args[args.indexOf('-vf') + 1]).toContain('scale=trunc(iw/2)*2:trunc(ih/2)*2')
   })
 })
 

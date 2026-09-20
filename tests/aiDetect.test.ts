@@ -316,20 +316,25 @@ describe('the built-in detector', () => {
     expect(detectStaticBlobs(frames, width, height, options)).toHaveLength(2)
   })
 
-  it('keeps its distances in source pixels as the sample width grows', () => {
-    // The regression this exists for: the detector's ring and merge gap were fixed pixel
-    // counts, so analysing a clip at 1080 instead of 640 quietly moved the ring 40% closer
-    // to every mark - for a mark larger than a few pixels the ring then lands inside it and
-    // the test asks the mark whether it looks like itself. The settings scale with the
-    // width, so the same clip answers the same question at either size.
+  it('scales the gap that joins a row but not the ring that measures a pixel', () => {
+    // Two distances, two questions, and they scale differently - which is the correction
+    // this pins. The merge gap is about the space between the glyphs of one mark, and that
+    // follows the size of the *type*, so it has to grow with the sample or a handle at 1080
+    // comes back as one region per letter. The ring is about how far a pixel sits from the
+    // patch right beside it, and a stroke is the same few pixels wide however wide the
+    // picture is, so scaling it made a bigger sample ask a looser question: at 1080 it
+    // reached 24 px, within which almost every pixel of ordinary scenery has some edge to
+    // be measured against - measured across ten real clips, 26 regions offered as marks,
+    // against 11 at the value below.
     const at640 = detectionSettings(640, 360, 6)
     const at1080 = detectionSettings(1080, 607, 6)
     expect(at640.groupGap).toBe(16)
-    expect(at640.ringDistance).toBe(14)
     expect(at1080.groupGap).toBe(27)
-    expect(at1080.ringDistance).toBe(24)
-    // The same distance measured against the source: 14 of 640 and 24 of 1080.
-    expect((at640.ringDistance! / 640) * 1080).toBeCloseTo(at1080.ringDistance!, 0)
+    expect(at1080.ringDistance).toBe(at640.ringDistance)
+    expect(at1080.ringDistance).toBeLessThanOrEqual(12)
+    // And it does not shrink either, because a stroke is measured in pixels: the analysis
+    // width is capped at 1280, so this is the same neighbourhood at every size in range.
+    expect(detectionSettings(320, 180, 6).ringDistance).toBe(at640.ringDistance)
   })
 
   it('never shrinks its size filters below the floor', () => {

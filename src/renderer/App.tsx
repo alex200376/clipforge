@@ -11,7 +11,9 @@ import {
   normalizeWatermarks,
   outputDuration
 } from '../shared/mediaArgs'
+import { DEFAULT_GIF_TUNING, type GifTuning } from '../shared/gifTuning'
 import { isRemoteUrl } from '../shared/sources'
+import { videoSizeBytes } from '../shared/videoSize'
 import { findWatermarks, onAiNote, preloadModels, runAiRemoval } from './ai/client'
 import type {
   AiAssets,
@@ -82,6 +84,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultVideoSize: 'original',
   defaultFormat: 'gif',
   defaultEncoder: 'auto',
+  gifColors: DEFAULT_GIF_TUNING.colors,
+  gifDither: DEFAULT_GIF_TUNING.dither,
+  gifLossy: DEFAULT_GIF_TUNING.lossy,
   onboarded: false,
   autoUpdate: true
 }
@@ -132,6 +137,11 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [mute, setMute] = useState(false)
   const [loudnorm, setLoudnorm] = useState(false)
   const [size, setSize] = useState<VideoSize>(seed.defaultVideoSize)
+  const [tuning, setTuning] = useState<GifTuning>({
+    colors: seed.gifColors,
+    dither: seed.gifDither,
+    lossy: seed.gifLossy
+  })
   const [optimize, setOptimize] = useState(false)
   const [budget, setBudget] = useState<BudgetChoice>('off')
   const [speed, setSpeed] = useState(1)
@@ -177,6 +187,7 @@ export function App({ initialSettings }: Props): JSX.Element {
   // swap in a restore glyph, and fullscreen drops chrome that has nowhere to sit.
   const [chrome, setChrome] = useState<WindowState>({ maximized: false, fullscreen: false })
   const [version, setVersion] = useState('')
+  const [buildTime, setBuildTime] = useState<string | null>(null)
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
   const [updateHidden, setUpdateHidden] = useState(false)
 
@@ -282,6 +293,7 @@ export function App({ initialSettings }: Props): JSX.Element {
           setSize(loaded.defaultVideoSize)
           setFormat(loaded.defaultFormat)
           setEncoder(loaded.defaultEncoder)
+          setTuning({ colors: loaded.gifColors, dither: loaded.gifDither, lossy: loaded.gifLossy })
         }
         setGuideOpen(!loaded.onboarded)
       } catch (error) {
@@ -305,6 +317,14 @@ export function App({ initialSettings }: Props): JSX.Element {
         }
       } catch {
         setSessionName(null)
+      }
+      try {
+        // The startup sweep finishes before this renderer exists, so it cannot push the
+        // line at the moment it has something to say: it is pulled here instead.
+        const note = await window.clipforge.startupNote()
+        if (note) pushLog(note)
+      } catch {
+        // Nothing to report, or the app is too old to have a sweeper; either way silent.
       }
     })()
     void refreshDependencies()
@@ -350,6 +370,10 @@ export function App({ initialSettings }: Props): JSX.Element {
     void window.clipforge
       .appVersion()
       .then(setVersion)
+      .catch(() => undefined)
+    void window.clipforge
+      .buildTime()
+      .then(setBuildTime)
       .catch(() => undefined)
     void window.clipforge
       .updateState()
@@ -856,7 +880,7 @@ export function App({ initialSettings }: Props): JSX.Element {
           frame: outputFrame,
           fps: source.fps,
           seconds: clipSeconds,
-          targetBytes: size === '10mb' ? 10 * 1024 * 1024 : size === '25mb' ? 25 * 1024 * 1024 : null,
+          targetBytes: videoSizeBytes(size),
           audio: !mute,
           correction: calibration
         }),
@@ -864,7 +888,11 @@ export function App({ initialSettings }: Props): JSX.Element {
         measured
       }
     }
-    const base = estimateAnimatedBytes({ format, frame: outputFrame, fps, seconds: clipSeconds, calibration })
+    // The knobs change the file size directly - measured, 64 colours with the optimiser
+    // is 27% of what the untuned model predicts - so the readout has to know them, and
+    // which stage will actually apply the lossy strength.
+    const gif = { tuning, engine, optimize: optimize && gifsicleReady }
+    const base = estimateAnimatedBytes({ format, frame: outputFrame, fps, seconds: clipSeconds, calibration, gif })
     if (budget === 'off') return { bytes: base, fitted: null, measured }
     const fitted = fitToBudget({
       format,
@@ -872,14 +900,15 @@ export function App({ initialSettings }: Props): JSX.Element {
       fps,
       seconds: clipSeconds,
       budgetBytes: BUDGET_BYTES,
-      calibration
+      calibration,
+      gif
     })
     return {
       bytes: fitted.bytes,
       fitted: { width: fitted.width, fps: fitted.fps, bytes: fitted.bytes, fits: fitted.fits },
       measured
     }
-  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, budget, measured])
+  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, budget, measured, tuning, engine, optimize, gifsicleReady])
 
   // With a budget active the export follows the fitted numbers, not the sliders.
   const effectiveFps = budget !== 'off' && estimate.fitted ? estimate.fitted.fps : fps
@@ -977,6 +1006,7 @@ export function App({ initialSettings }: Props): JSX.Element {
             fps: effectiveFps,
             width: effectiveWidth,
             quality,
+            tuning,
             outputDir: settings.outputDir,
             format,
             crop: normalizeCrop(activeCrop, source.width, source.height),
@@ -994,7 +1024,7 @@ export function App({ initialSettings }: Props): JSX.Element {
             end: range.end,
             mute,
             loudnorm,
-            targetBytes: size === '10mb' ? 10 * 1024 * 1024 : size === '25mb' ? 25 * 1024 * 1024 : null,
+            targetBytes: videoSizeBytes(size),
             outputDir: settings.outputDir,
             crop: normalizeCrop(activeCrop, source.width, source.height),
             watermarks: activeWatermarks,
@@ -1463,7 +1493,9 @@ export function App({ initialSettings }: Props): JSX.Element {
             onRevealLast={() => lastOutput && void window.clipforge.revealInFolder(lastOutput)}
             onNotice={showNotice}
             maximized={chrome.maximized}
+            notice={notice}
             version={version}
+            buildTime={buildTime}
             update={update}
             onAutoUpdate={(value) => void saveSettings({ autoUpdate: value })}
             onCheckUpdate={() => void window.clipforge.checkForUpdates().then(setUpdate)}
@@ -1596,6 +1628,8 @@ export function App({ initialSettings }: Props): JSX.Element {
                       onWidth={setWidth}
                       quality={quality}
                       onQuality={setQuality}
+                      tuning={tuning}
+                      onTuning={setTuning}
                       optimize={optimize}
                       onOptimize={setOptimize}
                       gifsicleReady={gifsicleReady}
