@@ -16,7 +16,7 @@ import type * as Ort from 'onnxruntime-web/webgpu'
 
 import { AI_INPUT, AI_MASK_GROW, clampCoord, featherAlpha, growBox, modelReadback, patchRamp } from '../../shared/aiWindow'
 import { blendFill, meanChannelDifference, temporalWeight } from '../../shared/aiTemporal'
-import { patchReverseSlices } from '../../shared/onnxGraph'
+import { patchReverseSlices, patchUnsupportedOpset } from '../../shared/onnxGraph'
 import type { CropSpec } from '../../shared/types'
 import {
   decodeCombinedDetections,
@@ -350,6 +350,18 @@ async function open(url: string, label: string, engine: 'auto' | 'wasm'): Promis
     notes.push(`${label}: rewrote ${rewritten.rewrites} reversed slice(s) that the GPU runtime mis-shapes`)
   } else if (rewritten.note) {
     notes.push(`${label}: ${rewritten.note}`)
+  }
+
+  // The detector was exported on a PyTorch that declares an operator set this runtime has
+  // no kernels for, and the refusal it earns is a bare number. Lowering the declaration is
+  // the difference between a detector that works and one that has never run: see
+  // `RUNTIME_MAX_OPSET` for why the graph itself is unaffected.
+  const opset = patchUnsupportedOpset(bytes)
+  bytes = opset.bytes
+  if (opset.applied !== opset.declared) {
+    notes.push(
+      `${label}: declared opset ${opset.declared}, which this runtime has no kernels for; using ${opset.applied} - the same graph, newer label`
+    )
   }
 
   const gpu =

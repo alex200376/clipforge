@@ -19,9 +19,10 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { patchReverseSlices, scanReverseSlices } from '../src/shared/onnxGraph'
+import { RUNTIME_MAX_OPSET, patchReverseSlices, patchUnsupportedOpset, scanReverseSlices } from '../src/shared/onnxGraph'
 
 const MODEL = path.join(process.cwd(), 'resources', 'models', 'lama_fp32.onnx')
+const DETECTOR = path.join(process.cwd(), 'resources', 'models', 'watermark-detector.onnx')
 const TO_THE_BEGINNING = -9223372036854775808
 /** Running the real network twice takes about half a minute, so it is asked for. */
 const RUN_THE_MODEL = process.env.CLIPFORGE_AI_QUALITY === '1'
@@ -100,19 +101,31 @@ function valueInfo(name: string): Uint8Array {
   return Uint8Array.from([...stringField(1, name), ...bytesField(2, Uint8Array.from(bytesField(1, tensor)))])
 }
 
-function model(nodes: Uint8Array[], initializers: Uint8Array[] = []): Uint8Array {
+function model(nodes: Uint8Array[], initializers: Uint8Array[] = [], opset = 13, domain = ''): Uint8Array {
   const graph = Uint8Array.from([
     ...bytesField(11, valueInfo('x')),
     ...bytesField(12, valueInfo('y')),
     ...nodes.flatMap((node) => bytesField(1, node)),
     ...initializers.flatMap((initializer) => bytesField(5, initializer))
   ])
+  const operatorSet = Uint8Array.from([
+    ...(domain ? stringField(1, domain) : []),
+    ...intField(2, opset)
+  ])
   return Uint8Array.from([
     ...intField(1, 8), // ir_version
     ...stringField(2, 'clipforge-test'),
     ...bytesField(7, graph),
-    ...bytesField(8, Uint8Array.from(intField(1, 13))) // opset_import: version 13
+    ...bytesField(8, operatorSet) // opset_import
   ])
+}
+
+/** How many bytes two files of the same length disagree on. */
+function differences(a: Uint8Array, b: Uint8Array): number {
+  expect(b.length).toBe(a.length)
+  let total = 0
+  for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) total += 1
+  return total
 }
 
 /** A graph whose slice reverses a whole axis, as LaMa's Fourier blocks export it. */
@@ -192,6 +205,80 @@ describe('the reverse slices the WebGPU runtime mis-shapes', () => {
     expect(patched.rewrites).toBe(0)
     expect(patched.skipped).toBe(0)
     expect(patched.bytes).toBe(original)
+  })
+})
+
+describe('an operator set this runtime has no kernels for', () => {
+  it('lowers the declaration and touches nothing else', () => {
+    const original = model([identityNode('x', 'y')], [], 22)
+    const patched = patchUnsupportedOpset(original)
+
+    expect(patched.declared).toBe(22)
+    expect(patched.applied).toBe(RUNTIME_MAX_OPSET)
+    // The whole of the change is one varint: 22 became 21, and everything else is the same
+    // file - which is what makes declaring an older set the same graph with an older label.
+    expect(differences(original, patched.bytes)).toBe(1)
+    // Read back through the same door it was written through.
+    expect(patchUnsupportedOpset(patched.bytes, 20).declared).toBe(RUNTIME_MAX_OPSET)
+  })
+
+  it('leaves a declaration this runtime can honour exactly as it was', () => {
+    const original = model([identityNode('x', 'y')], [], RUNTIME_MAX_OPSET)
+    const patched = patchUnsupportedOpset(original)
+
+    expect(patched.declared).toBe(RUNTIME_MAX_OPSET)
+    expect(patched.bytes).toBe(original)
+  })
+
+  it('never rewrites another domain, which is asking for something this app is not', () => {
+    const original = model([identityNode('x', 'y')], [], 22, 'com.microsoft')
+    const patched = patchUnsupportedOpset(original)
+
+    expect(patched.declared).toBe(0)
+    expect(patched.bytes).toBe(original)
+  })
+
+  it('says nothing about a file it cannot walk', () => {
+    const garbage = Uint8Array.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff])
+    const patched = patchUnsupportedOpset(garbage)
+
+    expect(patched.bytes).toBe(garbage)
+    expect(patched.applied).toBe(0)
+  })
+})
+
+/**
+ * The runtime's own ceiling, against the runtime that is installed.
+ *
+ * Adding a version here means opening its changelog, checking where its kernels stop, and
+ * re-measuring the detector - which is the point: the number is not something to guess at,
+ * and a bump that forgets it would fail here instead of silently refusing the model again.
+ */
+const OPSET_CEILING: Record<string, number> = { '1.20': 21 }
+
+it('knows where the installed runtime’s kernels stop', () => {
+  const manifest = JSON.parse(
+    readFileSync(path.join(process.cwd(), 'node_modules', 'onnxruntime-web', 'package.json'), 'utf8')
+  ) as { version: string }
+  const majorMinor = manifest.version.split('.').slice(0, 2).join('.')
+  expect(
+    OPSET_CEILING[majorMinor],
+    `onnxruntime-web ${manifest.version} is installed - check where its kernels stop and say so here`
+  ).toBeDefined()
+  expect(RUNTIME_MAX_OPSET).toBe(OPSET_CEILING[majorMinor])
+})
+
+describe.skipIf(!existsSync(DETECTOR))('the shipped detector', () => {
+  it('is the model this rewrite exists for', () => {
+    // Read, not assumed: the day the detector is re-exported on a newer runtime this fails
+    // and the ceiling above gets another look, which is exactly when it matters.
+    const patched = patchUnsupportedOpset(new Uint8Array(readFileSync(DETECTOR)))
+
+    expect(patched.declared).toBeGreaterThan(RUNTIME_MAX_OPSET)
+    expect(patched.applied).toBe(RUNTIME_MAX_OPSET)
+    expect(differences(new Uint8Array(readFileSync(DETECTOR)), patched.bytes)).toBe(1)
+    // Its own weights are untouched: the rewrite ends at the declaration.
+    expect(patched.bytes.length).toBe(readFileSync(DETECTOR).length)
   })
 })
 

@@ -208,7 +208,9 @@ describe.skipIf(!ENABLED)('what the AI removal actually puts back', () => {
         image[area * 2 + index] = window[index * 3 + 2]! / 255
       }
       // The mask is the marked box *plus* the few pixels past it, as the worker sends it.
-      const modelBox = boxInModel(plan, MARK)
+      // `boxInModel` reads its box in the window's coordinates, which is where `plan.box`
+      // lives - the same space the mask is defined in.
+      const modelBox = boxInModel(plan, plan.box)
       const grown = growBox(modelBox, AI_MASK_GROW, AI_INPUT)
       const mask = new Float32Array(area)
       for (let y = grown.y; y < grown.y + grown.height; y += 1) {

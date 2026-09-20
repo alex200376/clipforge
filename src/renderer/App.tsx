@@ -274,6 +274,17 @@ export function App({ initialSettings }: Props): JSX.Element {
   const dragDepth = useRef(0)
   const sessionSource = useRef<MediaSource | null>(null)
   const resumeAfterHover = useRef(false)
+  /**
+   * The clip as it stands right now, for effects that must not restart when it is patched.
+   *
+   * Loading a link ends with the probe filling in what the import could not report - the
+   * frame size of a direct video, and often the frame rate too - which replaces the source
+   * object. An effect that depends on that object therefore ran twice for every link: a
+   * second prepare, and a second filmstrip started while the first was still being written.
+   * This holds the current one without being a dependency.
+   */
+  const sourceRef = useRef<MediaSource | null>(null)
+  sourceRef.current = source
 
   const pushLog = useCallback((text: string, kind: LogKind = 'info') => {
     logId.current += 1
@@ -662,8 +673,14 @@ export function App({ initialSettings }: Props): JSX.Element {
 
   // Any new source triggers a preview (handing the file over untouched when the player can
   // read it, copying it when it cannot) plus a filmstrip for the timeline.
+  //
+  // Keyed by *which clip* is open rather than by the source object: the probe inside patches
+  // that object, and depending on it made one link import prepare the preview and build the
+  // filmstrip twice over. The patched values are read through the ref, so this still works on
+  // what the probe just learned.
   useEffect(() => {
-    if (!source) return
+    const opened = sourceRef.current
+    if (!opened) return
     let disposed = false
     void (async () => {
       try {
@@ -672,8 +689,8 @@ export function App({ initialSettings }: Props): JSX.Element {
         setPreparing(true)
         setStatus({ text: t('status.preparingPreview'), kind: 'busy' })
         const next = await window.clipforge.preparePreview({
-          source: source.path,
-          isUrl: source.kind === 'url',
+          source: opened.path,
+          isUrl: opened.kind === 'url',
           rewrap
         })
         if (disposed) return
@@ -683,12 +700,15 @@ export function App({ initialSettings }: Props): JSX.Element {
         // The probe fills in whatever the import could not report - for a direct
         // video link that is the frame size and often the frame rate too, and
         // crop, watermark and frame stepping all depend on both.
-        const patch = adoptProbe(source, next)
-        const effectiveDuration = patch?.duration ?? source.duration
+        const patch = adoptProbe(opened, next)
+        const effectiveDuration = patch?.duration ?? opened.duration
         if (patch) {
           setSource((previous) => (previous ? { ...previous, ...patch } : previous))
           if (patch.duration !== undefined) setRange({ start: 0, end: patch.duration })
         }
+
+        // Nothing below is worth starting for a clip that has already been replaced.
+        if (disposed) return
 
         const strip = await window.clipforge.buildFilmstrip({
           source: next.url,
@@ -708,7 +728,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     return () => {
       disposed = true
     }
-  }, [source, sourcePath, rewrap, fail, pushLog, t])
+  }, [sourcePath, rewrap, fail, pushLog, t])
 
   /**
    * The player could not read a file that was handed over untouched.
@@ -1061,7 +1081,10 @@ export function App({ initialSettings }: Props): JSX.Element {
       const assets = aiAssetsState ?? (await window.clipforge.aiAssets())
       const shots = await previewRemoval(
         {
-          source: source.path,
+          // The prepared preview, so a link is read from the file it downloaded to rather
+          // than from the web: ffmpeg cannot seek a URL the server will not range-request,
+          // and the failure it reports for one is about a partial file, not about the link.
+          source: preview?.url ?? source.path,
           time: currentTime,
           regions: activeWatermarks,
           width: source.width,
@@ -1080,7 +1103,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     } finally {
       setPreviewBusy(false)
     }
-  }, [source, activeWatermarks, previewBusy, currentTime, aiAssetsState, pushLog, t])
+  }, [source, preview, activeWatermarks, previewBusy, currentTime, aiAssetsState, pushLog, t])
 
   const naming = useMemo<Omit<OutputNaming, 'now'> | null>(() => {
     if (!source) return null

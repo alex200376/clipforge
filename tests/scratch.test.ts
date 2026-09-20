@@ -7,6 +7,7 @@ import {
   isSweepableWorkDir,
   parseWorkDirOwner,
   pendingUpdateIsUsable,
+  releasableWorkDirs,
   shouldClearWorkDir,
   shouldSweepWorkDir,
   type SweepCandidate
@@ -105,6 +106,36 @@ describe('reading an owner file', () => {
   it('keeps a valid pid even when the timestamp is unusable', () => {
     // The timestamp is only ever logged; the decision must not depend on it.
     expect(parseWorkDirOwner('{"pid":7,"startedAt":"yesterday"}')).toEqual({ pid: 7, startedAt: 0 })
+  })
+})
+
+describe('retiring a superseded job folder', () => {
+  const ask = (over: Partial<Parameters<typeof releasableWorkDirs>[0]> = {}): string[] =>
+    releasableWorkDirs({
+      retired: [],
+      inFlight: new Set<string>(),
+      current: null,
+      ...over
+    })
+
+  it('takes a superseded folder once no job is writing into it', () => {
+    expect(ask({ retired: ['old'], current: 'new' })).toEqual(['old'])
+  })
+
+  it('leaves a superseded folder alone while its own job is still running', () => {
+    // The real failure: the second filmstrip to start deleted the first one's folder, and
+    // the first one's ffmpeg then answered `Could not open file: ...\strip.jpg`.
+    expect(ask({ retired: ['old'], inFlight: new Set(['old']), current: 'new' })).toEqual([])
+  })
+
+  it('never takes the folder whose strip is about to be handed to the renderer', () => {
+    // Registering a token and deleting its file in the same breath would show the user a
+    // broken image, which is the one outcome worse than no thumbnails at all.
+    expect(ask({ retired: ['current'], current: 'current' })).toEqual([])
+  })
+
+  it('takes the one folder that is neither in flight nor current', () => {
+    expect(ask({ retired: ['old', 'newer', 'current'], inFlight: new Set(['newer']), current: 'current' })).toEqual(['old'])
   })
 })
 

@@ -191,19 +191,23 @@ async function main() {
       detector.outputNames.length === 1 ? 'single output: the combined layout' : 'split outputs: the query layout'
     )
   } catch (error) {
-    // Not a missing file and not a bad checksum: this export aborts the runtime's wasm at
-    // session creation, at every graph optimisation level, before any inference happens.
-    // The app therefore cannot rely on it, which is why detection has a built-in half that
-    // needs no model at all and why a detector that will not open is reported as a note
-    // rather than as a failed load.
-    console.log(`detector: this runtime cannot open the graph — ${String(error)}`)
-    console.log('          Detection falls back to the built-in still-pixel and contrast pass;')
-    console.log('          the boxes it returns are checked by CLIPFORGE_SAMPLE_VIDEO and in the app.')
+    // The detector declares an operator set newer than this runtime's kernels (opset 22
+    // against a runtime that stops at 21), so opening it *as it lies on disk* is refused - a
+    // one-varint difference the app makes before it loads either model. This script opens the
+    // file untouched, on purpose: it is here to say what the artifact is, and a rewrite here
+    // would be a second implementation of the one the app runs.
+    //
+    // Measured through the app's own load path instead:
+    //   CLIPFORGE_SAMPLE_VIDEO=<clip> npx vitest run tests/aiDetect.sample.test.ts
+    console.log(`detector: this runtime cannot open the graph as it lies — ${String(error)}`)
+    console.log('          It declares opset 22 and this runtime stops at 21; the app lowers that')
+    console.log('          declaration as it loads (see RUNTIME_MAX_OPSET), which is how the')
+    console.log('          detector opens on the GPU in the app. The sample test applies it too.')
   }
 
   console.log('\nThe weights are present and verified by checksum, and the inpainting model is')
-  console.log('measured end to end. Detection works without the detector graph and is measured')
-  console.log('against a real clip (tests/aiDetect.sample.test.ts).')
+  console.log('measured end to end. For the detector graph, and for what either detector finds in')
+  console.log('a real clip, CLIPFORGE_SAMPLE_VIDEO=<clip> npx vitest run tests/aiDetect.sample.test.ts.')
 }
 
 main().catch((error) => {

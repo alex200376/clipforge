@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   AI_INPUT,
+  AI_MASK_GROW,
   AI_TILE_CONTEXT,
   AI_TILE_OVERLAP,
   boxInModel,
@@ -70,14 +71,15 @@ describe('choosing the window a marked box is inpainted in', () => {
   it('lands the box in the right place inside the window', () => {
     const result = plan(box(100, 50, 200, 80), 24)!
     expect(result.box).toEqual(box(24, 24, 200, 80))
-    // No scaling, so the source box keeps its size in model coordinates and moves by
-    // the padding the window was centred with.
-    expect(boxInModel(result, box(100, 50, 200, 80))).toEqual(box(24 + 132, 24 + 192, 200, 80))
+    // No scaling, so the box keeps its size in model coordinates and moves by the padding
+    // the window was centred with. The box handed in is in the *window's* coordinates -
+    // the space every box of a plan is in, and the one the mask is defined in.
+    expect(boxInModel(result, result.box)).toEqual(box(24 + 132, 24 + 192, 200, 80))
   })
 
   it('maps a downscaled box back into model coordinates', () => {
     const result = plan(box(400, 300, 900, 400), 24)!
-    const mapped = boxInModel(result, box(400, 300, 900, 400))
+    const mapped = boxInModel(result, result.box)
     expect(mapped.x).toBeGreaterThanOrEqual(0)
     expect(mapped.x + mapped.width).toBeLessThanOrEqual(AI_INPUT)
     expect(mapped.y + mapped.height).toBeLessThanOrEqual(AI_INPUT)
@@ -86,6 +88,71 @@ describe('choosing the window a marked box is inpainted in', () => {
   it('refuses a frame it cannot make sense of', () => {
     expect(planWindow(box(0, 0, 10, 10), { width: 0, height: 0 }, { margin: 8 })).toBeNull()
     expect(planWindow(box(0, 0, 0, 0), frame, { margin: 8 })).toBeNull()
+  })
+})
+
+describe('the mask the network is handed', () => {
+  /** Every window of a plan, whatever shape the mark is. */
+  const patchesFor = (region: CropSpec) => planPatches([region], frame, AI_INPUT)
+
+  it('lands inside the model square for a mark anywhere in the frame', () => {
+    // The regression this exists for. The mask box is in the window's coordinates, and it
+    // was mapped as though it were in the frame's - so the window's own origin came off a
+    // second time and the mask landed above the square. Every removal below the top of the
+    // frame finished with the watermark untouched, and nothing failed.
+    const marks = [
+      box(12, 24, 180, 60),
+      box(700, 412, 200, 80),
+      box(1400, 900, 260, 120),
+      box(0, 1060, 900, 20),
+      box(600, 300, 900, 500)
+    ]
+    for (const mark of marks) {
+      const patches = patchesFor(mark)
+      expect(patches.length, `no window for ${JSON.stringify(mark)}`).toBeGreaterThan(0)
+      for (const patch of patches) {
+        const grown = growBox(patch.modelBox, AI_MASK_GROW, AI_INPUT)
+        expect(grown.width, `empty mask for ${JSON.stringify(mark)}`).toBeGreaterThan(1)
+        expect(grown.height, `empty mask for ${JSON.stringify(mark)}`).toBeGreaterThan(1)
+        expect(patch.modelBox.x).toBeGreaterThanOrEqual(0)
+        expect(patch.modelBox.y).toBeGreaterThanOrEqual(0)
+        expect(patch.modelBox.x + patch.modelBox.width).toBeLessThanOrEqual(AI_INPUT)
+        expect(patch.modelBox.y + patch.modelBox.height).toBeLessThanOrEqual(AI_INPUT)
+      }
+    }
+  })
+
+  it('puts the hole where the marked box actually is in the window', () => {
+    // Not just inside the square: over the mark. The mask has to cover the window's own
+    // copy of the box, or the network fills the picture next to the watermark and leaves
+    // the watermark itself in place.
+    const mark = box(500, 800, 300, 100)
+    const [patch] = patchesFor(mark)
+    const grown = growBox(patch!.modelBox, 0, AI_INPUT)
+    expect(grown.x).toBe(patch!.modelBox.x)
+    expect(grown.y).toBe(patch!.modelBox.y)
+    // The mask holds the box, shifted by the window, scaled by its factor and padded.
+    expect(grown.x).toBe(Math.round(patch!.box.x * patch!.scale) + patch!.pad.left)
+    expect(grown.y).toBe(Math.round(patch!.box.y * patch!.scale) + patch!.pad.top)
+  })
+
+  it('covers the whole mark for a window that only owns part of it', () => {
+    // A mark wider than the model: every window's mask is the mark as that window sees it,
+    // so the piece of the mark inside its own picture is masked too rather than painted back
+    // in as context.
+    const mark = box(200, 400, 1400, 120)
+    const patches = patchesFor(mark)
+    expect(patches.length).toBeGreaterThan(1)
+    for (const patch of patches) {
+      // Compared in the model's own space, because the mask is the mark seen by a window
+      // that may extend past it on either side, and the box is only the part it owns.
+      const masked = growBox(patch.modelBox, AI_MASK_GROW, AI_INPUT)
+      const owned = boxInModel(patch, patch.box)
+      expect(masked.x).toBeLessThanOrEqual(owned.x)
+      expect(masked.x + masked.width).toBeGreaterThanOrEqual(owned.x + owned.width)
+      expect(masked.y).toBeLessThanOrEqual(owned.y)
+      expect(masked.y + masked.height).toBeGreaterThanOrEqual(owned.y + owned.height)
+    }
   })
 })
 

@@ -200,11 +200,18 @@ export function modelReadback(
   }
 }
 
-/** Where a box in source pixels lands in the model's own coordinates. */
+/**
+ * Where a box lands in the model's own coordinates.
+ *
+ * The box is in the **window's** coordinates, which is the space every box in a patch plan
+ * lives in - the same space `featherAlpha` and `patchRamp` are asked about, and the one the
+ * mask is defined in. Subtracting the window's origin here was the mistake: callers pass an
+ * already-shifted box, so the origin came off twice.
+ */
 export function boxInModel(plan: AiWindowPlan, box: CropSpec): CropSpec {
   return {
-    x: Math.round((box.x - plan.crop.x) * plan.scale) + plan.pad.left,
-    y: Math.round((box.y - plan.crop.y) * plan.scale) + plan.pad.top,
+    x: Math.round(box.x * plan.scale) + plan.pad.left,
+    y: Math.round(box.y * plan.scale) + plan.pad.top,
     width: Math.max(1, Math.round(box.width * plan.scale)),
     height: Math.max(1, Math.round(box.height * plan.scale))
   }
@@ -332,6 +339,16 @@ export interface AiPatchPlan {
    * tiled removal ends up painting the watermark back into the hole.
    */
   mask: CropSpec
+  /**
+   * `mask` mapped into the model's square, which is the mask the network is given.
+   *
+   * Planned here rather than worked out at each call site. It used to be computed in the
+   * main process, from `mask`, by a helper that expected a box in *source* pixels - so the
+   * window's own origin was subtracted a second time and the mask landed above the square
+   * for every mark below the top of the frame. The network was handed an empty hole, filled
+   * nothing, and the removal finished successfully with the watermark still in the picture.
+   */
+  modelBox: CropSpec
   scale: number
   pad: { left: number; top: number; right: number; bottom: number }
   input: number
@@ -410,15 +427,16 @@ export function planPatches(
     if (!single) return
     if (singleWindowIsEnough(region, frame, input)) {
       const box = shift(region, single.crop)
+      // The whole mark, which is also all of it that this window can see.
+      const seen = intersectBox(region, single.crop)
+      const mask = seen ? shift(seen, single.crop) : box
       patches.push({
         regionIndex,
         crop: single.crop,
         slice: region,
         box,
-        // The whole mark, which is also all of it that this window can see.
-        mask: intersectBox(region, single.crop)
-          ? shift(intersectBox(region, single.crop)!, single.crop)
-          : box,
+        mask,
+        modelBox: boxInModel(single, mask),
         scale: single.scale,
         pad: single.pad,
         input,
@@ -489,12 +507,14 @@ function tileRegion(
       const plan = planWindow(tile, frame, { margin, input })
       if (!plan) continue
       const seen = intersectBox(region, plan.crop)
+      const mask = seen ? shift(seen, plan.crop) : shift(tile, plan.crop)
       out.push({
         regionIndex,
         crop: plan.crop,
         slice: tile,
         box: shift(tile, plan.crop),
-        mask: seen ? shift(seen, plan.crop) : shift(tile, plan.crop),
+        mask,
+        modelBox: boxInModel(plan, mask),
         scale: plan.scale,
         pad: plan.pad,
         input,

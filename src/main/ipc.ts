@@ -414,9 +414,16 @@ export function registerIpc(getWindow: WindowGetter): void {
     compositeAiSession(request.token, { emit, log, registerJob: track })
   )
 
-  /** One frame, windows cut, for the before/after preview. */
+  /**
+   * One frame, windows cut, for the before/after preview.
+   *
+   * Every other ffmpeg-backed handler behind an AI call resolves its source the same way,
+   * and this one did not: a link import handed over the page URL, ffmpeg opened it over
+   * HTTP, and a server that will not answer range requests ended the transfer early - so the
+   * preview failed with a sentence about a partial file instead of the fill it promised.
+   */
   ipcMain.handle('clipforge:ai:preview', (_event, request: AiPreviewRequest) =>
-    previewAiFrame(request, { emit, log, registerJob: track })
+    previewAiFrame({ ...request, source: requireLocalSource(request.source) }, { emit, log, registerJob: track })
   )
 
   /** Sample frames for the detectors; both of them read the same handful. */

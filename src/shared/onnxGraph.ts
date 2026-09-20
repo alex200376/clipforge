@@ -36,8 +36,31 @@
 const WIRE_VARINT = 0
 const WIRE_BYTES = 2
 
+/**
+ * The newest operator set the ONNX Runtime this app ships has kernels for.
+ *
+ * onnxruntime-web 1.20.1 registers kernels through opset 21. A model that *declares* a
+ * newer set is refused when its session is created - not with a sentence about the opset,
+ * but with a bare number, because that is all the wasm binding hands back. That is what the
+ * bundled watermark detector does: it was exported by ultralytics on PyTorch 2.9, which
+ * writes opset 22 by default, so the detector's weights have never once opened. Every run
+ * has fallen back to the built-in motion and contrast pass, and the log said only
+ * `the weights could not be started (…)`, in which the honest part is the number of an
+ * error nobody outside the runtime can look up.
+ *
+ * The graph itself is fine: its ops are all ones this runtime implements, and every one of
+ * them is unchanged between opset 21 and 22. Declaring 21 is therefore the same graph with
+ * an older label, and it is what makes the detector load. `tests/onnxGraph.test.ts` holds
+ * this number against the runtime that is installed and against the shipped model, so a
+ * newer export - or a newer runtime - has to come back here.
+ */
+export const RUNTIME_MAX_OPSET = 21
+
 /** The `ends` the exporter writes for "all the way to the beginning of the axis". */
 const TO_THE_BEGINNING = -9.2e18
+
+/** `ModelProto.opset_import`, the field that names the operator sets a graph uses. */
+const OPSET_IMPORT = 8
 
 const ENDS_ZERO = 'clipforge_slice_ends_zero'
 const STARTS_ZERO = 'clipforge_slice_starts_zero'
@@ -343,6 +366,70 @@ const rawField = (bytes: Uint8Array, field: Field): Uint8Array =>
     field.wire === WIRE_BYTES ? varint(field.length) : Uint8Array.from([]),
     bytes.subarray(field.start, field.start + field.length)
   ])
+
+export interface OpsetPatchResult {
+  /** The bytes to hand the runtime: the original array when nothing had to change. */
+  bytes: Uint8Array
+  /** The operator set the model declared for the standard domain, 0 when it declared none. */
+  declared: number
+  /** What it declares now - the same number unless it was too new for this runtime. */
+  applied: number
+}
+
+/**
+ * Lowers a declared operator set this runtime has no kernels for, or returns the bytes.
+ *
+ * Only the standard domain is touched: a graph that imports `com.microsoft` is asking for
+ * something this app is not configuring, and rewriting that declaration would hide the
+ * problem instead of fixing one. Version numbers and nothing else change, so the tensors,
+ * the nodes and the graph all survive byte for byte - the whole of the change is one varint
+ * in `opset_import`.
+ */
+export function patchUnsupportedOpset(
+  bytes: Uint8Array,
+  supportedMax: number = RUNTIME_MAX_OPSET
+): OpsetPatchResult {
+  try {
+    const model = readFields(bytes, 0, bytes.length)
+    let declared = 0
+    let lowered = false
+    const parts: Uint8Array[] = []
+    for (const field of model) {
+      if (field.tag !== OPSET_IMPORT) {
+        parts.push(rawField(bytes, field))
+        continue
+      }
+      const inner = readFields(bytes, field.start, field.start + field.length)
+      const domainField = inner.find((part) => part.tag === 1)
+      const versionField = inner.find((part) => part.tag === 2)
+      const domain = domainField ? text(bytes, domainField) : ''
+      const version = versionField?.value ?? 0
+      const standard = domain === '' || domain === 'ai.onnx'
+      if (standard) declared = Math.max(declared, version)
+      if (!standard || version <= supportedMax) {
+        parts.push(rawField(bytes, field))
+        continue
+      }
+      parts.push(
+        ...messageField(
+          OPSET_IMPORT,
+          concat([
+            ...(domainField ? stringField(1, domain) : []),
+            varint(2 * 8 + WIRE_VARINT),
+            varint(supportedMax)
+          ])
+        )
+      )
+      lowered = true
+    }
+    if (!lowered) return { bytes, declared, applied: declared }
+    return { bytes: concat(parts), declared, applied: supportedMax }
+  } catch {
+    // A file this parser cannot walk is not a file to hand back rewritten; the runtime's
+    // own refusal is the better error.
+    return { bytes, declared: 0, applied: 0 }
+  }
+}
 
 /**
  * Rewrites every reverse slice the runtime mis-shapes, or returns the bytes untouched.

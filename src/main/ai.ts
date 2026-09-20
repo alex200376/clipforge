@@ -10,7 +10,7 @@ import {
   aiSessionKey,
   aiWindowArgs
 } from '../shared/aiArgs'
-import { boxInModel, planPatches } from '../shared/aiWindow'
+import { planPatches } from '../shared/aiWindow'
 import { normalizeWatermarks } from '../shared/mediaArgs'
 import type {
   AiAssets,
@@ -268,7 +268,9 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
     // covers the rest of the mark that falls inside the window. Picture the network can see
     // is context it builds the fill from, so a mark left visible there is a mark painted
     // back into the hole.
-    modelBox: boxInModel(patch, patch.mask),
+    //
+    // Mapped by the planner, in the coordinates it defined the mask in - see `modelBox`.
+    modelBox: patch.modelBox,
     scale: patch.scale,
     pad: patch.pad,
     overlap: patch.overlap,
@@ -503,7 +505,7 @@ export async function previewAiFrame(request: AiPreviewRequest, sdk: AiSdk): Pro
         slice: patch.slice,
         box: patch.box,
         mask: patch.mask,
-        modelBox: boxInModel(patch, patch.mask),
+        modelBox: patch.modelBox,
         scale: patch.scale,
         pad: patch.pad,
         overlap: patch.overlap,

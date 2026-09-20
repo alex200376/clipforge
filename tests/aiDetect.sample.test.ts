@@ -26,6 +26,7 @@ import {
   fromLetterbox
 } from '../src/renderer/ai/detect'
 import type { Detection } from '../src/renderer/ai/detect'
+import { patchUnsupportedOpset } from '../src/shared/onnxGraph'
 
 const VIDEO = process.env.CLIPFORGE_SAMPLE_VIDEO ?? ''
 const ENABLED = VIDEO.length > 0
@@ -406,17 +407,24 @@ describe.skipIf(!ENABLED)('what detection finds in a real clip', () => {
       const ort = await import('onnxruntime-web')
       ort.env.logLevel = 'error'
       ort.env.wasm.numThreads = 4
+      // The opset the app lowers before it opens a graph, applied here too: this is meant to
+      // measure what the app runs, and a graph the app can open and this cannot would be
+      // measuring the difference instead.
+      const declared = patchUnsupportedOpset(new Uint8Array(readFileSync(MODEL)))
       let session: Awaited<ReturnType<typeof ort.InferenceSession.create>>
       try {
-        session = await ort.InferenceSession.create(readFileSync(MODEL), {
+        session = await ort.InferenceSession.create(declared.bytes, {
           executionProviders: ['wasm'],
           graphOptimizationLevel: 'basic'
         })
       } catch (error) {
-        console.log(`\n--- the network ---\nthe graph could not be opened here: ${typeof error} ${String(error)}`)
+        console.log(
+          `\n--- the network ---\nopset ${declared.declared} → ${declared.applied}\nthe graph could not be opened here: ${typeof error} ${String(error)}`
+        )
         expect(frames.length).toBe(SAMPLES)
         return
       }
+      console.log(`\n--- the network's declaration ---\nopset ${declared.declared} → ${declared.applied}`)
       const DETECT_INPUT = 640
       const scale = Math.min(DETECT_INPUT / sample.width, DETECT_INPUT / sample.height)
       const letterboxed = { width: Math.max(1, Math.round(sample.width * scale)), height: Math.max(1, Math.round(sample.height * scale)) }

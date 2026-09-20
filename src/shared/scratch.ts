@@ -119,6 +119,35 @@ export function shouldClearWorkDir(candidate: ClearCandidate): boolean {
   return isSweepableWorkDir(candidate.name) && !candidate.ownedByThisRun
 }
 
+export interface RetiredFolders {
+  /** Superseded folders: nothing will read them again, but a job may still be writing. */
+  retired: Iterable<string>
+  /** Folders a job is working in right now. */
+  inFlight: ReadonlySet<string>
+  /** The folder the job that just finished is about to hand to the renderer. */
+  current: string | null
+}
+
+/**
+ * Which superseded job folders may be deleted right now.
+ *
+ * A folder is only ever safe to remove once nothing can still be writing into it, and
+ * "superseded" is not the same thing as "finished". Found on a real link import: the same
+ * import started two filmstrip jobs a second apart (see the note on the App effect), and
+ * starting the second deleted the first one's folder out from under its ffmpeg, which
+ * answered `Could not open file : ...\strip.jpg`. The strip that was then shown came from
+ * the second job, so the only visible symptom was a timeline with no thumbnails on it - and
+ * the failure that produced it was nowhere near the code that looked broken.
+ *
+ * The other half of the rule is `current`: the folder whose token is about to be handed to
+ * the renderer must outlive this call, or the strip would be registered and deleted in the
+ * same breath.
+ */
+export function releasableWorkDirs(input: RetiredFolders): string[] {
+  const current = input.current
+  return [...input.retired].filter((dir) => !input.inFlight.has(dir) && dir !== current)
+}
+
 /**
  * Files an aborted update download leaves behind. electron-updater retries by writing
  * `temp-<name>` and renaming it into place, so anything still matching this is a
