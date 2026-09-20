@@ -33,6 +33,30 @@ describe('size estimation', () => {
     expect(long).toBeGreaterThan(short * 3.5)
   })
 
+  it('follows the quality slider for WebP', () => {
+    // Measured across the slider the file moves by more than 10x, so an estimate that
+    // ignored it could be out by that much. Left at its default it must not move at all.
+    const at = (quality: number) => estimateAnimatedBytes({ format: 'webp', frame, fps: 15, seconds: 4, quality })
+    expect(at(30)).toBeLessThan(at(90) / 3)
+    expect(at(100)).toBeGreaterThan(at(90) * 2)
+    expect(at(90)).toBe(estimateAnimatedBytes({ format: 'webp', frame, fps: 15, seconds: 4 }))
+  })
+
+  it('follows it for gifski and ignores it for the palette engine', () => {
+    const tuning = { colors: 256, dither: 'floyd_steinberg' as const, lossy: 0 }
+    const at = (engine: 'gifski' | 'palette', quality: number) =>
+      estimateAnimatedBytes({
+        format: 'gif',
+        frame,
+        fps: 15,
+        seconds: 4,
+        quality,
+        gif: { tuning, engine, optimize: false }
+      })
+    expect(at('gifski', 100)).toBeGreaterThan(at('gifski', 30) * 5)
+    expect(at('palette', 100)).toBe(at('palette', 30))
+  })
+
   it('rates WebP far below GIF', () => {
     const gif = estimateAnimatedBytes({ format: 'gif', frame, fps: 24, seconds: 3 })
     const webp = estimateAnimatedBytes({ format: 'webp', frame, fps: 24, seconds: 3 })

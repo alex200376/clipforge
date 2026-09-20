@@ -1742,14 +1742,23 @@
   letter-spacing: 0.1px;
 }
 
+/* In the footer now, so it is compact and horizontal: the label no longer needs its own
+   line, and the whole card has to leave room for the export button under it. */
 .estimate-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 13px 15px;
+  gap: 2px;
+  padding: 8px 11px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: color-mix(in oklab, var(--panel) 55%, transparent);
+}
+
+.estimate-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .estimate-value {

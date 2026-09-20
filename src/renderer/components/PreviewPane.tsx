@@ -24,6 +24,13 @@ interface Props {
   onActiveRegion: (index: number) => void
   onWatermarkChange: (index: number, region: CropSpec) => void
   preparing: boolean
+  /**
+   * Called with the player's `MediaError` code when the file will not play.
+   *
+   * The code matters: 3 and 4 mean the player cannot decode this file (worth acting on),
+   * while 1 and 2 are the ordinary aborts and stalls of a clip being swapped out.
+   */
+  onPlaybackError: (code: number) => void
   videoRef: RefObject<HTMLVideoElement>
   playing: boolean
   currentTime: number
@@ -92,6 +99,7 @@ export function PreviewPane({
   onActiveRegion,
   onWatermarkChange,
   preparing,
+  onPlaybackError,
   videoRef,
   playing,
   currentTime,
@@ -233,6 +241,7 @@ export function PreviewPane({
             ref={videoRef}
             src={preview.url}
             playsInline
+            onError={(event) => onPlaybackError(event.currentTarget.error?.code ?? 0)}
             onTimeUpdate={(event) => onTimeUpdate(event.currentTarget.currentTime)}
             onPlay={() => onPlayingChange(true)}
             onPause={() => onPlayingChange(false)}

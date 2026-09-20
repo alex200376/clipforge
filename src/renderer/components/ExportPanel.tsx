@@ -236,7 +236,13 @@ export function ExportPanel(props: Props): JSX.Element {
   const capped = !isGif && size !== 'original'
   const estimateLabel =
     estimate.bytes === null
-      ? t('export.estimate.unknown')
+      ? t(
+          estimate.unknown === 'noClip'
+            ? 'export.estimate.unknown'
+            : estimate.unknown === 'noLength'
+              ? 'export.estimate.noLength'
+              : 'export.estimate.reading'
+        )
       : t(capped ? 'export.estimate.upTo' : 'export.estimate', { size: formatBytes(estimate.bytes) })
 
   // The target is a bitrate in disguise, so a long clip aimed at a small preset cannot be
@@ -255,6 +261,13 @@ export function ExportPanel(props: Props): JSX.Element {
         : engine === 'palette'
           ? t('export.lossy.needsOptimise')
           : t('export.lossy.gifski')
+
+  // Only two of the three encoders have a quality knob: WebP reads it as `-q:v` and gifski
+  // as `--quality`, while ffmpeg's palette pipeline has none at all - there the lossy
+  // strength below is the whole quality story. Measured across the slider's travel the
+  // effect is up to 3x, so a control that does nothing is not a harmless extra: it invites
+  // the user to trade size for quality and then silently does neither.
+  const qualityApplies = isWebp || engine === 'gifski'
 
   // A ratio of two model factors, which is exactly what the estimate does with them, so
   // the saving and the predicted bytes cannot disagree.
@@ -582,26 +595,34 @@ export function ExportPanel(props: Props): JSX.Element {
               />
             </div>
 
-            <div className="field">
-              <div className="field-row">
-                <Label>{t('export.quality')}</Label>
-                <NumberField
-                  value={quality}
-                  min={1}
+            {qualityApplies ? (
+              <div className="field">
+                <div className="field-row">
+                  <Label>{t('export.quality')}</Label>
+                  <NumberField
+                    value={quality}
+                    min={1}
+                    max={100}
+                    aria-label={t('export.quality')}
+                    onCommit={onQuality}
+                  />
+                </div>
+                <Slider
+                  value={[quality]}
+                  min={10}
                   max={100}
+                  step={1}
                   aria-label={t('export.quality')}
-                  onCommit={onQuality}
+                  onValueChange={(value) => onQuality(value[0] ?? quality)}
                 />
+                <em className="field-hint">{t('export.quality.hint')}</em>
               </div>
-              <Slider
-                value={[quality]}
-                min={10}
-                max={100}
-                step={1}
-                aria-label={t('export.quality')}
-                onValueChange={(value) => onQuality(value[0] ?? quality)}
-              />
-            </div>
+            ) : (
+              <div className="field">
+                <Label>{t('export.quality')}</Label>
+                <em className="field-hint">{t('export.quality.fixed')}</em>
+              </div>
+            )}
 
             <div className="field">
               <Label>{t('export.resolution')}</Label>
@@ -706,19 +727,6 @@ export function ExportPanel(props: Props): JSX.Element {
           </Section>
         )}
 
-        <div className="estimate-card">
-          <span className="eyebrow">{t('export.summary')}</span>
-          <span className="estimate-value">{estimateLabel}</span>
-          {estimate.measured && (
-            <span className="estimate-measure">
-              {t('export.estimate.measure', {
-                est: formatBytes(estimate.measured.estimated),
-                actual: formatBytes(estimate.measured.actual)
-              })}
-            </span>
-          )}
-        </div>
-
         <Button variant="ghost" size="sm" className="section-toggle" onClick={() => setAdvanced((value) => !value)}>
           {advanced ? <ChevronUp /> : <ChevronDown />}
           {advanced ? t('export.advanced.hide') : t('export.advanced.show')}
@@ -820,7 +828,26 @@ export function ExportPanel(props: Props): JSX.Element {
         {view && <ProgressBlock view={view} note={phaseNote} />}
       </div>
 
+      {/* The estimate lives in the footer, which does not scroll, rather than at the bottom
+          of the list of controls that decide it. Nearly every knob above changes this number,
+          and a readout you have to scroll away from the knob to read is one you cannot use
+          to choose the knob. */}
       <div className="export-footer">
+        <div className="estimate-card">
+          <span className="estimate-row">
+            <span className="eyebrow">{t('export.summary')}</span>
+            <span className="estimate-value">{estimateLabel}</span>
+          </span>
+          {estimate.measured && (
+            <span className="estimate-measure">
+              {t('export.estimate.measure', {
+                est: formatBytes(estimate.measured.estimated),
+                actual: formatBytes(estimate.measured.actual)
+              })}
+            </span>
+          )}
+        </div>
+
         <em className="field-hint">{hint}</em>
 
         <Button size="lg" disabled={!hasSource || busy} title={!hasSource ? t('export.disabledHint') : undefined} onClick={onExport}>

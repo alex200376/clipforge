@@ -7,7 +7,13 @@
  * the last export of the same source.
  */
 
-import { gifSizeFactor, GIF_BYTES_PER_PIXEL, type GifSizeContext } from './gifTuning'
+import {
+  DEFAULT_QUALITY,
+  gifSizeFactor,
+  GIF_BYTES_PER_PIXEL,
+  webpQualityFactor,
+  type GifSizeContext
+} from './gifTuning'
 import type { CropSpec, OutputFormat } from './types'
 
 /** Lossy animated WebP lands far lower, which is the whole reason to offer it. */
@@ -47,6 +53,15 @@ export interface EstimateInput {
   /** 1 = trust the model as-is; a measured ratio makes it sharper. */
   calibration?: number
   /**
+   * The quality slider, 0-100.
+   *
+   * It is not a detail: measured across the slider's travel, WebP's output spans 0.27x to
+   * 3.12x and gifski's 0.14x to 1.80x, so a panel that ignores it can be wrong by three
+   * times in either direction at the extremes. The GIF engines differ in whether they read
+   * it at all, which is why `gif` carries it for the palette engine's sake.
+   */
+  quality?: number
+  /**
    * The GIF size knobs and which encoder will use them.
    *
    * Without this the estimate is the model's picture of a 256-colour dithered GIF, which
@@ -63,13 +78,21 @@ export function estimateAnimatedBytes({
   fps,
   seconds,
   calibration = 1,
+  quality = DEFAULT_QUALITY,
   gif
 }: EstimateInput): number {
   const frames = Math.max(1, Math.round(seconds * fps))
   const perPixel = format === 'webp' ? WEBP_BYTES_PER_PIXEL : GIF_BYTES_PER_PIXEL
   const pixels = Math.max(1, frame.width * frame.height)
   const raw = frames * (pixels * perPixel + FRAME_OVERHEAD)
-  const tuning = format === 'gif' && gif ? gifSizeFactor(gif) : 1
+  // WebP has no palette stage, so its only knob is its own encoder quality; the GIF side
+  // is told the quality as well and decides for itself whether its engine reads it.
+  const tuning =
+    format === 'webp'
+      ? webpQualityFactor(quality)
+      : gif
+        ? gifSizeFactor({ ...gif, quality })
+        : 1
   return Math.round(raw * (calibration > 0 ? calibration : 1) * tuning)
 }
 
@@ -183,6 +206,7 @@ export function fitToBudget(
       fps: candidate.fps,
       seconds: input.seconds,
       calibration: input.calibration,
+      quality: input.quality,
       gif: input.gif
     })
     return {

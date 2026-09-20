@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
+import { Checkbox } from './ui/checkbox'
 import type { StorageReport, StorageTarget, UpdateState } from '../../shared/types'
 import { formatBytes } from '../format'
 import { useI18n } from '../i18n'
@@ -9,6 +10,9 @@ import { useI18n } from '../i18n'
 interface Props {
   /** The update state decides whether clearing the cache would delete a download in use. */
   update: UpdateState
+  /** Whether the installer behind an update is kept once that update has been installed. */
+  keepInstaller: boolean
+  onKeepInstaller: (value: boolean) => void
   onNotice: (text: string) => void
 }
 
@@ -21,11 +25,12 @@ interface Props {
  * quietly, in a folder nobody opens. Showing the real sizes is most of the fix: the rest
  * is a button that reclaims them on request.
  *
- * The automatic side is elsewhere (folders are released as they are finished with, and
- * leftovers from a crashed run are swept at startup), so this card is for the deliberate
- * case: the user wants the space back now.
+ * The automatic side is elsewhere (folders are released as they are finished with,
+ * leftovers from a crashed run are swept at startup, and an update's installer is cleared
+ * as soon as that update has been installed), so this card is for the deliberate case:
+ * the user wants the space back now - or wants the installer kept instead.
  */
-export function StoragePanel({ update, onNotice }: Props): JSX.Element {
+export function StoragePanel({ update, keepInstaller, onKeepInstaller, onNotice }: Props): JSX.Element {
   const { t } = useI18n()
   const [report, setReport] = useState<StorageReport | null>(null)
   const [clearing, setClearing] = useState<StorageTarget | null>(null)
@@ -45,9 +50,10 @@ export function StoragePanel({ update, onNotice }: Props): JSX.Element {
 
   // The figures move on their own: an update download adds hundreds of megabytes while
   // this page is open, so the cache size is re-read whenever the updater's state changes.
+  // Saving the switch below clears the cache from the main process, so that counts too.
   useEffect(() => {
     void refresh()
-  }, [refresh, update.status])
+  }, [refresh, update.status, keepInstaller])
 
   const clear = async (target: StorageTarget): Promise<void> => {
     setClearing(target)
@@ -104,6 +110,19 @@ export function StoragePanel({ update, onNotice }: Props): JSX.Element {
         </div>
 
         <p className="muted">{t('settings.storage.updateNote')}</p>
+
+        <label className="check-row">
+          <Checkbox
+            id="keep-update-installer"
+            checked={keepInstaller}
+            onCheckedChange={(checked) => onKeepInstaller(checked === true)}
+          />
+          <span>
+            <strong>{t('settings.storage.keepInstaller')}</strong>
+            <em>{t('settings.storage.keepInstallerHint')}</em>
+          </span>
+        </label>
+
         {report?.updateReady && <p className="muted">{t('settings.storage.readyNote')}</p>}
         {report?.busy && <p className="muted">{t('settings.storage.busyNote')}</p>}
 

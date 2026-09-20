@@ -5,7 +5,8 @@ import { cancelActiveWork, registerIpc, releaseDownloads, trackWindowState } fro
 import { handleMediaProtocol, registerMediaScheme, setAppRoot } from './mediaProtocol'
 import { appUrl, iconPath, isDev, preloadEntry, rendererDir, rendererEntry } from './paths'
 import { sweepStaleWorkDirs } from './scratch'
-import { pruneUpdateCache, setStartupNote } from './storage'
+import { loadSettings, recordRunningVersion } from './settings'
+import { pruneUpdateCache, reclaimInstalledUpdate, setStartupNote } from './storage'
 
 /**
  * Asks for the discrete GPU on a machine that has both.
@@ -37,17 +38,43 @@ let mainWindow: BrowserWindow | null = null
  * update downloads that never finished.
  *
  * Nothing here touches a folder whose owning process is still running, so a second copy
- * of the app is safe, and nothing runs at all when automatic cleanup is switched off.
+ * of the app is safe, and nothing that honours the setting runs at all when automatic
+ * cleanup is switched off.
+ *
+ * This is also the only moment an installed update can be recognised. The previous launch
+ * wrote down which version it was; a different number here means an update was installed
+ * between the two runs, so the download that installed it is now a duplicate of the copy
+ * the installer already put in the cache - about 350 MB of this app, on every update,
+ * otherwise left for the user to find.
  */
 function reclaimFromEarlierRuns(): void {
+  const settings = loadSettings()
+  const running = app.getVersion()
   const swept = sweepStaleWorkDirs()
   const pruned = pruneUpdateCache({ busy: false })
-  const bytes = swept.bytes + pruned.bytes
-  if (swept.removed.length === 0 && pruned.files === 0) return
-  const folders = swept.removed.length + pruned.files
+  const installed = settings.autoCleanup
+    ? reclaimInstalledUpdate({
+        previousVersion: settings.lastRunVersion,
+        runningVersion: running,
+        keepInstaller: settings.keepUpdateInstaller,
+        updateReady: false
+      })
+    : { bytes: 0, files: 0 }
+  // Recorded after the reclaim, so the two readings cannot disagree about which version
+  // was running when the cache was last looked at.
+  recordRunningVersion(running)
+
+  const bytes = swept.bytes + pruned.bytes + installed.bytes
+  const folders = swept.removed.length + pruned.files + installed.files
+  if (folders === 0) return
+  const parts: string[] = []
+  if (folders - installed.files > 0) {
+    parts.push(`leftover temp files from an earlier run (${formatBytes(swept.bytes + pruned.bytes)})`)
+  }
+  if (installed.files > 0) parts.push(`the installer left by the update just installed (${formatBytes(installed.bytes)})`)
   // Held until the renderer asks for it, because the sweep runs before there is anything
   // listening on the other end.
-  setStartupNote(`Reclaimed ${folders} leftover temp file${folders === 1 ? '' : 's'} (${formatBytes(bytes)}) from an earlier run.`)
+  setStartupNote(`Reclaimed ${parts.join(' and ')}.`)
 }
 
 /**

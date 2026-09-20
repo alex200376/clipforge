@@ -21,6 +21,10 @@ export interface MediaInfo {
   fps: number
   hasAudio: boolean
   isUrl: boolean
+  /** ffprobe's name for the picture codec, e.g. `h264`. Empty when it could not be read. */
+  videoCodec?: string
+  /** ffprobe's name for the sound codec; empty when the file has no audio track. */
+  audioCodec?: string
 }
 
 export interface UrlMetadata {
@@ -357,6 +361,23 @@ export interface AppSettings {
   onboarded: boolean
   /** Check GitHub releases for a newer build shortly after startup. */
   autoUpdate: boolean
+  /**
+   * The version this build was running as, written on every launch.
+   *
+   * A launch that finds a different number here knows an update was installed in between,
+   * which is the only moment the installer the updater leaves behind is provably spent.
+   * Empty on a profile that has never run a build that wrote it, which is why it is a
+   * version string and not a boolean: "no answer" and "unchanged" are different states.
+   */
+  lastRunVersion: string
+  /**
+   * Keep `installer.exe` in the update cache after an update is installed.
+   *
+   * The file is the differential base - the old build a new update is patched against -
+   * so keeping it turns the next update from a full 357 MB download into a small one. Off, it
+   * is deleted with the rest once its update has been installed.
+   */
+  keepUpdateInstaller: boolean
 }
 
 /** Remembered so a crash or restart does not lose the clip being trimmed. */

@@ -6,7 +6,14 @@ import type { CropSpec } from '../src/shared/types'
 const box = (x: number, y: number, width: number, height: number): CropSpec => ({ x, y, width, height })
 
 describe('the session key', () => {
-  const base = { source: '/tmp/clip.mp4', start: 1, end: 3, fps: 30, margin: 24, model: 'lama-v1' }
+  const base = {
+    source: '/tmp/clip.mp4',
+    start: 1,
+    end: 3,
+    fps: 30,
+    frame: { width: 1920, height: 1080 },
+    model: 'lama-v1'
+  }
 
   it('is stable for the same work', () => {
     expect(aiSessionKey({ ...base, regions: [box(10, 10, 50, 20)] })).toBe(
@@ -27,6 +34,22 @@ describe('the session key', () => {
     expect(aiSessionKey({ ...base, regions: [box(10, 10, 50, 20)], model: 'lama-v2' })).not.toBe(key)
     expect(aiSessionKey({ ...base, fps: 60, regions: [box(10, 10, 50, 20)] })).not.toBe(key)
     expect(aiSessionKey({ ...base, source: '/tmp/other.mp4', regions: [box(10, 10, 50, 20)] })).not.toBe(key)
+    expect(
+      aiSessionKey({
+        ...base,
+        frame: { width: 1280, height: 720 },
+        regions: [box(10, 10, 50, 20)]
+      })
+    ).not.toBe(key)
+  })
+
+  it('tells the same boxes apart on a differently sized frame', () => {
+    // The windows are cut from the frame, so the same boxes on a re-encoded source are
+    // different work even where the margins round to the same number.
+    const boxes = [box(0, 0, 500, 300)]
+    const wide = aiSessionKey({ ...base, frame: { width: 1920, height: 1080 }, regions: boxes })
+    const narrow = aiSessionKey({ ...base, frame: { width: 520, height: 320 }, regions: boxes })
+    expect(narrow).not.toBe(wide)
   })
 })
 

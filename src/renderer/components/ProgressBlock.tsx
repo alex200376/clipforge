@@ -89,6 +89,16 @@ export function ProgressBlock({
         </div>
       )}
 
+      {/* Seconds a frame, once the stage has painted a few. The inpainting network is the
+          one stage where this decides whether the export is worth waiting for, and it is
+          the number that shows a runtime which quietly fell back to one thread. */}
+      {view.perFrame !== null && (
+        <div className="progress-meta">
+          <span>{t('export.progress.perFrame', { seconds: view.perFrame.toFixed(1) })}</span>
+          <span />
+        </div>
+      )}
+
       <ol className="step-list">
         {view.steps.map((step, index) => {
           const state = index < view.index ? 'done' : index === view.index ? 'active' : 'pending'

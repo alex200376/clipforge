@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { AI_MASTER_EXTENSION, aiCompositeArgs, aiMasterArgs, aiSampleArgs, aiWindowArgs } from '../shared/aiArgs'
-import { AI_INPUT, boxInModel, contextMargin, fitMargin, planWindow } from '../shared/aiWindow'
+import { AI_INPUT, boxInModel, planMargins, planWindow } from '../shared/aiWindow'
 import { aiSessionKey } from '../shared/aiArgs'
 import { normalizeWatermarks } from '../shared/mediaArgs'
 import type {
@@ -60,7 +60,8 @@ export interface AiSession {
   fps: number
   duration: number
   frames: number
-  margin: number
+  /** One margin per marked box, in the same order as `regions`. */
+  margins: number[]
   regions: AiRegionPlan[]
   windows: CropSpec[]
   /** Patch frames written per region. */
@@ -177,22 +178,19 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
 
   const regions = normalizeWatermarks(request.regions, request.width, request.height)
   if (regions.length === 0) throw new Error('Mark the area to remove first.')
-  // As much real picture around the box as the model input can hold, which is what the
-  // fill is built from. `fitMargin` then cuts it back wherever the picture itself is
-  // smaller than the input, keeping the round trip one-to-one pixels rather than a
-  // scale up and back down.
-  const margin = fitMargin(
-    regions[0]!,
-    { width: request.width, height: request.height },
-    { preferred: contextMargin(regions[0]!) }
-  )
+  // As much real picture around each box as the model input can hold, which is what the
+  // fill is built from - per box, since one margin for all of them is sized by whichever
+  // box came first and forces every other window to be scaled or starved. `fitMargin`
+  // then cuts it back wherever the picture itself is smaller than the input, keeping the
+  // round trip one-to-one pixels rather than a scale up and back down.
+  const margins = planMargins(regions, { width: request.width, height: request.height })
 
   const key = aiSessionKey({
     source: request.source,
     start: request.start,
     end: request.start + request.duration,
     fps: request.fps,
-    margin,
+    frame: { width: request.width, height: request.height },
     regions,
     model: AI_MODEL_VERSION
   })
@@ -229,7 +227,7 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
   const plans: AiWindowPlanEntry[] = []
   for (let index = 0; index < regions.length; index += 1) {
     const region = regions[index]!
-    const plan = planWindow(region, { width: request.width, height: request.height }, { margin, input: AI_INPUT })
+    const plan = planWindow(region, { width: request.width, height: request.height }, { margin: margins[index] ?? 0, input: AI_INPUT })
     if (!plan) throw new Error('A marked area is outside the picture.')
     const pattern = framePath(dir, 'window', index, 0).replace('000000', '%06d')
     const extracted = await job.run(
@@ -264,7 +262,7 @@ export async function prepareAiSession(request: AiPrepareRequest, sdk: AiSdk): P
     fps: request.fps,
     duration: request.duration,
     frames,
-    margin,
+    margins,
     regions: regionPlans,
     windows: plans.map(({ plan }) => plan.crop),
     written: regions.map(() => 0),

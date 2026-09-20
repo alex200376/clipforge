@@ -8,6 +8,7 @@ import { findBinary, missingBinaryError } from './binaries'
 
 interface ProbeStream {
   codec_type?: string
+  codec_name?: string
   width?: number
   height?: number
   r_frame_rate?: string
@@ -65,7 +66,9 @@ export async function probeLocalFile(filePath: string): Promise<MediaInfo> {
   if (!ffprobe) throw missingBinaryError('ffprobe')
   const payload = JSON.parse(await runFfprobe(ffprobe, filePath)) as ProbePayload
   const video = payload.streams?.find((stream) => stream.codec_type === 'video')
-  const hasAudio = (payload.streams ?? []).some((stream) => stream.codec_type === 'audio')
+  const audio = payload.streams?.find((stream) => stream.codec_type === 'audio')
+  // The codecs come free with the same probe - `-show_streams` was already asked for - and
+  // they are what decides whether the file can be handed to the player untouched.
   return {
     path: filePath,
     name: filePath.split(/[\\/]/).pop() ?? filePath,
@@ -73,7 +76,9 @@ export async function probeLocalFile(filePath: string): Promise<MediaInfo> {
     width: video?.width ?? 0,
     height: video?.height ?? 0,
     fps: parseRate(video?.avg_frame_rate) || parseRate(video?.r_frame_rate),
-    hasAudio,
-    isUrl: false
+    hasAudio: audio !== undefined,
+    isUrl: false,
+    videoCodec: video?.codec_name ?? '',
+    audioCodec: audio?.codec_name ?? ''
   }
 }

@@ -66,6 +66,14 @@ export type WatermarkCorner = 'tl' | 'tr' | 'bl' | 'br'
 export interface EstimateView {
   /** Rough size for the current settings; null until a clip is loaded. */
   bytes: number | null
+  /**
+   * Why there is no number yet, when there is none.
+   *
+   * A clip can be loaded and still have no estimate - a link whose length is still being
+   * read, a selection that came out empty - and telling that user to "load a clip" is both
+   * wrong and unhelpful. Null whenever `bytes` is a number.
+   */
+  unknown: 'noClip' | 'noLength' | 'reading' | null
   /** Set when a byte limit forced a smaller frame size or frame rate. */
   fitted: { width: number; fps: number; bytes: number; fits: boolean } | null
   /** Last measured estimate against reality for this source. */

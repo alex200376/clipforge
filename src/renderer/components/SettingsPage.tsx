@@ -164,7 +164,8 @@ export function SettingsPage({
       draft.defaultVideoSize !== settings.defaultVideoSize ||
       draft.gifColors !== settings.gifColors ||
       draft.gifDither !== settings.gifDither ||
-      draft.gifLossy !== settings.gifLossy,
+      draft.gifLossy !== settings.gifLossy ||
+      draft.keepUpdateInstaller !== settings.keepUpdateInstaller,
     [draft, settings]
   )
 
@@ -655,7 +656,12 @@ export function SettingsPage({
             onInstall={onInstallUpdate}
           />
 
-          <StoragePanel update={update} onNotice={onNotice} />
+          <StoragePanel
+            update={update}
+            keepInstaller={draft.keepUpdateInstaller}
+            onKeepInstaller={(value) => setDraft({ ...draft, keepUpdateInstaller: value })}
+            onNotice={onNotice}
+          />
 
           <Card>
             <CardHeader>

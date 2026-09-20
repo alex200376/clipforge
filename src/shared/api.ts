@@ -59,7 +59,8 @@ export interface ClipForgeApi {
   /** Electron 32 removed File.path, so dropped files resolve their path through the main process. */
   pathForFile(file: File): string
   probeMedia(filePath: string): Promise<MediaInfo>
-  preparePreview(request: { source: string; isUrl: boolean }): Promise<PreviewSource>
+  /** `rewrap` forces the ffmpeg copy, used when the player refuses a file it was handed. */
+  preparePreview(request: { source: string; isUrl: boolean; rewrap?: boolean }): Promise<PreviewSource>
   buildFilmstrip(request: FilmstripRequest): Promise<FilmstripResult>
   resolveMetadata(url: string): Promise<UrlMetadata>
   exportGif(request: GifRequest): Promise<ExportResult>

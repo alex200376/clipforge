@@ -17,6 +17,18 @@
  *   lossy 0 -> 9158 KB (0.98)   40 -> 4487 KB (0.48)   80 -> 3857 KB (0.59->0.41)   200 -> 3161 KB (0.34)
  *   lossy 80 + colours 64 -> 2563 KB (0.27)
  *
+ * The quality slider is the *other* half of the size question and is measured the same
+ * way, against the slider's own default of 90:
+ *
+ *   gifski --quality   30 -> 631 KB (0.14)   50 -> 900 KB (0.21)   75 -> 2687 KB (0.62)
+ *                      90 -> 4363 KB (1.00)  100 -> 7837 KB (1.80)
+ *   WebP -q:v          30 -> 365 KB (0.27)   50 -> 485 KB (0.35)   75 -> 661 KB (0.48)
+ *                      90 -> 1369 KB (1.00)  100 -> 4270 KB (3.12)
+ *
+ * Both are far steeper than they look - and nothing else in the app moves the estimate by
+ * 3x. ffmpeg's palette pipeline has no quality knob at all, so there the slider is inert
+ * and the estimate must stay put; that asymmetry is why the factor depends on the engine.
+ *
  * Two candidates were measured and then *not* shipped, because a knob that does nothing
  * is worse than no knob:
  *
@@ -96,6 +108,9 @@ export function gifskiLossyQuality(strength: number): number | null {
   return Math.max(60, 100 - Math.round(Math.max(0, Math.min(100, strength)) * 0.4))
 }
 
+/** The slider's default position: the value every size constant here is measured at. */
+export const DEFAULT_QUALITY = 90
+
 /** Bits per pixel per frame for a dithered 256-colour GIF, unchanged by this work. */
 export const GIF_BYTES_PER_PIXEL = 0.22
 
@@ -142,11 +157,56 @@ export function gifskiSizeFactor(strength: number): number {
   return 1 - Math.min(0.2, Math.max(0, Math.min(100, strength)) * 0.0021)
 }
 
+/** Straight line between measured points, flat outside them. */
+function interpolate(points: ReadonlyArray<readonly [number, number]>, value: number): number {
+  if (value <= points[0]![0]) return points[0]![1]
+  for (let index = 1; index < points.length; index += 1) {
+    const [rightX, rightY] = points[index]!
+    if (value > rightX) continue
+    const [leftX, leftY] = points[index - 1]!
+    const span = rightX - leftX
+    return span === 0 ? rightY : leftY + ((rightY - leftY) * (value - leftX)) / span
+  }
+  return points[points.length - 1]![1]
+}
+
+/** Measured on a 4-second 480p/15fps clip, relative to the slider's default of 90. */
+const GIFSKI_QUALITY_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [30, 0.14],
+  [50, 0.21],
+  [75, 0.62],
+  [90, 1],
+  [100, 1.8]
+]
+
+const WEBP_QUALITY_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [30, 0.27],
+  [50, 0.35],
+  [75, 0.48],
+  [90, 1],
+  [100, 3.12]
+]
+
+/** What gifski's `--quality` does to the file, relative to the model's own calibration. */
+export function gifskiQualityFactor(quality: number): number {
+  return interpolate(GIFSKI_QUALITY_POINTS, clampQuality(quality))
+}
+
+/** What WebP's `-q:v` does to the file, on the same scale. */
+export function webpQualityFactor(quality: number): number {
+  return interpolate(WEBP_QUALITY_POINTS, clampQuality(quality))
+}
+
+const clampQuality = (quality: number): number =>
+  Number.isFinite(quality) ? Math.max(0, Math.min(100, quality)) : DEFAULT_QUALITY
+
 export interface GifSizeContext {
   tuning: GifTuning
   engine: GifEngine
   /** Whether the gifsicle pass will run; without it the palette engine has no lossy stage. */
   optimize: boolean
+  /** The quality slider, 0-100. Only gifski reads it; see `gifSizeFactor`. */
+  quality?: number
 }
 
 /**
@@ -157,9 +217,12 @@ export interface GifSizeContext {
  * flag, and otherwise nothing at all, because ffmpeg's palette pipeline has no lossy
  * mode. That asymmetry is the whole reason this takes the engine as an argument.
  */
-export function gifSizeFactor({ tuning, engine, optimize }: GifSizeContext): number {
+export function gifSizeFactor({ tuning, engine, optimize, quality }: GifSizeContext): number {
   const palette = PALETTE_FACTORS[tuning.colors] ?? 1
   const dither = DITHER_FACTORS[tuning.dither] ?? 1
   const lossy = optimize ? gifsicleSizeFactor(tuning.lossy) : engine === 'gifski' ? gifskiSizeFactor(tuning.lossy) : 1
-  return palette * dither * lossy
+  // ffmpeg's palette pipeline has no quality knob - its quality is the lossy stage above -
+  // so moving the slider there changes nothing and the estimate has to say so.
+  const qualityFactor = engine === 'gifski' ? gifskiQualityFactor(quality ?? DEFAULT_QUALITY) : 1
+  return palette * dither * lossy * qualityFactor
 }

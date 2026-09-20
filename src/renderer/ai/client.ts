@@ -342,6 +342,26 @@ export async function runAiRemoval(
     opened.lama = false
     opened.detector = false
   }
+  // The GPU is chosen again for each export run too, and for a much bigger reason.
+  //
+  // Measured on this machine, with the same window and the same weights: 1.66s a frame on
+  // an Ampere-class adapter against 10.46s on four CPU threads. Six times, and which one it
+  // is decides whether a clip is a short wait or an afternoon. What turned that into a
+  // permanent six-times loss was remembering a failure without a way to unsay it: the
+  // reason the GPU was passed over once - a driver reset, another application holding the
+  // device, a session created while the machine was busy - is not a property of the
+  // machine, yet every export after it ran on the CPU with one line in a log nobody had
+  // open. The cost of being wrong here is one failed session attempt on the way to the
+  // runtime that works; the cost of not trying is measured above.
+  //
+  // The worker has to go with it: the weights are already open, and an open session is
+  // what `openModels` would return instead of asking for the GPU.
+  if (engine !== 'auto') {
+    engine = 'auto'
+    discardWorker()
+    opened.lama = false
+    opened.detector = false
+  }
   // From here until the first frame is painted nothing reports progress: the weights
   // are read and the graph is built. The caller drops the finished cut's percentage so
   // the display shows this wait for what it is.

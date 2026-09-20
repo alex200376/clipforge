@@ -19,6 +19,27 @@ interface Materialised {
   file: string
 }
 
+/** A `.part` file means yt-dlp is still working, not that the file is finished. */
+const isPartial = (name: string): boolean => /\.(part|ytdl|tmp)$/i.test(name)
+
+/**
+ * Which of the files in the download folder is the download.
+ *
+ * Size, not order, and everything with a dot in front of it is out. This was wrong in a
+ * way that broke every import from a link: the folder also holds the owner file the app
+ * writes to claim the folder for cleanup, `readdirSync` returns that one *first*, and it
+ * is not empty - so the "downloaded file" handed to ffmpeg was `.clipforge-owner.json`.
+ * The order `readdirSync` happens to return is the filesystem's business; the largest
+ * real file is the one yt-dlp wrote.
+ */
+export function pickDownloadedFile(entries: ReadonlyArray<{ name: string; size: number }>): string | null {
+  const candidates = entries.filter(
+    (entry) => !isPartial(entry.name) && !entry.name.startsWith('.') && entry.size > 0
+  )
+  if (candidates.length === 0) return null
+  return candidates.reduce((best, entry) => (entry.size > best.size ? entry : best)).name
+}
+
 /**
  * Downloads are kept until the app quits, keyed by link.
  *
@@ -28,8 +49,14 @@ interface Materialised {
  */
 const downloads = new Map<string, Materialised>()
 
-/** A `.part` file means yt-dlp is still working, not that the file is finished. */
-const isPartial = (name: string): boolean => /\.(part|ytdl|tmp)$/i.test(name)
+/** Size of a file that may have been taken away between the listing and the stat. */
+const statSize = (file: string): number => {
+  try {
+    return statSync(file).size
+  } catch {
+    return 0
+  }
+}
 
 /**
  * Fetches a link to a local file so the rest of the app can treat it exactly
@@ -55,10 +82,10 @@ export async function materializeUrl(url: string, deps: UrlSourceDeps): Promise<
     throw new ClipForgeError('download-failed', result.error ?? 'The download failed.')
   }
 
-  const file = readdirSync(dir)
-    .filter((name) => !isPartial(name))
-    .map((name) => path.join(dir, name))
-    .find((candidate) => statSync(candidate).size > 0)
+  const picked = pickDownloadedFile(
+    readdirSync(dir).map((name) => ({ name, size: statSize(path.join(dir, name)) }))
+  )
+  const file = picked === null ? null : path.join(dir, picked)
   if (!file) {
     rmSync(dir, { recursive: true, force: true })
     throw new ClipForgeError('download-failed', 'The download finished without leaving a file behind.')

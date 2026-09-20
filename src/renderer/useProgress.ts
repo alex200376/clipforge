@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 
 import type { JobProgress, JobProgressDetail } from '../shared/types'
-import { estimateRemaining, overallPercent, rateRatio, smoothEta, stepIndexFor, type ProgressStep } from './progress'
+import {
+  estimateRemaining,
+  overallPercent,
+  perFrameSeconds,
+  pushFrameSample,
+  rateRatio,
+  smoothEta,
+  stepIndexFor,
+  type FrameSample,
+  type ProgressStep
+} from './progress'
 import type { TranslationKey } from './i18n/en'
 
 /** Everything the progress display needs, derived once so the bar, the estimate and
@@ -29,6 +39,10 @@ export interface ExportProgressView {
   etaFromRate: boolean
   /** How many times real time the stage is reading its input, when it knows. */
   rate: number | null
+  /** Seconds each painted frame is taking, measured over the last few frames. Null
+   *  until at least two of them are done, and never derived from the first one - it
+   *  carries the model load. */
+  perFrame: number | null
   /** How long each step took, indexed like `steps`; null while it is still running. */
   stepTimes: (number | null)[]
 }
@@ -103,6 +117,7 @@ export function useExportProgress({ steps, progress, ai, startedAt, running }: P
   }, [running])
 
   const runRef = useRef<Run>({ runAt: null, starts: [], overall: 0, eta: null, etaStep: null })
+  const framesRef = useRef<FrameSample[]>([])
 
   //
   // A new export starts from zero: the monotonic guard would otherwise keep the
@@ -116,6 +131,7 @@ export function useExportProgress({ steps, progress, ai, startedAt, running }: P
   //
   if (runRef.current.runAt !== startedAt) {
     runRef.current = { runAt: startedAt, starts: [], overall: 0, eta: null, etaStep: null }
+    framesRef.current = []
   }
   const run = runRef.current
 
@@ -125,6 +141,12 @@ export function useExportProgress({ steps, progress, ai, startedAt, running }: P
   const step = steps[index]
 
   const frames = ai && ai.total > 0 ? { done: ai.done, total: ai.total } : null
+  // Recorded during the render for the same reason the step starts are: this is a
+  // measurement of what just happened, and an effect would read it one render late -
+  // which on the slowest stage of the app is a whole frame.
+  if (running && frames) {
+    framesRef.current = pushFrameSample(framesRef.current, { at: Date.now(), done: frames.done })
+  }
   const detail: JobProgressDetail | null = frames ? { kind: 'frames', ...frames } : (progress?.detail ?? null)
   const fraction = frames ? Math.min(1, Math.max(0, frames.done / frames.total)) : (progress?.percent ?? 0) / 100
 
@@ -171,6 +193,7 @@ export function useExportProgress({ steps, progress, ai, startedAt, running }: P
     eta,
     etaFromRate: raw?.source === 'rate',
     rate: rateRatio(detail, stageElapsed),
+    perFrame: perFrameSeconds(framesRef.current),
     stepTimes: stepTimesFrom(starts, steps.length)
   }
 }

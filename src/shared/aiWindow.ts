@@ -97,6 +97,26 @@ export function fitMargin(
 }
 
 /**
+ * One margin per marked box, each fit against the model input on its own.
+ *
+ * A single margin shared by every box was sized by whichever box came first, and the
+ * mismatch is not cosmetic: a box smaller than that one is handed a window far larger
+ * than its own box needs, while a box *larger* than it has to be scaled down to fit the
+ * square - so the pixels the fill is meant to blend into get resampled, which is exactly
+ * the softness this module exists to avoid. Sized per box, each window is as large as the
+ * square allows at 1:1, whatever the other boxes look like.
+ */
+export function planMargins(
+  regions: CropSpec[],
+  frame: { width: number; height: number },
+  input = AI_INPUT
+): number[] {
+  return regions.map((region) =>
+    fitMargin(region, frame, { preferred: contextMargin(region, input), input })
+  )
+}
+
+/**
  * Grows a marked box into the window the model will be shown.
  *
  * The margin matters for more than tidiness: the pixels surrounding a hole are

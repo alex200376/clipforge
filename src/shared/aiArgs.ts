@@ -18,6 +18,7 @@
  * costs no extra lossy generation - the same single encode a normal export does.
  */
 
+import { planMargins } from './aiWindow'
 import type { CropSpec } from './types'
 
 /** Everything the patches depend on. Any change means fresh inference. */
@@ -26,7 +27,8 @@ export interface AiSessionInput {
   start: number
   end: number
   fps: number
-  margin: number
+  /** Frame size: the key derives the same per-box margins the window plan uses. */
+  frame: { width: number; height: number }
   regions: CropSpec[]
   /** Identifies the weights, so a new model never reuses an old result. */
   model: string
@@ -40,8 +42,15 @@ const round = (value: number): string => value.toFixed(3)
  * that changed nothing real from paying for inference twice.
  */
 export function aiSessionKey(input: AiSessionInput): string {
+  // Each box carries its own margin, derived here with the same function the window plan
+  // uses rather than passed in: the key then cannot describe a window the plan would not
+  // build, and a frame-size change that moves a window still moves the key.
+  const margins = planMargins(input.regions, input.frame)
   const regions = input.regions
-    .map((region) => `${Math.round(region.x)},${Math.round(region.y)},${Math.round(region.width)},${Math.round(region.height)}`)
+    .map(
+      (region, index) =>
+        `${Math.round(region.x)},${Math.round(region.y)},${Math.round(region.width)},${Math.round(region.height)},${margins[index] ?? 0}`
+    )
     .sort()
     .join(';')
   return [
@@ -49,7 +58,10 @@ export function aiSessionKey(input: AiSessionInput): string {
     round(input.start),
     round(input.end),
     round(input.fps),
-    Math.round(input.margin),
+    // The frame size itself, not only the margins it produces: the windows are cut from
+    // it, so the same boxes on a re-encoded source are different work even where the
+    // margins happen to round to the same number.
+    `${Math.round(input.frame.width)}x${Math.round(input.frame.height)}`,
     regions,
     input.model
   ].join('|')

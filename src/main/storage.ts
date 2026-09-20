@@ -4,7 +4,13 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 
 import { isAbandonedDownload, pendingUpdateIsUsable } from '../shared/scratch'
-import { parseUpdaterCacheDirName } from '../shared/updates'
+import {
+  parseUpdaterCacheDirName,
+  postUpdateReclaim,
+  updateWasInstalled,
+  versionFromInstallerName,
+  type UpdateReclaim
+} from '../shared/updates'
 
 /**
  * What the updater keeps on disk, and what of it is safe to remove.
@@ -21,9 +27,10 @@ import { parseUpdaterCacheDirName } from '../shared/updates'
  *
  * For an app whose installer is 357 MB that is up to 700 MB of disk, and none of it was
  * ever surfaced: the app quietly kept two copies of itself. So the rule here is to remove
- * only what is provably dead - interrupted downloads and a pending folder that cannot
- * name a file it still has - and to put the rest in front of the user with its real size
- * and an explicit clear, instead of deciding for them that the patch base is not worth it.
+ * only what is provably dead - interrupted downloads, a pending folder that cannot name a
+ * file it still has, and (see `reclaimInstalledUpdate`) the download that has already
+ * been installed - and to put the rest in front of the user with its real size and an
+ * explicit clear, instead of deciding for them that the patch base is not worth it.
  */
 
 /** Mirrors electron-updater's own cache base, which its package does not export. */
@@ -201,6 +208,59 @@ export function pruneUpdateCache(options: { busy: boolean }): { bytes: number; f
   }
 
   return { bytes, files }
+}
+
+/** The version named by the download sitting in `pending/`, or null when there is none. */
+function pendingVersion(dir: string): string | null {
+  const pending = path.join(dir, 'pending')
+  if (!existsSync(pending)) return null
+  const state = pendingState(pending)
+  if (state.fileName === null || !state.fileExists) return null
+  return versionFromInstallerName(state.fileName)
+}
+
+/**
+ * After an update has been installed, the installer that installed it is spent.
+ *
+ * This is the one piece of the cache that can be reclaimed on evidence rather than on a
+ * guess: either the app has come up as a different version than the one the last launch
+ * recorded, or the download in `pending/` is named for a version that is not newer than
+ * the one running - both of which mean the download has already done its job (see
+ * `postUpdateReclaim`). The updater never removes it - `cacheDirForPendingUpdate` is only
+ * emptied when a *later* download starts - and the installer has already copied itself
+ * into the cache root for the next patch to use, so what is left is a second copy of the
+ * app.
+ *
+ * Nothing here runs when the app is offering an update for install, because the file
+ * behind that button is exactly the file this would delete.
+ */
+export function reclaimInstalledUpdate(options: {
+  previousVersion: string
+  runningVersion: string
+  keepInstaller: boolean
+  updateReady: boolean
+}): { scope: UpdateReclaim; bytes: number; files: number } {
+  const dir = updateCacheDir()
+  // The pending folder's own name is read only when the recorded version cannot answer - a
+  // profile that never recorded one - so the ordinary launch does no work at all here.
+  const changed = updateWasInstalled(options.previousVersion, options.runningVersion)
+  const scope = postUpdateReclaim({
+    ...options,
+    pendingVersion: changed || !existsSync(dir) ? null : pendingVersion(dir)
+  })
+  const nothing = { scope, bytes: 0, files: 0 }
+  if (scope === 'none' || options.updateReady) return nothing
+  if (!existsSync(dir)) return nothing
+  if (scope === 'everything') {
+    const before = measure(dir)
+    remove(dir)
+    return { scope, bytes: before.bytes, files: before.files }
+  }
+  const pending = path.join(dir, 'pending')
+  if (!existsSync(pending)) return nothing
+  const before = measure(pending)
+  remove(pending)
+  return { scope, bytes: before.bytes, files: before.files }
 }
 
 /**

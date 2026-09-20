@@ -9,6 +9,7 @@ import {
   growBox,
   modelReadback,
   patchSize,
+  planMargins,
   planWindow
 } from '../src/shared/aiWindow'
 import type { CropSpec } from '../src/shared/types'
@@ -96,6 +97,32 @@ describe('margin that keeps the round trip lossless', () => {
 
   it('accepts the scale when the box alone is larger than the model', () => {
     expect(fitMargin(box(0, 0, 900, 400), frame, { preferred: 24 })).toBe(0)
+  })
+
+  it('sizes every box on its own, whatever the others look like', () => {
+    // The bug this replaces: one margin for the whole set, taken from the first box. On a
+    // small logo followed by a large one, the large box then had to be scaled - the
+    // pixels the fill blends into got resampled - because the small box's generosity was
+    // applied to it. Each entry must now be the margin *that* box would ask for.
+    const small = box(10, 10, 120, 60)
+    const large = box(100, 400, 460, 200)
+    const margins = planMargins([small, large], frame)
+    expect(margins).toEqual([
+      contextMargin(small),
+      fitMargin(large, frame, { preferred: contextMargin(large) })
+    ])
+    expect(margins[0]).not.toBe(margins[1])
+  })
+
+  it('keeps every window at 1:1 pixels when one box is much larger than another', () => {
+    const margins = planMargins([box(10, 10, 120, 60), box(100, 400, 460, 200)], frame)
+    for (const [index, region] of [box(10, 10, 120, 60), box(100, 400, 460, 200)].entries()) {
+      expect(plan(region, margins[index]!)?.scale).toBe(1)
+    }
+  })
+
+  it('is empty for no boxes', () => {
+    expect(planMargins([], frame)).toEqual([])
   })
 })
 

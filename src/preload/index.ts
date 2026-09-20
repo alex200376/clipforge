@@ -39,7 +39,7 @@ const api: ClipForgeApi = {
   pickMedia: () => ipcRenderer.invoke('clipforge:media:pick') as Promise<MediaInfo | null>,
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   probeMedia: (filePath: string) => ipcRenderer.invoke('clipforge:media:probe', filePath) as Promise<MediaInfo>,
-  preparePreview: (request: { source: string; isUrl: boolean }) =>
+  preparePreview: (request: { source: string; isUrl: boolean; rewrap?: boolean }) =>
     ipcRenderer.invoke('clipforge:media:preview', request) as Promise<PreviewSource>,
   buildFilmstrip: (request: FilmstripRequest) =>
     ipcRenderer.invoke('clipforge:media:filmstrip', request) as Promise<FilmstripResult>,

@@ -88,7 +88,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   gifDither: DEFAULT_GIF_TUNING.dither,
   gifLossy: DEFAULT_GIF_TUNING.lossy,
   onboarded: false,
-  autoUpdate: true
+  autoUpdate: true,
+  // Only the main process writes these two: the version is recorded at startup, and the
+  // placeholder here is replaced by the stored settings before anything reads it.
+  lastRunVersion: '',
+  keepUpdateInstaller: true
 }
 
 const BUDGET_BYTES = 8 * 1024 * 1024
@@ -119,6 +123,14 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [url, setUrl] = useState('')
   const [source, setSource] = useState<MediaSource | null>(null)
   const [preview, setPreview] = useState<PreviewSource | null>(null)
+  /**
+   * Set when the player refuses the file it was handed, so the next prepare copies it.
+   *
+   * The main process decides whether a file plays as it stands from its codecs, and that
+   * answer is about Chromium in general rather than this machine. The player's own refusal
+   * is the one piece of evidence that settles it, so it is what triggers the ffmpeg path.
+   */
+  const [rewrap, setRewrap] = useState(false)
   const [filmstrip, setFilmstrip] = useState<Filmstrip | null>(null)
   const [preparing, setPreparing] = useState(false)
   const [range, setRange] = useState({ start: 0, end: 0 })
@@ -568,8 +580,16 @@ export function App({ initialSettings }: Props): JSX.Element {
     [fail, failWith, loadMedia, pushLog, resolveUrl, t]
   )
 
-  // Any new source triggers a preview (remuxing when Chromium cannot play it)
-  // plus a filmstrip for the timeline.
+  const sourcePath = source?.path ?? null
+
+  // A new clip starts over: the player's refusal of the *previous* file says nothing about
+  // this one, and carrying the flag across would copy every clip after the first failure.
+  useEffect(() => {
+    setRewrap(false)
+  }, [sourcePath])
+
+  // Any new source triggers a preview (handing the file over untouched when the player can
+  // read it, copying it when it cannot) plus a filmstrip for the timeline.
   useEffect(() => {
     if (!source) return
     let disposed = false
@@ -579,7 +599,11 @@ export function App({ initialSettings }: Props): JSX.Element {
         setFilmstrip(null)
         setPreparing(true)
         setStatus({ text: t('status.preparingPreview'), kind: 'busy' })
-        const next = await window.clipforge.preparePreview({ source: source.path, isUrl: source.kind === 'url' })
+        const next = await window.clipforge.preparePreview({
+          source: source.path,
+          isUrl: source.kind === 'url',
+          rewrap
+        })
         if (disposed) return
         setPreview(next)
         setStatus({ text: t('status.ready'), kind: 'idle' })
@@ -612,7 +636,26 @@ export function App({ initialSettings }: Props): JSX.Element {
     return () => {
       disposed = true
     }
-  }, [source, fail, pushLog, t])
+  }, [source, sourcePath, rewrap, fail, pushLog, t])
+
+  /**
+   * The player could not read a file that was handed over untouched.
+   *
+   * Only codes 3 and 4 are acted on: they mean the file cannot be decoded, which is a
+   * verdict on the file. Codes 1 and 2 are the aborts and stalls of an ordinary clip swap
+   * and copying on those would double the work of every switch for nothing. The copy is
+   * asked for once - the fallback preview is not direct, so a second failure is not a
+   * reason to try again.
+   */
+  const handlePlaybackError = useCallback(
+    (code: number) => {
+      if (code !== 3 && code !== 4) return
+      if (!preview?.direct) return
+      pushLog('The player could not read this file as it stands - copying it into a playable container instead.')
+      setRewrap(true)
+    },
+    [preview, pushLog]
+  )
 
   const seekTo = useCallback((seconds: number) => {
     setCurrentTime(seconds)
@@ -869,12 +912,16 @@ export function App({ initialSettings }: Props): JSX.Element {
    * numbers the panel promises are the ones the export uses.
    */
   const estimate: EstimateView = useMemo(() => {
-    if (!outputFrame || clipSeconds <= 0 || !source) return { bytes: null, fitted: null, measured }
+    if (!source) return { bytes: null, fitted: null, measured, unknown: 'noClip' }
+    if (clipSeconds <= 0) return { bytes: null, fitted: null, measured, unknown: 'noLength' }
+    // No frame size yet: the clip is known but its dimensions are not, which is "still
+    // reading" rather than "no clip" - and the panel says which.
+    if (!outputFrame) return { bytes: null, fitted: null, measured, unknown: 'reading' }
     if (!isGif) {
       // A video export keeps the source's frame rate, so a clip whose rate is still unknown
       // - a link that has not been read yet - cannot be counted. Saying so beats a number
       // invented from a default.
-      if (!(source.fps > 0)) return { bytes: null, fitted: null, measured }
+      if (!(source.fps > 0)) return { bytes: null, fitted: null, measured, unknown: 'reading' }
       return {
         bytes: estimateVideoBytes({
           frame: outputFrame,
@@ -883,17 +930,20 @@ export function App({ initialSettings }: Props): JSX.Element {
           targetBytes: videoSizeBytes(size),
           audio: !mute,
           correction: calibration
-        }),
+        }        ),
         fitted: null,
-        measured
+        measured,
+        unknown: null
       }
     }
     // The knobs change the file size directly - measured, 64 colours with the optimiser
     // is 27% of what the untuned model predicts - so the readout has to know them, and
     // which stage will actually apply the lossy strength.
-    const gif = { tuning, engine, optimize: optimize && gifsicleReady }
-    const base = estimateAnimatedBytes({ format, frame: outputFrame, fps, seconds: clipSeconds, calibration, gif })
-    if (budget === 'off') return { bytes: base, fitted: null, measured }
+    // `quality` belongs here for the same reason: it is worth up to 3x either way, and the
+    // engines disagree about whether they read it, so the context carries it and decides.
+    const gif = { tuning, engine, optimize: optimize && gifsicleReady, quality }
+    const base = estimateAnimatedBytes({ format, frame: outputFrame, fps, seconds: clipSeconds, calibration, quality, gif })
+    if (budget === 'off') return { bytes: base, fitted: null, measured, unknown: null }
     const fitted = fitToBudget({
       format,
       frame: outputFrame,
@@ -901,14 +951,16 @@ export function App({ initialSettings }: Props): JSX.Element {
       seconds: clipSeconds,
       budgetBytes: BUDGET_BYTES,
       calibration,
+      quality,
       gif
     })
     return {
       bytes: fitted.bytes,
       fitted: { width: fitted.width, fps: fitted.fps, bytes: fitted.bytes, fits: fitted.fits },
-      measured
+      measured,
+      unknown: null
     }
-  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, budget, measured, tuning, engine, optimize, gifsicleReady])
+  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, budget, measured, tuning, engine, optimize, gifsicleReady, quality])
 
   // With a budget active the export follows the fitted numbers, not the sliders.
   const effectiveFps = budget !== 'off' && estimate.fitted ? estimate.fitted.fps : fps
@@ -1581,6 +1633,7 @@ export function App({ initialSettings }: Props): JSX.Element {
                     onActiveRegion={setActiveRegion}
                     onWatermarkChange={changeWatermark}
                     preparing={preparing}
+                    onPlaybackError={handlePlaybackError}
                     videoRef={videoRef}
                     playing={playing}
                     currentTime={currentTime}

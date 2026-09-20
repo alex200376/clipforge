@@ -37,6 +37,108 @@ export function parseUpdaterCacheDirName(yml: string): string | null {
   return match?.[1] ?? null
 }
 
+/**
+ * Whether the running app is a version the last launch did not have.
+ *
+ * An installed update is invisible from inside the process that is running it: by the
+ * time the new build is up, the new build *is* the version, and nothing on disk says what
+ * came before. So each launch records the version it was, and this compares the two.
+ *
+ * An empty `previousVersion` means there is nothing to compare against - a first run, or
+ * a build from before the version was recorded - and "I cannot tell" has to mean "leave it
+ * alone". The updater's pending folder can hold an update that has been downloaded and is
+ * waiting for a restart, and deleting that would take the file out from behind the app's
+ * own restart button.
+ */
+export function updateWasInstalled(previousVersion: string, runningVersion: string): boolean {
+  const previous = previousVersion.trim()
+  return previous.length > 0 && runningVersion.trim().length > 0 && previous !== runningVersion
+}
+
+/**
+ * What a launch may take out of the updater's cache.
+ *
+ *   - `none`     nothing has changed; whatever is there is still in use.
+ *   - `applied`  an update was just installed, so the download that installed it is spent.
+ *                The folder the installer copied itself into is not: that copy is the
+ *                differential base, the file the *next* update is patched against.
+ *   - `everything` the same, plus the base, for a user who would rather have the disk back
+ *                than a small next download.
+ */
+export type UpdateReclaim = 'none' | 'applied' | 'everything'
+
+/**
+ * The decision, kept pure so the three cases can be pinned without a filesystem.
+ *
+ * The `applied`/`everything` split is the whole point of this: electron-builder's
+ * installer copies itself to `installer.exe` in the cache on every install (that is how
+ * the next update can be patched rather than downloaded again, 357 MB for this app),
+ * while the file it was copied *from* - the same installer, byte for byte, sitting in
+ * `pending/` - is never cleaned up by the updater. After an update that is two identical
+ * copies of the app, and only one of them does anything.
+ */
+/**
+ * The version a downloaded update's file name states, or null when it states none.
+ *
+ * electron-builder names the artifact after the version (`ClipForge-Setup-0.4.0.exe`) and
+ * the updater keeps that name for the file it downloads, so the pending folder answers
+ * "which update is this?" without opening the 357 MB installer to find out.
+ */
+export function versionFromInstallerName(name: string): string | null {
+  const match = /(\d+(?:\.\d+)+)/.exec(name)
+  return match?.[1] ?? null
+}
+
+/**
+ * Whether `candidate` is the same version as `reference` or older, comparing numbers
+ * rather than strings - which is the difference between 0.10.0 being newer than 0.9.0 and
+ * a plain `<` putting it before it.
+ *
+ * Either side failing to look like a version means the answer is no.
+ */
+export function isNotNewer(candidate: string, reference: string): boolean {
+  const left = candidate.split('.')
+  const right = reference.split('.')
+  if (left.some((part) => !/^\d+$/.test(part)) || right.some((part) => !/^\d+$/.test(part))) return false
+  const width = Math.max(left.length, right.length)
+  for (let index = 0; index < width; index += 1) {
+    const a = Number(left[index] ?? 0)
+    const b = Number(right[index] ?? 0)
+    if (a !== b) return a < b
+  }
+  return true
+}
+
+export function postUpdateReclaim(options: {
+  /** The version the previous launch recorded, or '' when it recorded none. */
+  previousVersion: string
+  /** The version running now. */
+  runningVersion: string
+  /** Whether the user asked to keep the installer so the next update stays a small patch. */
+  keepInstaller: boolean
+  /**
+   * The version named by the download still sitting in `pending/`, or null when the folder
+   * names none.
+   *
+   * This is the second proof, and it exists because the first one has a blind spot at
+   * exactly the wrong moment: a profile whose previous run never recorded a version - which
+   * is what *every* profile looks like the first time it runs a build with this check in
+   * it. Without it, the update that delivered the check would be the one update that never
+   * gets cleaned up after.
+   *
+   * A download named for the version already running, or an older one, has been applied;
+   * the updater only ever fetches something newer than the app asking. A download named for
+   * something newer is still waiting, and is the file behind the app's restart button.
+   */
+  pendingVersion: string | null
+}): UpdateReclaim {
+  const spent =
+    updateWasInstalled(options.previousVersion, options.runningVersion) ||
+    (options.pendingVersion !== null && isNotNewer(options.pendingVersion, options.runningVersion))
+  if (!spent) return 'none'
+  return options.keepInstaller ? 'applied' : 'everything'
+}
+
 export function condenseUpdaterError(error: unknown): string {
   const raw =
     error instanceof Error

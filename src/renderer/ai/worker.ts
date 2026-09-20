@@ -98,6 +98,60 @@ let detectorLoading: Promise<void> | null = null
 let envReady = false
 const notes: string[] = []
 
+/**
+ * The last window each region was shown, and the patch that came out of it.
+ *
+ * A watermark sits in the same place in every frame, and what the network is asked about
+ * is the pixels *around* it as well - so whenever that neighbourhood is unchanged from one
+ * frame to the next, the network is being asked a question it has already answered, with
+ * the same weights and bit-identical input. One such answer costs 1.66s on the GPU and
+ * 10.5s on four CPU threads on this machine (measured), against about a millisecond to
+ * notice that it is already known. A mark over a black bar, a still interface or a title
+ * card is the ordinary case for this, not a lucky one.
+ *
+ * The comparison is exact rather than a hash. A hash that collided would paste one frame's
+ * fill into another frame, which is the only way this could be worse than doing the work.
+ * It is keyed by region *and* by the geometry, because two marked areas have nothing to do
+ * with each other and a re-run with a different box makes the cached pixels mean something
+ * else entirely.
+ */
+interface ReuseEntry {
+  geometry: string
+  pixels: Uint8ClampedArray
+  patch: Uint8Array
+}
+
+const lastWindow = new Map<number, ReuseEntry>()
+
+/** Everything about a request that would make a cached patch the wrong answer. */
+function geometryOf(region: AiInpaintRequest['region'], feather: number): string {
+  const { crop, box, scale, pad } = region
+  return [crop.x, crop.y, crop.width, crop.height, box.x, box.y, box.width, box.height, scale, pad.left, pad.top, pad.right, pad.bottom, feather].join(',')
+}
+
+/**
+ * Whether two windows are the same pixels, four bytes at a time.
+ *
+ * The window is a megabyte of RGBA and this runs once per frame, so the comparison is done
+ * on 32-bit views where the buffers allow it. Every byte still has to match; the wide view
+ * only makes the same work cheaper.
+ */
+function samePixels(left: Uint8ClampedArray, right: Uint8ClampedArray): boolean {
+  if (left.length !== right.length) return false
+  if ((left.byteOffset & 3) === 0 && (right.byteOffset & 3) === 0) {
+    const a = new Uint32Array(left.buffer, left.byteOffset, left.length >>> 2)
+    const b = new Uint32Array(right.buffer, right.byteOffset, right.length >>> 2)
+    for (let index = 0; index < a.length; index += 1) {
+      if (a[index] !== b[index]) return false
+    }
+    return true
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
+}
+
 const scope = self as unknown as DedicatedWorkerGlobalScope
 
 /** The runtime's own module, loaded at run time from the file the app ships. */
@@ -173,7 +227,14 @@ function ensureEnv(ort: typeof Ort, files: { wasm: string; mjs: string }, thread
   // felt stuck. The watchdog in the client abandons a load that never finishes and
   // retries with a single thread, so a runtime that cannot do this says so instead of
   // waiting forever.
-  const cores = Math.max(1, Math.min(4, navigator.hardwareConcurrency ?? 1))
+  // Eight, not four. The cap used to be four, and it was wrong for the same reason the
+  // pinning was: it was set while a multi-threaded load was failing, and it outlived the
+  // bug. Measured on a 16-core machine, one 512x512 frame costs 5.7s on eight threads and
+  // 7.5s on four, so the cap was giving away a third of the CPU speed on every frame of
+  // every export that could not use a GPU. There is a ceiling - the work goes memory-bound
+  // long before the core count does, and every thread fetches the 21 MB wasm binary - and
+  // eight is where that was measured, with one core left for the interface.
+  const cores = Math.max(1, Math.min(8, navigator.hardwareConcurrency ?? 1))
   ort.env.wasm.numThreads = Math.max(1, Math.min(cores, threads ?? cores))
   ort.env.wasm.simd = true
   // `mjs` as well as `wasm`: worker threads are started from the JavaScript file, and
@@ -551,7 +612,9 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
   // is forty minutes at twenty seconds a frame, and "it is slow" is not actionable: the
   // split between reading the window, running the network and writing the fill back is what
   // says whether the answer is fewer threads, less resampling, or a smaller model.
-  const spent = { prep: 0, model: 0, compose: 0 }
+  const spent = { prep: 0, model: 0, compose: 0, reused: 0 }
+  const geometry = geometryOf(request.region, request.feather)
+  let reused = 0
   for (const bytes of request.frames) {
     const frameStarted = Date.now()
     const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]))
@@ -560,6 +623,17 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
       windowCtx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, pad.left, pad.top, scaled.width, scaled.height)
       padEdges(windowCtx, bitmap, scaled, pad)
       const pixels = windowCtx.getImageData(0, 0, AI_INPUT, AI_INPUT).data
+
+      // The answer to this exact picture is already known, and the network is the whole
+      // cost of a frame - so it is not asked again. The bitmap still gets closed by the
+      // `finally` below, which is why this leaves through `continue` rather than a return.
+      const cached = lastWindow.get(request.region.index)
+      if (cached && cached.geometry === geometry && samePixels(cached.pixels, pixels)) {
+        out.push(cached.patch)
+        reused += 1
+        spent.reused += Date.now() - frameStarted
+        continue
+      }
 
       const image = new Float32Array(plane * 3)
       for (let index = 0; index < plane; index += 1) {
@@ -593,7 +667,11 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
       }
       patchCtx.putImageData(target, 0, 0)
       const blob = await patch.convertToBlob({ type: 'image/png' })
-      out.push(new Uint8Array(await blob.arrayBuffer()))
+      const painted = new Uint8Array(await blob.arrayBuffer())
+      out.push(painted)
+      // `getImageData` hands back a copy rather than a view into the canvas, so this is
+      // the picture as it was drawn, safe to compare against the next frame's.
+      lastWindow.set(request.region.index, { geometry, pixels, patch: painted })
       spent.compose += Date.now() - modelEnded
     } finally {
       bitmap.close()
@@ -603,7 +681,7 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
     const count = request.frames.length
     const per = (value: number): string => (value / count / 1000).toFixed(2)
     notes.push(
-      `Inpainting: ${(spent.prep + spent.model + spent.compose) / count / 1000}s a frame over ${count} frame(s) - ${per(spent.model)}s in the network, ${per(spent.prep)}s reading the window, ${per(spent.compose)}s writing the fill back, on ${ortThreads} thread(s)`
+      `Inpainting: ${(spent.prep + spent.model + spent.compose + spent.reused) / count / 1000}s a frame over ${count} frame(s) - ${per(spent.model)}s in the network, ${per(spent.prep)}s reading the window, ${per(spent.compose)}s writing the fill back, ${reused} of ${count} frame(s) already known, on ${ortThreads} thread(s)`
     )
   }
   // Notes collected while painting - the GPU giving up on a kernel, most of all - travel

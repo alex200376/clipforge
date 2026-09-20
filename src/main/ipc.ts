@@ -6,6 +6,7 @@ import { formatBytes } from '../shared/bytes'
 import { ClipForgeError } from '../shared/errors'
 
 import { remuxPreviewArgs, transcodePreviewArgs } from '../shared/mediaArgs'
+import { playsDirectly } from '../shared/playable'
 import { isRemoteUrl } from '../shared/sources'
 import type { CropRequest, NotifyRequest } from '../shared/api'
 import type {
@@ -42,11 +43,17 @@ import { cancelScheduledCheck, checkForUpdates, initUpdates, installUpdate, sche
 import { materializeUrl, releaseMaterializedUrls } from './urlSource'
 import { resolveMetadata } from './ytdlp'
 
-const DIRECT_EXTENSIONS = new Set(['.mp4', '.m4v', '.webm'])
-
 let activeJob: MediaJob | null = null
 let activeInstall: AbortController | null = null
 let preparedPreview: string | null = null
+/**
+ * The scratch folder this app created for a preview - created by us, so ours to remove.
+ *
+ * Kept apart from `preparedPreview` because a preview handed over untouched lives either
+ * in the user's own folder or inside the download cache, and deleting the download that
+ * the *export* is about to read would be a bug, not a cleanup.
+ */
+let preparedScratch: string | null = null
 /** The last drag image's folder, released when the next drag replaces it. */
 let lastDragDir: string | null = null
 
@@ -148,15 +155,15 @@ export function registerIpc(getWindow: WindowGetter): void {
     return resolved
   }
 
-  async function preparePreview(source: string, isUrl: boolean): Promise<PreviewSource> {
+  async function preparePreview(source: string, isUrl: boolean, rewrap = false): Promise<PreviewSource> {
     const ffmpeg = findBinary('ffmpeg')
     if (!ffmpeg) throw missingBinaryError('ffmpeg')
-    // The preview is a full remuxed copy of the clip, so the previous one is dropped as
-    // this one is prepared rather than at quit: one clip open means one preview on disk,
-    // where before every clip opened in a session left its copy behind for good.
-    releaseWorkDir(preparedPreview ? path.dirname(preparedPreview) : null)
-    const scratch = workDir('preview')
-    const output = path.join(scratch, 'preview.mp4')
+    // A preview *we* made is a full copy of the clip, so the previous one is dropped as
+    // this one is prepared rather than at quit: one clip open means one copy on disk,
+    // where before every clip opened in a session left its copy behind for good. Only
+    // folders this app created are removed; see `preparedScratch`.
+    releaseWorkDir(preparedScratch)
+    preparedScratch = null
     const job = new MediaJob('Preparing preview', emit, log)
     track(job)
 
@@ -166,26 +173,38 @@ export function registerIpc(getWindow: WindowGetter): void {
     // ffmpeg reports `partial file` and the preview comes out empty.
     const local = isUrl ? await materializeUrl(source, { emit, log, registerJob: track }) : source
 
-    // A download is only known to be playable once ffmpeg has re-muxed it, so
-    // even an `.mp4` link takes the remux path rather than being handed to the
-    // <video> element as it arrived.
-    const extension = path.extname(local).toLowerCase()
-    if (!isUrl && DIRECT_EXTENSIONS.has(extension)) {
+    // The decision is made on what the file *contains*, not on its name: a `.mov` of
+    // H.264 is playable as it stands and a `.mp4` of something exotic is not. Geometry is
+    // read in the same probe, which is the only chance a link ever has to learn it.
+    //
+    // `rewrap` forces the copy path, and it is not belt-and-braces: this decision can be
+    // wrong - the codec list is what Chromium documents, not what this machine has
+    // installed - so the renderer asks again when the player reports it cannot read the
+    // file, and the second answer always comes from ffmpeg.
+    const info = await probeLocalFile(local).catch(() => null)
+    const direct = !rewrap && info !== null && playsDirectly({
+      extension: path.extname(local),
+      videoCodec: info.videoCodec ?? '',
+      audioCodec: info.audioCodec ?? ''
+    })
+    if (direct && info) {
       preparedPreview = local
-      const info = await probeLocalFile(local).catch(() => null)
       return {
         url: registerMediaToken(local),
-        duration: info?.duration ?? 0,
+        duration: info.duration,
         direct: true,
-        fps: info?.fps ?? 0,
-        // Neither path scales the picture, so geometry measured here is the
-        // source's own. It is the only chance a direct video link ever has to
-        // learn its frame size.
-        width: info?.width ?? 0,
-        height: info?.height ?? 0
+        fps: info.fps,
+        width: info.width,
+        height: info.height
       }
     }
 
+    // The scratch folder is made here rather than up front: when the file is handed over
+    // untouched there is no copy to put anywhere, and a folder created for a copy that was
+    // never made is litter with an owner file in it - small, but the same kind of litter
+    // this app has spent enough time clearing out.
+    const scratch = workDir('preview')
+    const output = path.join(scratch, 'preview.mp4')
     const remuxed = await job.run({ command: ffmpeg, args: remuxPreviewArgs(local, output) })
     if (!remuxed.ok) {
       const transcoded = await job.run(
@@ -195,14 +214,15 @@ export function registerIpc(getWindow: WindowGetter): void {
       if (!transcoded.ok) throw new Error(transcoded.error ?? 'Could not prepare a preview for this file')
     }
     preparedPreview = output
-    const info = await probeLocalFile(output).catch(() => null)
+    preparedScratch = scratch
+    const prepared = await probeLocalFile(output).catch(() => null)
     return {
       url: registerMediaToken(output),
-      duration: info?.duration ?? 0,
+      duration: prepared?.duration ?? 0,
       direct: false,
-      fps: info?.fps ?? 0,
-      width: info?.width ?? 0,
-      height: info?.height ?? 0
+      fps: prepared?.fps ?? 0,
+      width: prepared?.width ?? 0,
+      height: prepared?.height ?? 0
     }
   }
 
@@ -212,6 +232,13 @@ export function registerIpc(getWindow: WindowGetter): void {
     // Toggling the preference has to take effect now, not at the next launch.
     if (patch.autoUpdate === true) scheduleFirstCheck()
     else if (patch.autoUpdate === false) cancelScheduledCheck()
+    // Turning the installer switch off is a request for the space back, and the file is
+    // already there: waiting for the next update to honour it would look like nothing
+    // happened. The startup reclaim is the other half of the same setting.
+    if (patch.keepUpdateInstaller === false) {
+      const result = clearUpdateCache({ updateReady: updateState().status === 'ready' })
+      if (!result.refused && result.bytes > 0) log(`Cleared the update cache (${formatBytes(result.bytes)}).`)
+    }
     return next
   })
   ipcMain.handle('clipforge:settings:default-dir', () => defaultOutputDir())
@@ -233,8 +260,10 @@ export function registerIpc(getWindow: WindowGetter): void {
 
   ipcMain.handle('clipforge:media:probe', (_event, filePath: string) => probeLocalFile(filePath))
 
-  ipcMain.handle('clipforge:media:preview', (_event, request: { source: string; isUrl: boolean }) =>
-    preparePreview(request.source, request.isUrl)
+  ipcMain.handle(
+    'clipforge:media:preview',
+    (_event, request: { source: string; isUrl: boolean; rewrap?: boolean }) =>
+      preparePreview(request.source, request.isUrl, request.rewrap === true)
   )
 
   ipcMain.handle('clipforge:media:filmstrip', async (_event, request: FilmstripRequest) => {

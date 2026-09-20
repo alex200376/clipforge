@@ -22,7 +22,9 @@ const DEFAULTS: AppSettings = {
   gifDither: DEFAULT_GIF_TUNING.dither,
   gifLossy: DEFAULT_GIF_TUNING.lossy,
   onboarded: false,
-  autoUpdate: true
+  autoUpdate: true,
+  lastRunVersion: '',
+  keepUpdateInstaller: true
 }
 
 const LANGUAGES: Language[] = ['en', 'zh-TW']
@@ -67,8 +69,22 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     gifDither: gif.dither,
     gifLossy: gif.lossy,
     onboarded: raw.onboarded === true,
-    autoUpdate: raw.autoUpdate !== false
+    autoUpdate: raw.autoUpdate !== false,
+    lastRunVersion: typeof raw.lastRunVersion === 'string' ? raw.lastRunVersion : '',
+    keepUpdateInstaller: raw.keepUpdateInstaller !== false
   }
+}
+
+/**
+ * Records which version is running, so the *next* launch can tell it was updated.
+ *
+ * Written only when it changes: this runs at startup on a file the user may have open in
+ * an editor, and rewriting it on every launch would be noise.
+ */
+export function recordRunningVersion(version: string): boolean {
+  if (loadSettings().lastRunVersion === version) return false
+  saveSettings({ lastRunVersion: version })
+  return true
 }
 
 export function loadSettings(): AppSettings {

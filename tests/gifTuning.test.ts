@@ -2,14 +2,17 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_GIF_TUNING,
+  DEFAULT_QUALITY,
   DITHER_MODES,
   GIF_COLOR_STEPS,
   gifSizeFactor,
   gifskiLossyQuality,
+  gifskiQualityFactor,
   gifskiSizeFactor,
   gifsicleLossy,
   gifsicleSizeFactor,
-  normalizeGifTuning
+  normalizeGifTuning,
+  webpQualityFactor
 } from '../src/shared/gifTuning'
 import { gifskiArgs, gifsicleOptimizeArgs, paletteArgs } from '../src/shared/mediaArgs'
 
@@ -131,6 +134,44 @@ describe('the size model follows the measurements', () => {
     expect(gifsicleSizeFactor(20)).toBeCloseTo(0.48, 2)
     expect(gifsicleSizeFactor(40)).toBeCloseTo(0.41, 2)
     expect(gifsicleSizeFactor(100)).toBeCloseTo(0.34, 2)
+  })
+
+  it('reproduces the measured quality curve for both encoders', () => {
+    // Measured on the 4-second 480p/15fps reference clip against the slider's default 90:
+    // gifski 631/900/2687/4363/7837 KB at 30/50/75/90/100, WebP 365/485/661/1369/4270 KB.
+    expect(gifskiQualityFactor(30)).toBeCloseTo(631 / 4363, 2)
+    expect(gifskiQualityFactor(50)).toBeCloseTo(900 / 4363, 2)
+    expect(gifskiQualityFactor(90)).toBeCloseTo(1, 3)
+    expect(gifskiQualityFactor(100)).toBeCloseTo(7837 / 4363, 2)
+    expect(webpQualityFactor(30)).toBeCloseTo(365 / 1369, 2)
+    expect(webpQualityFactor(100)).toBeCloseTo(4270 / 1369, 2)
+  })
+
+  it('is unchanged at the default and rises with the slider', () => {
+    expect(DEFAULT_QUALITY).toBe(90)
+    expect(gifskiQualityFactor(DEFAULT_QUALITY)).toBe(1)
+    expect(webpQualityFactor(DEFAULT_QUALITY)).toBe(1)
+    for (const factor of [gifskiQualityFactor, webpQualityFactor]) {
+      expect(factor(60)).toBeGreaterThan(factor(30))
+      expect(factor(100)).toBeGreaterThan(factor(60))
+      // A slider cannot be dragged past its ends, but a stale settings file can hold one.
+      expect(factor(-50)).toBe(factor(0))
+      expect(factor(1e6)).toBe(factor(100))
+    }
+  })
+
+  it('moves the gifski estimate but never the palette engine’s', () => {
+    // The palette engine is ffmpeg's own pipeline and has no quality option; its quality
+    // is the lossy strength. An estimate that followed the slider there would promise a
+    // saving the encoder would never make.
+    const context = { tuning: DEFAULT_GIF_TUNING, engine: 'gifski' as const, optimize: false }
+    const low = gifSizeFactor({ ...context, quality: 30 })
+    const high = gifSizeFactor({ ...context, quality: 100 })
+    expect(high).toBeGreaterThan(low * 5)
+    expect(gifSizeFactor({ ...context, quality: DEFAULT_QUALITY })).toBeCloseTo(low / gifskiQualityFactor(30), 3)
+
+    const palette = { tuning: DEFAULT_GIF_TUNING, engine: 'palette' as const, optimize: false }
+    expect(gifSizeFactor({ ...palette, quality: 30 })).toBe(gifSizeFactor({ ...palette, quality: 100 }))
   })
 
   it('ships only dither modes ffmpeg and this model both know', () => {

@@ -120,6 +120,55 @@ export function overallPercent(args: {
  *  still running is worse than saying nothing. */
 const MIN_ETA = 1
 
+/** One reading of how many frames a stage had finished, and when. */
+export interface FrameSample {
+  at: number
+  done: number
+}
+
+/** How many readings make a rate: the span they cover, kept short so it tracks the
+ *  current pace rather than averaging in a slow start. */
+export const FRAME_SAMPLE_WINDOW = 5
+
+/**
+ * Adds a reading, ignoring one that repeats the last count.
+ *
+ * The count only moves when a frame is finished, while the clock ticks every second, so
+ * most readings carry the same number - and a window full of them would measure nothing
+ * but the tick interval.
+ */
+export function pushFrameSample(samples: FrameSample[], sample: FrameSample): FrameSample[] {
+  const last = samples[samples.length - 1]
+  if (last && last.done === sample.done) return samples
+  const next = [...samples, sample]
+  return next.length > FRAME_SAMPLE_WINDOW ? next.slice(next.length - FRAME_SAMPLE_WINDOW) : next
+}
+
+/**
+ * Seconds per frame, from what the stage has actually painted.
+ *
+ * Measured over the last few frames rather than all of them on purpose: the first frame
+ * carries the model load and the warm-up, which on the inpainting network is minutes,
+ * and dividing by every frame to date would report that start forever. The window slides,
+ * so the number follows the real pace - and once the runtime is falling back from the GPU
+ * to a single thread, this is the number that says so while there is still time to stop.
+ */
+export function perFrameSeconds(samples: FrameSample[]): number | null {
+  // Everything before the second frame is excluded on purpose. The interval that ends at
+  // the *first* frame carries the model load and the warm-up, and on this network that is
+  // minutes - so measuring from the very first reading reports 123s a frame for an export
+  // that is running at six. Two samples from the second frame on is the smallest window
+  // that describes the pace rather than the start-up.
+  const useful = samples.filter((sample) => sample.done >= 2)
+  if (useful.length < 2) return null
+  const first = useful[0]
+  const last = useful[useful.length - 1]
+  const frames = last.done - first.done
+  const ms = last.at - first.at
+  if (frames < 1 || ms < 1000) return null
+  return ms / 1000 / frames
+}
+
 export type EtaSource = 'rate' | 'overall'
 
 export interface Eta {
