@@ -15,6 +15,8 @@ command-line tools: FFmpeg, yt-dlp, and gifski.
   an MP4 whose `moov` atom sits at the end - what most servers send - cannot be read from
   a pipe at all, and trimming, cropping and the filmstrip all need an input FFmpeg can
   seek in. The downloaded copy is reused by the export and removed when the app quits.
+  A post the site serves only to a signed-in visitor is fetched with a saved session —
+  see [Links that need a signed-in session](#links-that-need-a-signed-in-session).
 - **Local files.** Drag a video or GIF anywhere into the window. MP4/M4V/WebM stream
   directly to the preview; other containers (MKV, MOV, AVI, TS) are losslessly remuxed
   to a temporary MP4 first, so the preview always seeks correctly.
@@ -218,6 +220,30 @@ and which binaries a download provides. Two details matter:
 Every install is verified by running the tool's version command, which catches an
 antivirus quarantine or a truncated download that would otherwise look successful.
 The same catalog drives `scripts/prepare-binaries.mjs` at packaging time.
+
+## Links that need a signed-in session
+
+Some sites serve a post only to a visitor who is signed in. X is the common case: asked
+without a session it answers with a `TweetTombstone` instead of the post, `yt-dlp` reports
+that the tweet has no video, and the link reads like a broken one. Settings → Media tools
+has a **Sign in** button for this. It opens the site's own sign-in page in a window of its
+own; the password is typed there and never reaches ClipForge, and what is kept is the
+session cookie file (`yt-cookies.txt` in the app's data folder, removable with **Sign out**)
+that `--cookies` hands to `yt-dlp` on every later import.
+
+Three details are deliberate:
+
+- **`--cookies-from-browser` is not used.** Measured on Chrome and Edge 153: both fail
+  with `Failed to decrypt with DPAPI`, because the cookie database is now encrypted with a
+  key only the browser can unwrap. Reading the cookies out of a window Chromium already
+owns avoids that, and needs no extension.
+- **The cookies are filtered by domain** before they are written, so a sign-in that went
+  through Google or Apple cannot put a third party's session into a file that later
+  downloads are fetched with.
+- **A refusal is diagnosed, not guessed.** "No video could be found in this tweet" is what
+  `yt-dlp` says both for a post that needs a session and for a link that is dead, so the
+  app asks X's public syndication endpoint which one it is - a tombstone means signing in
+  will help, a 404 means the post is gone - and reports the one that is true.
 
 ## Error codes and translation
 

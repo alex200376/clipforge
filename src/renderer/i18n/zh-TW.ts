@@ -113,6 +113,11 @@ export const zhTW: Record<TranslationKey, string> = {
   'error.missing-gifski': '尚未安裝 gifski。',
   'error.missing-gifsicle': '尚未安裝 gifsicle —— 它負責 GIF 最佳化。',
   'error.download-failed': '下載失敗，請確認網路連線後再試一次。',
+  'error.link-needs-login':
+    '這個網站只讓已登入的使用者看到這則貼文。請到「設定 → 媒體工具」登入後再貼一次連結；登入狀態會保存下來，之後的連結都會直接使用。',
+  'error.link-gone': '這個連結已經沒有對應的貼文了，因此沒有東西可以匯入，可能已被刪除。',
+  'error.link-session-refused':
+    '即使已有登入狀態，網站仍拒絕提供這則貼文，通常是登入已過期或該帳號是私人的。請到「設定 → 媒體工具」登出後重新登入。',
   'error.extract-failed': '下載的壓縮檔無法解開。',
   'error.install-failed': '工具無法寫入工具資料夾。',
   'error.verify-failed': '工具已安裝但無法啟動。',
@@ -489,6 +494,20 @@ export const zhTW: Record<TranslationKey, string> = {
   'settings.tools.folder': '工具資料夾',
   'settings.tools.reveal': '開啟',
   'settings.tools.installOptional': '安裝',
+  'settings.links.title': '需要登入的連結',
+  'settings.links.description':
+    '有些網站（例如 X）只把貼文提供給已登入的使用者。在這裡登入會開啟該網站自己的頁面，ClipForge 不會看到你的密碼，只會保存 yt-dlp 之後下載時要用的登入 cookie。',
+  'settings.links.signedIn': '已登入 —— 需要登入的連結可以正常匯入',
+  'settings.links.signedOut': '尚未登入',
+  'settings.links.signIn': '登入…',
+  'settings.links.signOut': '登出',
+  'settings.links.hint':
+    '登入狀態存在本程式自己的資料夾中，隨時可以按「登出」清除。若某個連結在未登入時看不到內容，通常就是需要這裡的登入。',
+  'settings.links.alreadyOpen': '登入視窗已經開啟。',
+  'settings.links.done': '已登入，登入狀態已保存。',
+  'settings.links.closed': '登入視窗在保存登入狀態前就被關閉了。',
+  'settings.links.failed': '無法開啟登入視窗。',
+  'settings.links.signedOutNotice': '已登出，保存的登入狀態已刪除。',
   'settings.hardware.title': '硬體',
   'settings.hardware.platform': '平台',
   'settings.hardware.cpu': '處理器',

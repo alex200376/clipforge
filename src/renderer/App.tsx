@@ -29,6 +29,7 @@ import type {
   ExportResult,
   GifEngine,
   HardwareProfile,
+  LinkSessionState,
   InstallProgressEvent,
   JobProgress,
   OutputFormat,
@@ -177,6 +178,17 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [dependencies, setDependencies] = useState<DependencyState[]>([])
   const [versions, setVersions] = useState<ToolVersion[]>([])
   const [hardware, setHardware] = useState<HardwareProfile | null>(null)
+  /**
+   * Whether a signed-in session is saved for links that need one.
+   *
+   * Not part of `settings`: nothing here is a preference, and the file it describes is
+   * the app's to create and delete rather than a value to be edited and saved.
+   */
+  const [linkSession, setLinkSession] = useState<LinkSessionState>({
+    signedIn: false,
+    savedAt: null,
+    bytes: 0
+  })
 
   const [url, setUrl] = useState('')
   const [source, setSource] = useState<MediaSource | null>(null)
@@ -361,6 +373,45 @@ export function App({ initialSettings }: Props): JSX.Element {
       pushLog(errorMessage(error), 'error')
     }
   }, [pushLog])
+
+  const refreshLinkSession = useCallback(async () => {
+    try {
+      setLinkSession(await window.clipforge.linkSession())
+    } catch (error) {
+      pushLog(errorMessage(error), 'error')
+    }
+  }, [pushLog])
+
+  useEffect(() => {
+    void refreshLinkSession()
+  }, [refreshLinkSession])
+
+  /**
+   * The sign-in window is the app's only interactive one, so its outcome is reported in
+   * the workspace rather than inside it: the user is looking at the settings page when it
+   * opens and at nothing at all once it closes itself.
+   */
+  const signInForLinks = useCallback(async () => {
+    try {
+      const result = await window.clipforge.signInForLinks()
+      setLinkSession(await window.clipforge.linkSession())
+      if (result.ok) showNotice(t('settings.links.done'))
+      else if (result.reason === 'already-open') showNotice(t('settings.links.alreadyOpen'))
+      else if (result.reason === 'closed') showNotice(t('settings.links.closed'))
+      else showNotice(t('settings.links.failed'))
+    } catch (error) {
+      failWith(error)
+    }
+  }, [failWith, showNotice, t])
+
+  const signOutOfLinks = useCallback(async () => {
+    try {
+      setLinkSession(await window.clipforge.signOutOfLinks())
+      showNotice(t('settings.links.signedOutNotice'))
+    } catch (error) {
+      failWith(error)
+    }
+  }, [failWith, showNotice, t])
 
   useEffect(() => {
     void (async () => {
@@ -1727,6 +1778,9 @@ export function App({ initialSettings }: Props): JSX.Element {
             onAutoUpdate={(value) => void saveSettings({ autoUpdate: value })}
             onCheckUpdate={() => void window.clipforge.checkForUpdates().then(setUpdate)}
             onInstallUpdate={() => void window.clipforge.installUpdate()}
+            session={linkSession}
+            onSignIn={() => void signInForLinks()}
+            onSignOut={() => void signOutOfLinks()}
           />
         ) : (
           <>

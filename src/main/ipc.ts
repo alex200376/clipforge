@@ -64,6 +64,13 @@ import { probeLocalFile } from './probe'
 import { MediaJob } from './runner'
 import { clearUpdateCache, takeStartupNote, updateCacheStats } from './storage'
 import { cancelScheduledCheck, checkForUpdates, initUpdates, installUpdate, scheduleFirstCheck, updateState } from './updates'
+import {
+  clearSession,
+  closeSignInWindow,
+  linkFailure,
+  openSignInWindow,
+  sessionState
+} from './siteAuth'
 import { materializeUrl, releaseMaterializedUrls } from './urlSource'
 import { resolveMetadata } from './ytdlp'
 
@@ -153,6 +160,7 @@ export function releaseDownloads(): void {
   releaseMaterializedUrls()
   releaseAiSessions()
   releaseAllWorkDirs()
+  closeSignInWindow()
 }
 
 /**
@@ -339,7 +347,28 @@ export function registerIpc(getWindow: WindowGetter): void {
     return detectCrop(source, request.start, request.duration, request.width, request.height, { emit, log })
   })
 
-  ipcMain.handle('clipforge:url:metadata', (_event, url: string) => resolveMetadata(url, log))
+  // The read is where a link that needs a session fails first, so this is where the
+  // refusal is turned into the sentence that names it. The same classification runs
+  // again on the download path, because a site can refuse one and allow the other.
+  ipcMain.handle('clipforge:url:metadata', (_event, url: string) =>
+    resolveMetadata(url, log).catch(async (error: unknown) => {
+      throw await linkFailure(url, error)
+    })
+  )
+
+  ipcMain.handle('clipforge:auth:state', () => sessionState())
+
+  ipcMain.handle('clipforge:auth:signin', async () => {
+    const result = await openSignInWindow()
+    if (result.ok) log(`Saved a signed-in session, so links that need one will now work.`)
+    return result
+  })
+
+  ipcMain.handle('clipforge:auth:signout', () => {
+    clearSession()
+    log('Signed out: the saved link session was deleted.')
+    return sessionState()
+  })
 
   ipcMain.handle('clipforge:export:gif', (_event, request: GifRequest) =>
     exportGif({ ...request, outputDir: resolveOutputDir(request.outputDir || effectiveOutputDir()) }, { emit, log, registerJob: track })

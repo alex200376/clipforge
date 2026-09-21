@@ -2833,6 +2833,33 @@
   background: color-mix(in oklab, var(--elevated) 45%, transparent);
 }
 
+/*
+ * The saved link session, in the shape of a tool row: one status dot, one sentence,
+ * and the buttons at the far end. The dot follows the same rule as a tool's - filled
+ * when the thing it describes is in place - so "signed in" reads at a glance.
+ */
+.link-session {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  margin-bottom: 12px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--elevated) 45%, transparent);
+}
+
+.link-session-state {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.link-session.ok .tool-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 14%, transparent);
+}
+
 .tool-row + .tool-row {
   border-top: 1px solid var(--border);
 }

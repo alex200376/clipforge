@@ -18,7 +18,8 @@ import {
   targetSizeArgs,
   targetVideoBitrate,
   trimArgs,
-  ytdlpDownloadArgs
+  ytdlpDownloadArgs,
+  ytdlpMetadataArgs
 } from '../src/shared/mediaArgs'
 
 const gifOptions = { start: 1.5, end: 5.25, fps: 24, width: 480, quality: 90 }
@@ -196,6 +197,31 @@ describe('link download and filmstrip', () => {
   it('prefers an mp4 so Chromium can play the download', () => {
     const args = ytdlpDownloadArgs('https://example.com/v', 'out.%(ext)s')
     expect(args[args.indexOf('-f') + 1]).toBe('best[ext=mp4]/best')
+  })
+
+  /**
+   * A site that serves a post only to a signed-in visitor needs the saved session on
+   * the command line. Both commands take it, because a site can allow the metadata read
+   * and refuse the download - and the failure that prompted this was a link that never
+   * got as far as the download.
+   */
+  it('hands the saved session to the metadata read and the download alike', () => {
+    const jar = 'C:\\Users\\me\\AppData\\Roaming\\ClipForge\\yt-cookies.txt'
+    expect(ytdlpMetadataArgs('https://x.com/a/status/1', jar).slice(0, 2)).toEqual(['--cookies', jar])
+    expect(ytdlpDownloadArgs('https://x.com/a/status/1', 'out.%(ext)s', jar).slice(0, 2)).toEqual([
+      '--cookies',
+      jar
+    ])
+  })
+
+  it('passes no session at all when there is none', () => {
+    const runs = [
+      ytdlpMetadataArgs('https://x.com/a/status/1'),
+      ytdlpMetadataArgs('https://x.com/a/status/1', null),
+      ytdlpDownloadArgs('https://x.com/a/status/1', 'out.%(ext)s'),
+      ytdlpDownloadArgs('https://x.com/a/status/1', 'out.%(ext)s', null)
+    ]
+    for (const args of runs) expect(args).not.toContain('--cookies')
   })
 
   it('builds a single-row thumbnail strip', () => {

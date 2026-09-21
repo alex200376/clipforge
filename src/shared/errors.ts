@@ -16,6 +16,9 @@ export type ErrorCode =
   | 'missing-gifski'
   | 'missing-gifsicle'
   | 'download-failed'
+  | 'link-needs-login'
+  | 'link-gone'
+  | 'link-session-refused'
   | 'extract-failed'
   | 'install-failed'
   | 'verify-failed'
@@ -34,6 +37,9 @@ export const ERROR_CODES: ErrorCode[] = [
   'missing-gifski',
   'missing-gifsicle',
   'download-failed',
+  'link-needs-login',
+  'link-gone',
+  'link-session-refused',
   'extract-failed',
   'install-failed',
   'verify-failed',

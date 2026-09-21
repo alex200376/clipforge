@@ -21,6 +21,8 @@ import type {
   HardwareProfile,
   InstallProgressEvent,
   JobProgress,
+  LinkSessionState,
+  LinkSignInResult,
   MediaInfo,
   PowerState,
   RegisteredMedia,
@@ -48,6 +50,9 @@ const api: ClipForgeApi = {
   buildFilmstrip: (request: FilmstripRequest) =>
     ipcRenderer.invoke('clipforge:media:filmstrip', request) as Promise<FilmstripResult>,
   resolveMetadata: (url: string) => ipcRenderer.invoke('clipforge:url:metadata', url) as Promise<UrlMetadata>,
+  linkSession: () => ipcRenderer.invoke('clipforge:auth:state') as Promise<LinkSessionState>,
+  signInForLinks: () => ipcRenderer.invoke('clipforge:auth:signin') as Promise<LinkSignInResult>,
+  signOutOfLinks: () => ipcRenderer.invoke('clipforge:auth:signout') as Promise<LinkSessionState>,
   exportGif: (request: GifRequest) => ipcRenderer.invoke('clipforge:export:gif', request) as Promise<ExportResult>,
   exportVideo: (request: VideoRequest) => ipcRenderer.invoke('clipforge:export:video', request) as Promise<ExportResult>,
   aiAssets: () => ipcRenderer.invoke('clipforge:ai:assets') as Promise<AiAssets>,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Cpu, FileText, FolderOpen, Gauge, Info, Palette, SlidersHorizontal, Wrench } from 'lucide-react'
+import { Cpu, FileText, FolderOpen, Gauge, Info, KeyRound, Palette, SlidersHorizontal, Wrench } from 'lucide-react'
 
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -36,6 +36,7 @@ import type {
   HardwareProfile,
   InstallProgressEvent,
   Language,
+  LinkSessionState,
   OutputFormat,
   Theme,
   ToolVersion,
@@ -124,6 +125,10 @@ interface Props {
   onAutoUpdate: (value: boolean) => void
   onCheckUpdate: () => void
   onInstallUpdate: () => void
+  /** The saved signed-in session that links on sites like X need. */
+  session: LinkSessionState
+  onSignIn: () => void
+  onSignOut: () => void
 }
 
 export function SettingsPage({
@@ -153,7 +158,10 @@ export function SettingsPage({
   update,
   onAutoUpdate,
   onCheckUpdate,
-  onInstallUpdate
+  onInstallUpdate,
+  session,
+  onSignIn,
+  onSignOut
 }: Props): JSX.Element {
   const { t, setLanguage } = useI18n()
   const [draft, setDraft] = useState<AppSettings>(settings)
@@ -714,6 +722,46 @@ export function SettingsPage({
                   {t('settings.tools.reveal')}
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+
+          {/*
+            Sits beside the tools rather than among the preferences: it is not a
+            setting to be drafted and saved, it is a file the app writes when the user
+            signs in and deletes when they sign out, and the buttons act immediately.
+          */}
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                <CardHeading icon={KeyRound}>{t('settings.links.title')}</CardHeading>
+              </CardTitle>
+              <CardDescription>{t('settings.links.description')}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className={`link-session ${session.signedIn ? 'ok' : ''}`}>
+                <span className="tool-dot" aria-hidden="true" />
+                <span className="link-session-state">
+                  {session.signedIn ? t('settings.links.signedIn') : t('settings.links.signedOut')}
+                </span>
+                {session.signedIn && session.savedAt !== null && (
+                  <span className="muted">{new Date(session.savedAt).toLocaleString()}</span>
+                )}
+                <div className="ml-auto flex items-center gap-2">
+                  <Button size="sm" variant="secondary" onClick={onSignIn}>
+                    {t('settings.links.signIn')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="btn-quiet"
+                    disabled={!session.signedIn}
+                    onClick={onSignOut}
+                  >
+                    {t('settings.links.signOut')}
+                  </Button>
+                </div>
+              </div>
+              <p className="text-[0.8125rem] text-dim">{t('settings.links.hint')}</p>
             </CardContent>
           </Card>
         </TabsContent>

@@ -610,8 +610,19 @@ export function filmstripArgs(source: string, output: string, durationSeconds: n
   ]
 }
 
-export function ytdlpMetadataArgs(url: string): string[] {
-  return ['--dump-single-json', '--no-warnings', '--no-playlist', url]
+/**
+ * The saved session, when the app holds one.
+ *
+ * A jar is matched by domain, so handing it to every import costs nothing on sites
+ * that have no cookie in it. It is what makes a link that a site only serves to a
+ * signed-in visitor work at all - see `src/main/siteAuth.ts`.
+ */
+function cookieArgs(cookies?: string | null): string[] {
+  return cookies ? ['--cookies', cookies] : []
+}
+
+export function ytdlpMetadataArgs(url: string, cookies?: string | null): string[] {
+  return [...cookieArgs(cookies), '--dump-single-json', '--no-warnings', '--no-playlist', url]
 }
 
 /**
@@ -624,8 +635,9 @@ export function ytdlpMetadataArgs(url: string): string[] {
  * local file it leaves behind is seekable, which is what trimming, cropping and
  * the filmstrip all need.
  */
-export function ytdlpDownloadArgs(url: string, outputTemplate: string): string[] {
+export function ytdlpDownloadArgs(url: string, outputTemplate: string, cookies?: string | null): string[] {
   return [
+    ...cookieArgs(cookies),
     '--no-warnings',
     '--no-playlist',
     '-f',

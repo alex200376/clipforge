@@ -398,6 +398,27 @@ export type Language = 'en' | 'zh-TW'
 export const THEMES = ['midnight', 'graphite', 'ember', 'aurora', 'daylight'] as const
 export type Theme = (typeof THEMES)[number]
 
+/**
+ * Whether the app holds a signed-in session for links that need one.
+ *
+ * A presence flag rather than the cookies themselves: the file lives in the app's own
+ * data folder, and the renderer only ever needs to say whether it is there.
+ */
+export interface LinkSessionState {
+  signedIn: boolean
+  /** When the session file was last written, or null when there is none. */
+  savedAt: number | null
+  /** Size of that file, so "signed in" cannot mean an empty file. */
+  bytes: number
+}
+
+/** How a trip through the sign-in window ended. */
+export interface LinkSignInResult {
+  ok: boolean
+  /** The ways it can end without a session, so the UI can say which happened. */
+  reason?: 'already-open' | 'closed' | 'failed'
+}
+
 export interface AppSettings {
   outputDir: string
   language: Language

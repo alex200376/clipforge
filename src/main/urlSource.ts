@@ -6,6 +6,7 @@ import { ytdlpDownloadArgs } from '../shared/mediaArgs'
 import type { JobProgress } from '../shared/types'
 import { releaseWorkDir, workDir } from './scratch'
 import { MediaJob } from './runner'
+import { linkFailure, sessionFile } from './siteAuth'
 import { ytdlpPath } from './ytdlp'
 
 export interface UrlSourceDeps {
@@ -75,11 +76,13 @@ export async function materializeUrl(url: string, deps: UrlSourceDeps): Promise<
   deps.registerJob(job)
   const result = await job.run({
     command: ytdlpPath(),
-    args: ytdlpDownloadArgs(url, path.join(dir, 'source.%(ext)s'))
+    args: ytdlpDownloadArgs(url, path.join(dir, 'source.%(ext)s'), sessionFile())
   })
   if (!result.ok) {
     rmSync(dir, { recursive: true, force: true })
-    throw new ClipForgeError('download-failed', result.error ?? 'The download failed.')
+    // A refusal is worth explaining: "download failed" on a post that needs a signed-in
+    // session sends the user looking for a broken link instead of a sign-in button.
+    throw await linkFailure(url, new Error(result.error ?? 'The download failed.'))
   }
 
   const picked = pickDownloadedFile(

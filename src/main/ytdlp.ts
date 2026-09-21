@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { ytdlpMetadataArgs } from '../shared/mediaArgs'
 import type { UrlMetadata } from '../shared/types'
 import { findBinary, missingBinaryError } from './binaries'
+import { sessionFile } from './siteAuth'
 
 interface YtDlpPayload {
   title?: string
@@ -25,7 +26,7 @@ export function ytdlpPath(): string {
 
 function run(url: string, onLog?: (line: string) => void): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(ytdlpPath(), ytdlpMetadataArgs(url), { windowsHide: true })
+    const child = spawn(ytdlpPath(), ytdlpMetadataArgs(url, sessionFile()), { windowsHide: true })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => {

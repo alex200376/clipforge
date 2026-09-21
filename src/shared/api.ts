@@ -19,6 +19,8 @@ import type {
   HardwareProfile,
   InstallProgressEvent,
   JobProgress,
+  LinkSessionState,
+  LinkSignInResult,
   MediaInfo,
   PowerState,
   PreviewSource,
@@ -76,6 +78,15 @@ export interface ClipForgeApi {
   preparePreview(request: { source: string; isUrl: boolean; rewrap?: boolean }): Promise<PreviewSource>
   buildFilmstrip(request: FilmstripRequest): Promise<FilmstripResult>
   resolveMetadata(url: string): Promise<UrlMetadata>
+  /**
+   * The session that links on sites like X need, and the window that creates one.
+   *
+   * `signInForLinks` opens the site's own sign-in page in a window of its own and
+   * resolves once the session has been saved - or once the user closes it.
+   */
+  linkSession(): Promise<LinkSessionState>
+  signInForLinks(): Promise<LinkSignInResult>
+  signOutOfLinks(): Promise<LinkSessionState>
   exportGif(request: GifRequest): Promise<ExportResult>
   exportVideo(request: VideoRequest): Promise<ExportResult>
   /**

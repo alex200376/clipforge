@@ -114,6 +114,11 @@ export const en = {
   'error.missing-gifski': 'gifski is not installed yet.',
   'error.missing-gifsicle': 'gifsicle is not installed yet — it powers the GIF optimiser.',
   'error.download-failed': 'The download failed. Check your connection and try again.',
+  'error.link-needs-login':
+    'That site only shows this post to a signed-in visitor. Open Settings → Media tools and sign in, then paste the link again — the session is saved and every later link uses it.',
+  'error.link-gone': 'There is no post at that link any more, so there is nothing to import. It may have been deleted.',
+  'error.link-session-refused':
+    'The site refused this post even with your saved session, which usually means the session has expired or the account is private. Sign out and in again under Settings → Media tools.',
   'error.extract-failed': 'The downloaded archive could not be extracted.',
   'error.install-failed': 'The tool could not be written into the tools folder.',
   'error.verify-failed': 'The tool was installed but could not be started.',
@@ -499,6 +504,20 @@ export const en = {
   'settings.tools.folder': 'Tools folder',
   'settings.tools.reveal': 'Reveal',
   'settings.tools.installOptional': 'Install',
+  'settings.links.title': 'Links that need a sign-in',
+  'settings.links.description':
+    'Some sites — X among them — serve a post only to a signed-in visitor. Signing in here opens the site’s own page in a small window; ClipForge never sees your password, and what it keeps is the session cookie yt-dlp then downloads with.',
+  'settings.links.signedIn': 'Signed in — links that need a session will work',
+  'settings.links.signedOut': 'Not signed in',
+  'settings.links.signIn': 'Sign in…',
+  'settings.links.signOut': 'Sign out',
+  'settings.links.hint':
+    'The session is stored in this app’s own data folder and can be removed at any time with Sign out. Pasting a link for a post you cannot see while signed out is the usual sign it is needed.',
+  'settings.links.alreadyOpen': 'The sign-in window is already open.',
+  'settings.links.done': 'Signed in — the session was saved.',
+  'settings.links.closed': 'The sign-in window was closed before a session was saved.',
+  'settings.links.failed': 'The sign-in window could not be opened.',
+  'settings.links.signedOutNotice': 'Signed out — the saved session was deleted.',
   'settings.hardware.title': 'Hardware',
   'settings.hardware.platform': 'Platform',
   'settings.hardware.cpu': 'CPU',
