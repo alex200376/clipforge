@@ -852,12 +852,32 @@ export function detectionSettings(width: number, height: number, maxResults: num
  * too small to measure is invisible to this, however still it is, and a mark on a scene
  * where nothing moves has no ring that differs from it at all.
  */
-export function detectStaticBlobs(
+/**
+ * A still region and how strongly it stands out, the two things the ranking is built from.
+ *
+ * The rank used to be computed and then thrown away - `detectStaticBlobs` answered with boxes
+ * alone - which left the caller with nothing to rank by but the order it happened to receive
+ * them in, and it filled that gap by inventing descending scores (0.5, 0.44, 0.38...). Those
+ * numbers then reached the user as "50% confidence": a measurement replaced by a counter.
+ */
+export interface StaticBlob {
+  box: CropSpec
+  /** How much this region stands out from the picture around it, before any relative scaling. */
+  rank: number
+}
+
+/**
+ * The still regions of a clip, strongest first.
+ *
+ * `detectStaticBlobs` below is the same thing with the ranking dropped, and is kept because
+ * most callers - the tests of the geometry, most of all - only care about where the boxes are.
+ */
+export function rankStaticBlobs(
   frames: Uint8Array[],
   width: number,
   height: number,
   options: StaticOptions
-): CropSpec[] {
+): StaticBlob[] {
   if (frames.length < 2 || width <= 0 || height <= 0) return []
   const size = width * height
   const { mean, deviation } = temporalStats(frames, width, height)
@@ -939,10 +959,67 @@ export function detectStaticBlobs(
     found.push({ box, rank: standing * Math.sqrt(pixels) * Math.min(1, density * 2) * shape })
   }
 
-  return found
-    .sort((first, second) => second.rank - first.rank)
-    .slice(0, Math.max(1, options.maxResults ?? 4))
-    .map((entry) => entry.box)
+  return found.sort((first, second) => second.rank - first.rank).slice(0, Math.max(1, options.maxResults ?? 4))
+}
+
+/** The boxes alone, in the same order, for the callers that do not need the measurement. */
+export function detectStaticBlobs(
+  frames: Uint8Array[],
+  width: number,
+  height: number,
+  options: StaticOptions
+): CropSpec[] {
+  return rankStaticBlobs(frames, width, height, options).map((blob) => blob.box)
+}
+
+/**
+ * A clip has one watermark, and this is the rule that says so.
+ *
+ * The still-region detector cannot know that: it reports everything that failed to move while
+ * its surroundings did, which on a cartoon or a slow pan is a handful of honest false positives
+ * - a logo on a wall, a caption, a static patch of background. What separates them from the
+ * watermark is not a shape or a size, it is that the mark *stands out*: measured across clips,
+ * a watermark's rank is several times the next still region's, so anything that is not within
+ * `ratio` of the best is a detail of the picture and is dropped.
+ *
+ * The best is always kept, however weak it is: "this is the best I found" is a useful answer,
+ * and refusing to answer at all is not.
+ */
+export function dominantBoxes(blobs: StaticBlob[], ratio: number): StaticBlob[] {
+  if (blobs.length === 0) return []
+  const best = Math.max(...blobs.map((blob) => blob.rank))
+  if (!(best > 0)) return blobs.slice(0, 1)
+  return blobs.filter((blob) => blob.rank >= best * ratio)
+}
+
+/**
+ * Rank as a share of the strongest, which is what "the best box" means to a reader.
+ *
+ * The strongest is 1 by construction, so a list of these is a statement about the clip rather
+ * than about the detector: "this stands out as much as the best thing in the frame" is true of
+ * exactly one entry and says which.
+ */
+export function relativeStrength(blobs: StaticBlob[]): StaticBlob[] {
+  const best = Math.max(0, ...blobs.map((blob) => blob.rank))
+  if (!(best > 0)) return blobs
+  return blobs.map((blob) => ({ ...blob, rank: blob.rank / best }))
+}
+
+/**
+ * Merges boxes that belong to one mark, keeping the strongest member's measurement.
+ *
+ * The rank of a group is its best member rather than the sum of them: a line of text is several
+ * blobs, and a group whose members happen to be numerous should not outrank the watermark just
+ * for being in pieces.
+ */
+export function groupRankedBoxes(blobs: StaticBlob[], gap: number): StaticBlob[] {
+  return groupBoxes(
+    blobs.map((blob) => blob.box),
+    gap
+  ).map((group) => ({
+    box: group.box,
+    rank: group.members.reduce((best, index) => Math.max(best, blobs[index]?.rank ?? 0), 0)
+  }))
 }
 
 /**

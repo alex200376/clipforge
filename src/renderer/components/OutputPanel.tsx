@@ -7,6 +7,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './
 import { Separator } from './ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { formatBytes } from '../format'
+import { verdictOf } from '../ai/quality'
 import { useI18n } from '../i18n'
 import type { Summary } from '../types'
 
@@ -40,6 +41,7 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
   const [copying, setCopying] = useState(false)
 
   const isVideo = result ? !/\.gif$/i.test(result.path) : false
+  const verdict = verdictOf(summary.fill)
 
   useEffect(() => {
     // A new result always starts looping: the box exists to judge the output.
@@ -164,6 +166,30 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
           <span>{t('output.size')}</span>
           <span className="tabular-nums">{formatBytes(result.sizeBytes)}</span>
         </div>
+        {/*
+          What the AI removal came out as, in words and then in numbers. The words are the
+          answer - "is the removed part blurry?" - and the numbers are why the answer is what it
+          is, which is the difference between a claim and a measurement. A dash stands where a
+          number could not honestly be taken: a fill over a flat sky has no sharpness to score.
+        */}
+        {summary.fill && (
+          <>
+            <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
+              <span>{t('output.fill')}</span>
+              <span className={verdict === 'clean' ? undefined : 'text-warning'}>{t(`output.fill.${verdict}`)}</span>
+            </div>
+            <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
+              <span>{t('output.fill.numbers')}</span>
+              <span className="tabular-nums">
+                {t('output.fill.values', {
+                  detail: summary.fill.detail === null ? '-' : summary.fill.detail.toFixed(2),
+                  seam: summary.fill.seam === null ? '-' : summary.fill.seam.toFixed(2),
+                  windows: summary.fill.windows
+                })}
+              </span>
+            </div>
+          </>
+        )}
       </div>
 
       {optimised && (

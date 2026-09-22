@@ -8,7 +8,7 @@
 export const en = {
   'app.name': 'ClipForge',
   'app.tagline': 'The All-in-One GIF & Video Studio',
-  'app.version': 'v0.1.0 · Desktop',
+  'app.version': 'v{version} · Desktop',
   'app.pitch': 'Turn long videos into something great.',
 
   'nav.workspace': 'WORKSPACE',
@@ -44,7 +44,8 @@ export const en = {
   'update.readyHint': 'Restarting closes the app, runs the installer and opens the new version.',
   'update.restart': 'Restart and install',
   'update.later': 'Later',
-  'update.hide': 'Hide this notice',
+  'rail.update.downloading': 'Update {version} · {percent}%',
+  'rail.update.failedHint': 'Click to see what happened.',
   'update.error': 'The update check failed',
   'update.checkFailed': 'Something went wrong while checking for updates.',
   'update.downloadFailed': 'The update could not be downloaded',
@@ -77,7 +78,6 @@ export const en = {
   'status.settingsSaved': '● Settings saved',
 
   'media.none': 'No media loaded — paste a URL or drop a file',
-  'media.loaded': '{name} · {time}',
 
   'install.header.missing': 'Media tools are missing',
   'install.header.running': 'Setting up media tools',
@@ -162,6 +162,13 @@ export const en = {
   'output.empty.body': 'Your finished GIF or video shows up here, looping, ready to share.',
   'output.file': 'File',
   'output.size': 'Size',
+  'output.fill': 'AI fill',
+  'output.fill.clean': 'blends into the picture',
+  'output.fill.soft': 'softer than the picture',
+  'output.fill.seam': 'an edge is still visible',
+  'output.fill.unknown': 'could not be measured',
+  'output.fill.numbers': 'Measured',
+  'output.fill.values': 'detail {detail} · edge {seam} over {windows} window(s)',
   'output.openFolder': 'Open folder',
   'output.copyImage': 'Copy image',
   'output.copyPath': 'Copy path',
@@ -425,7 +432,6 @@ export const en = {
   'guide.step3': 'Export and drag the result out',
   'guide.step3.body': 'Drop it straight into Discord, Slack or a chat.',
   'guide.dismiss': 'Got it',
-  'guide.reopen': 'Show the guide',
 
   'shortcuts.title': 'Keyboard shortcuts',
   'shortcuts.close': 'Close',
@@ -493,6 +499,7 @@ export const en = {
   'watermark.preview.after': 'Removed',
   'watermark.preview.drag': 'Drag to compare',
   'watermark.preview.took': 'Took {seconds}s on this machine',
+  'watermark.preview.quality': 'Measured: detail {detail}, edge {seam} - 1.00 detail is as sharp as the picture, 1.00 edge is no seam at all.',
   'watermark.preview.tookWindows': 'Took {seconds}s, in {windows} windows at full resolution',
   'watermark.preview.log': 'Previewed the removal on one frame in {seconds}s ({windows} window(s))',
   'leftover.title': 'An older ClipForge is still installed',

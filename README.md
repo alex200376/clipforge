@@ -94,7 +94,16 @@ command-line tools: FFmpeg, yt-dlp, and gifski.
   feed shortly after startup, downloads a newer build in the background and offers a
   restart — with the version, the status, the release date and the release's own notes all
   visible under Settings → *Hardware & about*, so the decision to restart is made with the
-  changelog in front of you rather than after it.
+  changelog in front of you rather than after it. The control itself lives at the bottom of
+  the sidebar, under the version it would replace: a status line with a hairline progress bar
+  while the download runs, a real button once it is ready, and a warning when it went wrong.
+- **Notices in the corner, not in the way.** Everything the app has to say — the clip that
+  just loaded, an update that is ready, a remembered clip from last time, a finished export,
+  the first-run guide — is one compact card in the bottom-right corner of the workspace,
+  stacked at most three deep, with the two that only report something dismissing themselves
+  and the ones that ask a question waiting for an answer. Nothing is ever added to the
+  workspace's own column: the preview and the timeline keep every pixel, and the only thing
+  that appears there is a failed export, as a single row with its retry.
 - **Frameless window.** No OS title bar: the app draws its own traffic-light-free
   controls in the top corner, and the sidebar, top bar and settings header double as
   drag regions. Window minimum is 900×560, and the whole interface scales down with the
@@ -151,6 +160,11 @@ because it takes minutes rather than milliseconds. What it is for is the class o
 test cannot see: a control that renders and does nothing, a page that is 993 px tall inside
 a 720 px window, a drag region that has stopped being one, a popup that leaves focus
 somewhere it should not. Several current behaviours are pinned by it and by nothing else.
+
+One check needs a state an unpackaged run cannot reach, and has its own hook:
+`CLIPFORGE_FORCE_UPDATE=ready npm run verify:ui` makes the updater report an update waiting,
+so the rail's control and the notice it raises are measured rather than assumed.
+`CLIPFORGE_FORCE_UPDATE=available|downloading[:percent]|error` covers the other three faces.
 
 Two things it taught its own author, both commented in the script: Radix activates tabs on
 `mousedown`, so a synthetic `.click()` on a tab is a silent no-op — and scrolling an element

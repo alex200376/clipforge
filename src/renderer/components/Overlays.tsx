@@ -1,6 +1,5 @@
-import { AlertTriangle, CircleCheck, FolderOpen, Image as ImageIcon, Play, X } from 'lucide-react'
+import { AlertTriangle, Image as ImageIcon, X } from 'lucide-react'
 import { useRef, useState } from 'react'
-import type { ReactNode } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from './ui/alert'
 import { Button } from './ui/button'
@@ -8,10 +7,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Kbd, KbdGroup } from './ui/kbd'
 import { Label } from './ui/label'
 import { Slider } from './ui/slider'
-import { Toast as ToastSurface, ToastAction, ToastDescription, ToastTitle } from './ui/toast'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
 import type { ErrorNotice } from '../types'
+import type { FillQuality } from '../ai/quality'
 
 /**
  * Remembers what had focus when a dialog opened, and hands it back when it closes.
@@ -52,140 +51,33 @@ export function DropZone({ visible }: { visible: boolean }): JSX.Element | null 
   )
 }
 
-export interface GuideAction {
-  label: string
-  onClick: () => void
-  variant?: 'default' | 'secondary' | 'ghost'
-}
-
-interface GuideProps {
-  title: string
-  actions: GuideAction[]
-  onDismiss?: () => void
-  tone?: 'info' | 'error'
-  children: ReactNode
-}
-
-export function GuideCard({ title, actions, onDismiss, tone = 'info', children }: GuideProps): JSX.Element {
-  return (
-    <Alert variant={tone === 'error' ? 'destructive' : 'info'} className="flex-col gap-3">
-      <div className="flex items-center justify-between gap-3">
-        <AlertTitle>{title}</AlertTitle>
-        {onDismiss && (
-          <Button size="icon-sm" variant="ghost" onClick={onDismiss} aria-label="Dismiss">
-            <X />
-          </Button>
-        )}
-      </div>
-      <AlertDescription className="gap-2 text-sm text-foreground">{children}</AlertDescription>
-      <div className="flex flex-wrap gap-2">
-        {actions.map((action) => (
-          <Button key={action.label} size="sm" variant={action.variant ?? 'default'} onClick={action.onClick}>
-            {action.label}
-          </Button>
-        ))}
-      </div>
-    </Alert>
-  )
-}
-
-export function Onboarding({ onDismiss }: { onDismiss: () => void }): JSX.Element {
-  const { t } = useI18n()
-  const steps: Array<{ title: TranslationKey; body: TranslationKey }> = [
-    { title: 'guide.step1', body: 'guide.step1.body' },
-    { title: 'guide.step2', body: 'guide.step2.body' },
-    { title: 'guide.step3', body: 'guide.step3.body' }
-  ]
-  return (
-    <GuideCard title={t('guide.title')} actions={[{ label: t('guide.dismiss'), onClick: onDismiss }]}>
-      <ol className="flex flex-col gap-3">
-        {steps.map((step, index) => (
-          <li key={step.title} className="flex items-start gap-3">
-            <span
-              aria-hidden="true"
-              className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
-            >
-              {index + 1}
-            </span>
-            <span className="flex flex-col gap-0.5">
-              <strong className="text-sm font-semibold">{t(step.title)}</strong>
-              <em className="text-xs not-italic leading-relaxed text-dim">{t(step.body)}</em>
-            </span>
-          </li>
-        ))}
-      </ol>
-    </GuideCard>
-  )
-}
-
 /**
- * The one-time notice that an older installation is still on this machine.
+ * The failure of the thing the user just asked for, in one row.
  *
- * Raised because updates no longer install for all users, and an upgrade cannot move a copy
- * that is already there - so the two exist side by side until someone removes one. It says
- * where it is and offers to start that copy's own uninstaller, which is what asks for
- * administrator rights; the app never removes anything itself.
+ * This is the only notice left in the workspace column, and it is the one that must not be
+ * missable: it carries the retry for the export that just failed. It used to be a bordered
+ * block with a title, a message and a button row underneath it - around 90px, taken out of
+ * the preview and the timeline. It is now the same information on a single row, with the
+ * title dropped as soon as the window is too narrow to hold both.
+ *
+ * The message is truncated rather than wrapped, so a long ffmpeg error cannot grow the row
+ * either. The whole of it is the row's `title`, and the log keeps every line of it.
  */
-export function LeftoverInstall({
-  location,
-  onRemove,
-  onDismiss
-}: {
-  location: string
-  onRemove: () => void
-  onDismiss: () => void
-}): JSX.Element {
-  const { t } = useI18n()
-  return (
-    <GuideCard
-      title={t('leftover.title')}
-      onDismiss={onDismiss}
-      actions={[
-        { label: t('leftover.remove'), onClick: onRemove },
-        { label: t('leftover.keep'), onClick: onDismiss, variant: 'ghost' }
-      ]}
-    >
-      <p>{t('leftover.body', { dir: location })}</p>
-    </GuideCard>
-  )
-}
-
-export function SessionPrompt({
-  name,
-  onResume,
-  onDismiss
-}: {
-  name: string
-  onResume: () => void
-  onDismiss: () => void
-}): JSX.Element {
-  const { t } = useI18n()
-  return (
-    <GuideCard
-      title={t('session.title')}
-      onDismiss={onDismiss}
-      actions={[
-        { label: t('session.resume'), onClick: onResume },
-        { label: t('session.dismiss'), onClick: onDismiss, variant: 'ghost' }
-      ]}
-    >
-      <p>{t('session.body', { name })}</p>
-    </GuideCard>
-  )
-}
-
-/** Inline failure with a retry, instead of a line buried in the log. */
 export function ErrorCard({ notice, onDismiss }: { notice: ErrorNotice | null; onDismiss: () => void }): JSX.Element | null {
   const { t } = useI18n()
   if (!notice) return null
   return (
-    <Alert variant="destructive" className="items-start">
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
-      <div className="flex flex-1 flex-col gap-2">
-        <AlertTitle className="text-destructive">{t('error.card.title')}</AlertTitle>
-        <AlertDescription className="text-xs text-foreground">{notice.message}</AlertDescription>
-      </div>
-      <div className="flex shrink-0 gap-2">
+    <Alert variant="destructive" className="items-center gap-2.5 px-3 py-1.5" role="alert">
+      <AlertTriangle className="size-4 shrink-0 text-destructive" />
+      <AlertTitle className="shrink-0 text-destructive max-[1180px]:hidden">{t('error.card.title')}</AlertTitle>
+      <AlertDescription
+        className="min-w-0 flex-1 truncate text-xs text-foreground"
+        title={notice.message}
+        aria-label={`${t('error.card.title')}: ${notice.message}`}
+      >
+        {notice.message}
+      </AlertDescription>
+      <div className="flex shrink-0 items-center gap-1.5">
         {notice.retry && (
           <Button
             size="sm"
@@ -198,98 +90,13 @@ export function ErrorCard({ notice, onDismiss }: { notice: ErrorNotice | null; o
             {t('error.card.retry')}
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={onDismiss}>
-          {t('error.card.dismiss')}
+        <Button size="icon-sm" variant="ghost" onClick={onDismiss} aria-label={t('error.card.dismiss')}>
+          <X />
         </Button>
       </div>
     </Alert>
   )
 }
-
-export interface ToastState {
-  id: number
-  title: string
-  body: string
-  path: string | null
-}
-
-/**
- * The "your file is ready" confirmation.
- *
- * The countdown and the swipe-to-dismiss come from the toast primitive, so hovering it or
- * tabbing into it holds it open - a plain `setTimeout` used to take it away mid-click. A key
- * on the id remounts the surface for each new export, which is what restarts that countdown
- * when two exports finish in quick succession.
- */
-export function Toast({
-  toast,
-  onClose,
-  onReveal,
-  onOpen
-}: {
-  toast: ToastState | null
-  onClose: () => void
-  onReveal: (filePath: string) => void
-  onOpen: (filePath: string) => void
-}): JSX.Element | null {
-  const { t } = useI18n()
-  if (!toast) return null
-  return (
-    <ToastSurface
-      key={toast.id}
-      variant="success"
-      defaultOpen
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <CircleCheck className="mt-0.5 size-4 shrink-0 text-[var(--text-success)]" />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <ToastTitle>{toast.title}</ToastTitle>
-        <ToastDescription>{toast.body}</ToastDescription>
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        {/*
-         * Watching the clip used to mean going and finding it: the only action here opened
-         * the folder that holds it. Opening the file is the action most people want at the
-         * moment it is ready, so it leads, and revealing stays beside it for the other case.
-         */}
-        {toast.path && (
-          <ToastAction altText={t('toast.open')} onClick={() => onOpen(toast.path!)}>
-            <Play />
-            {t('toast.open')}
-          </ToastAction>
-        )}
-        {toast.path && (
-          <ToastAction altText={t('toast.reveal')} onClick={() => onReveal(toast.path!)}>
-            <FolderOpen />
-            {t('toast.reveal')}
-          </ToastAction>
-        )}
-      </div>
-    </ToastSurface>
-  )
-}
-
-/**
- * One row per shortcut, with its keys as separate entries rather than one string.
- *
- * The keys used to be written out the way they read - `'Shift + ← →'` - and drawn as a
- * single chip. They are an array now because the sheet renders them through the registry's
- * `Kbd`, which draws one chip per key: the separator between keys is the group's, so the
- * literal `+` and `/` are gone from the data instead of being printed twice.
- */
-const SHORTCUTS: Array<{ keys: string[]; label: TranslationKey }> = [
-  { keys: ['Space'], label: 'shortcuts.play' },
-  { keys: ['←', '→'], label: 'shortcuts.step' },
-  { keys: ['Shift', '←', '→'], label: 'shortcuts.nudge' },
-  { keys: ['I', 'O'], label: 'shortcuts.inOut' },
-  { keys: ['Alt'], label: 'shortcuts.snap' },
-  { keys: ['Ctrl', 'V'], label: 'shortcuts.paste' },
-  { keys: ['Ctrl', '1', '2'], label: 'shortcuts.panels' },
-  { keys: ['F11'], label: 'shortcuts.fullscreen' },
-  { keys: ['?'], label: 'shortcuts.help' }
-]
 
 /**
  * The before/after comparison for an AI removal, on one frame.
@@ -306,7 +113,15 @@ export function FrameCompare({
   preview,
   onClose
 }: {
-  preview: { before: string; after: string; width: number; height: number; seconds: number; windows: number } | null
+  preview: {
+    before: string
+    after: string
+    width: number
+    height: number
+    seconds: number
+    windows: number
+    quality?: FillQuality
+  } | null
   onClose: () => void
 }): JSX.Element | null {
   const { t } = useI18n()
@@ -333,6 +148,20 @@ export function FrameCompare({
             {preview.windows > 1
               ? t('watermark.preview.tookWindows', { seconds: preview.seconds.toFixed(1), windows: preview.windows })
               : t('watermark.preview.took', { seconds: preview.seconds.toFixed(1) })}
+            {/*
+              The measurement, right where the judgement is being made. The split view says
+              whether the removal worked; the numbers say it for the cases the eye cannot settle -
+              a mark over a busy background, where "clean enough" is a guess.
+            */}
+            {preview.quality && (
+              <>
+                {' '}
+                {t('watermark.preview.quality', {
+                  detail: preview.quality.detail === null ? '-' : preview.quality.detail.toFixed(2),
+                  seam: preview.quality.seam === null ? '-' : preview.quality.seam.toFixed(2)
+                })}
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -380,6 +209,26 @@ export function FrameCompare({
     </Dialog>
   )
 }
+
+/**
+ * One row per shortcut, with its keys as separate entries rather than one string.
+ *
+ * The keys used to be written out the way they read - `'Shift + ← →'` - and drawn as a
+ * single chip. They are an array now because the sheet renders them through the registry's
+ * `Kbd`, which draws one chip per key: the separator between keys is the group's, so the
+ * literal `+` and `/` are gone from the data instead of being printed twice.
+ */
+const SHORTCUTS: Array<{ keys: string[]; label: TranslationKey }> = [
+  { keys: ['Space'], label: 'shortcuts.play' },
+  { keys: ['←', '→'], label: 'shortcuts.step' },
+  { keys: ['Shift', '←', '→'], label: 'shortcuts.nudge' },
+  { keys: ['I', 'O'], label: 'shortcuts.inOut' },
+  { keys: ['Alt'], label: 'shortcuts.snap' },
+  { keys: ['Ctrl', 'V'], label: 'shortcuts.paste' },
+  { keys: ['Ctrl', '1', '2'], label: 'shortcuts.panels' },
+  { keys: ['F11'], label: 'shortcuts.fullscreen' },
+  { keys: ['?'], label: 'shortcuts.help' }
+]
 
 export function ShortcutSheet({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element | null {
   const { t } = useI18n()

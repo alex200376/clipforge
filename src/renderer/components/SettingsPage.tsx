@@ -139,6 +139,18 @@ interface Props {
   session: LinkSessionState
   onSignIn: () => void
   onSignOut: () => void
+  /**
+   * Where the app's notices are drawn on this page.
+   *
+   * The stack lives inside the workspace column, which this page replaces - so without a
+   * home here, an update that finished downloading while the user was reading Settings was
+   * invisible until they went back. Handed in rather than owned, because the queue is the
+   * app's: this page only decides where the corner is.
+   *
+   * It is placed inside the content column, above the save row, so it can never cover the
+   * one control that commits the page.
+   */
+  noticeSlot?: JSX.Element
   /** False in fullscreen, where there is no window to move. */
   drag?: boolean
 }
@@ -174,6 +186,7 @@ export function SettingsPage({
   session,
   onSignIn,
   onSignOut,
+  noticeSlot,
   drag = true
 }: Props): JSX.Element {
   const { t, setLanguage } = useI18n()
@@ -883,7 +896,7 @@ export function SettingsPage({
 
       {/* A real footer row, not an overlay: the primary action is always on screen and the
           last field never slides under it. */}
-      <div className="-mx-8 flex shrink-0 border-t border-border bg-background px-8 py-3.5">
+      <div className="relative -mx-8 flex shrink-0 border-t border-border bg-background px-8 py-3.5">
         <div
           data-slot="settings-bar"
           data-dirty={dirty}
@@ -897,6 +910,13 @@ export function SettingsPage({
             {t('settings.save')}
           </Button>
         </div>
+
+        {/*
+          The app's notices, anchored to this row rather than to the window: the stack sits a
+          few pixels above the save row's top edge, so it can never cover Save - and it needs
+          no magic number for how tall the row is, because the row is its own containing block.
+        */}
+        {noticeSlot}
       </div>
     </div>
   )

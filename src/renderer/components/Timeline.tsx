@@ -499,7 +499,14 @@ export function Timeline({
         {building && <span className="track-hint">{t('timeline.building')}</span>}
       </div>
 
-      <div className="track-ticks">
+      {/*
+        The ruler goes on the shortest windows, and it is the one thing here that can.
+        It is read off, not operated - the playhead's own time is on the transport row, the
+        trim row carries both ends as text, and hovering the track still names the frame - so
+        the 21px it costs (the strip plus the gap above it) buys the preview more than it
+        costs the timeline, which at this height is a 42px track with a ruler under it.
+      */}
+      <div className="track-ticks [@media(max-height:720px)]:hidden">
         {ticks.length === 0 ? (
           <>
             <span>00:00</span>
@@ -515,11 +522,11 @@ export function Timeline({
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5 [@media(max-height:720px)]:gap-2">
         <span className="text-dim">{t('timeline.start')}</span>
         <input
           key={`start-${range.start.toFixed(3)}-${revision}`}
-          className="h-8 w-[108px] rounded-lg border border-input bg-input-bg px-2 text-center text-sm text-foreground outline-none focus:border-brand"
+          className="h-8 w-[108px] rounded-lg border border-input bg-input-bg px-2 text-center text-sm text-foreground outline-none focus:border-brand [@media(max-height:720px)]:w-[92px]"
           defaultValue={formatTime(range.start)}
           disabled={disabled}
           aria-label={t('timeline.start')}
@@ -533,6 +540,11 @@ export function Timeline({
             <Button
               size="sm"
               variant="secondary"
+              // "Set start" / "Set end" are what make this row wrap on a narrow, short window,
+              // and the crosshair says the same thing without them - the tooltip spells it out
+              // either way. One line is 28-34px and two are 65px, and the preview above needs
+              // that 31px more than the button needs its words at this size.
+              className="[@media(max-height:780px)]:px-2"
               disabled={disabled}
               onClick={() =>
                 commit(
@@ -543,7 +555,8 @@ export function Timeline({
               }
             >
               <Crosshair />
-              {t('timeline.setStart')}
+              {/* The label, not the button: the icon and the tooltip stay at every size. */}
+              <span className="[@media(max-height:780px)]:hidden">{t('timeline.setStart')}</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>{t('timeline.usePlayhead')}</TooltipContent>
@@ -552,7 +565,7 @@ export function Timeline({
         <span className="text-dim">{t('timeline.end')}</span>
         <input
           key={`end-${range.end.toFixed(3)}-${revision}`}
-          className="h-8 w-[108px] rounded-lg border border-input bg-input-bg px-2 text-center text-sm text-foreground outline-none focus:border-brand"
+          className="h-8 w-[108px] rounded-lg border border-input bg-input-bg px-2 text-center text-sm text-foreground outline-none focus:border-brand [@media(max-height:720px)]:w-[92px]"
           defaultValue={formatTime(range.end)}
           disabled={disabled}
           aria-label={t('timeline.end')}
@@ -566,6 +579,11 @@ export function Timeline({
             <Button
               size="sm"
               variant="secondary"
+              // "Set start" / "Set end" are what make this row wrap on a narrow, short window,
+              // and the crosshair says the same thing without them - the tooltip spells it out
+              // either way. One line is 28-34px and two are 65px, and the preview above needs
+              // that 31px more than the button needs its words at this size.
+              className="[@media(max-height:780px)]:px-2"
               disabled={disabled}
               onClick={() =>
                 commit(
@@ -576,7 +594,7 @@ export function Timeline({
               }
             >
               <Crosshair />
-              {t('timeline.setEnd')}
+              <span className="[@media(max-height:780px)]:hidden">{t('timeline.setEnd')}</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>{t('timeline.usePlayhead')}</TooltipContent>

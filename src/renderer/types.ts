@@ -1,3 +1,4 @@
+import type { FillQuality } from './ai/quality'
 import type { GifTuning } from '../shared/gifTuning'
 import type { InstallProgressEvent } from '../shared/types'
 
@@ -30,6 +31,14 @@ export interface Summary {
   fps: string
   resolution: string
   size: string
+  /**
+   * How clean the AI removal came out, when one ran.
+   *
+   * On the summary rather than in a panel of its own because it is a fact about the file that was
+   * just written - next to the duration and the resolution, where somebody deciding whether to
+   * keep the export is already looking.
+   */
+  fill?: FillQuality
 }
 
 export type LogSeverity = 'info' | 'error' | 'done'

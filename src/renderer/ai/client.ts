@@ -9,6 +9,8 @@ import type {
   WatermarkRegion
 } from '../../shared/types'
 import { AI_BACKEND_FAILURE, AI_LOAD_TIMEOUT } from './protocol'
+import { FILL_DETAIL_FLOOR, FILL_SEAM_CEILING, formatQuality, hasQuality, mergeQuality } from './quality'
+import type { FillQuality } from './quality'
 import type { AiCandidate, AiWorkerRequest, AiWorkerRequestInput, AiWorkerResponse } from './protocol'
 import { createQueue } from './queue'
 
@@ -302,8 +304,13 @@ async function inpaintBatch(
   region: AiRegionPlan,
   frames: Uint8Array[],
   feather: number
-): Promise<{ patches: Uint8Array[]; note?: string }> {
-  return send<{ patches: Uint8Array[]; note?: string }>({ kind: 'inpaint', region, feather, frames })
+): Promise<{ patches: Uint8Array[]; note?: string; quality?: FillQuality }> {
+  return send<{ patches: Uint8Array[]; note?: string; quality?: FillQuality }>({
+    kind: 'inpaint',
+    region,
+    feather,
+    frames
+  })
 }
 
 export interface AiRunHandlers {
@@ -330,6 +337,13 @@ export interface AiRunHandlers {
    * app has been accused of more than once.
    */
   onCooling: (msLeft: number) => void
+  /**
+   * How clean the fill is coming out, reported once a batch has been measured.
+   *
+   * Optional, so a caller that only wants the pixels - the frame preview, most of all - does
+   * not have to invent a handler for a number it will not draw.
+   */
+  onQuality?: (quality: FillQuality) => void
 }
 
 /**
@@ -409,6 +423,9 @@ export async function runAiRemoval(
   const totalFrames = prepared.frames * windows.length
   handlers.onPhase('painting')
   let done = 0
+  // Every batch that came back measured, in the order they were painted. The weighted average of
+  // them is what "how clean was this removal?" means for the run as a whole.
+  const measured: FillQuality[] = []
   // Timed because the rate is the whole story of this stage: it decides whether a clip
   // is a short wait or an afternoon, and it is what tells the difference between a slow
   // machine and a runtime that quietly lost its threads.
@@ -424,6 +441,11 @@ export async function runAiRemoval(
       // Said as soon as it happens: a run that fell back mid-batch still produces the
       // right pixels, and the user deserves to know why it got slower.
       if (painted.note) handlers.onNote(painted.note)
+      if (painted.quality) {
+        measured.push(painted.quality)
+        const so = mergeQuality(measured)
+        if (hasQuality(so)) handlers.onQuality?.(so)
+      }
       await window.clipforge.aiPatches({ token: prepared.token, index: plan.index, from, patches: painted.patches })
       done += frames.length
       handlers.onInpaint(done, totalFrames)
@@ -434,6 +456,14 @@ export async function runAiRemoval(
     }
   }
   const seconds = (Date.now() - startedAt) / 1000
+  // The quality travels with the rate, because "it took two minutes" and "it came out clean" are
+  // the two things a removal is judged on and the log is where both are read back later.
+  const quality = mergeQuality(measured)
+  if (hasQuality(quality)) {
+    handlers.onNote(
+      `Fill quality: ${formatQuality(quality)} over ${quality.windows} window(s) - ${quality.detail === null ? 'too flat around the fill to judge its sharpness' : quality.detail < FILL_DETAIL_FLOOR ? 'softer than the picture around it' : 'as sharp as the picture around it'}, ${quality.seam === null ? 'no nearby edge to judge a step against' : quality.seam > FILL_SEAM_CEILING ? 'with a visible edge where the fill meets the picture' : 'with no visible edge'}`
+    )
+  }
   handlers.onNote(
     `Inpainted ${totalFrames} frame${totalFrames === 1 ? '' : 's'} in ${seconds.toFixed(1)}s` +
       (totalFrames > 0 ? ` (${(seconds / totalFrames).toFixed(2)}s per frame)` : '') +
@@ -484,6 +514,14 @@ export interface AiFramePreview {
   seconds: number
   /** How many windows had to be painted, so a cut-up mark explains its own cost. */
   windows: number
+  /**
+   * How clean the fill is, measured on the pixels being shown.
+   *
+   * This is the whole point of looking at one frame before exporting the clip: the picture says
+   * whether the removal worked, and the numbers say what "worked" means when the mark sits on a
+   * busy background and the eye cannot be sure.
+   */
+  quality?: FillQuality
 }
 
 /**
@@ -519,8 +557,10 @@ export async function previewRemoval(
   composed.drawImage(source, 0, 0)
   source.close()
 
+  const measured: FillQuality[] = []
   for (const patch of frame.patches) {
     const painted = await inpaintBatch(patch.plan, [patch.window], feather)
+    if (painted.quality) measured.push(painted.quality)
     const bytes = painted.patches[0]
     if (!bytes) continue
     const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]))
@@ -531,13 +571,15 @@ export async function previewRemoval(
     bitmap.close()
   }
 
+  const quality = mergeQuality(measured)
   return {
     before: canvas.toDataURL('image/png'),
     after: after.toDataURL('image/png'),
     width: canvas.width,
     height: canvas.height,
     seconds: (Date.now() - started) / 1000,
-    windows: frame.patches.length
+    windows: frame.patches.length,
+    quality: hasQuality(quality) ? quality : undefined
   }
 }
 

@@ -7,7 +7,7 @@ import type { TranslationKey } from './en'
 export const zhTW: Record<TranslationKey, string> = {
   'app.name': 'ClipForge',
   'app.tagline': 'GIF 與影片全方位工作室',
-  'app.version': 'v0.1.0 · 桌面版',
+  'app.version': 'v{version} · 桌面版',
   'app.pitch': '把長影片變成精華片段。',
 
   'nav.workspace': '工作區',
@@ -43,7 +43,8 @@ export const zhTW: Record<TranslationKey, string> = {
   'update.readyHint': '重新啟動會關閉應用程式、執行安裝程式，並開啟新版本。',
   'update.restart': '重新啟動並安裝',
   'update.later': '稍後',
-  'update.hide': '隱藏此通知',
+  'rail.update.downloading': '更新 {version} · {percent}%',
+  'rail.update.failedHint': '點一下看發生什麼事。',
   'update.error': '檢查更新失敗',
   'update.checkFailed': '檢查更新時發生問題。',
   'update.downloadFailed': '更新下載失敗',
@@ -76,7 +77,6 @@ export const zhTW: Record<TranslationKey, string> = {
   'status.settingsSaved': '● 設定已儲存',
 
   'media.none': '尚未載入媒體 —— 貼上網址或拖入檔案',
-  'media.loaded': '{name} · {time}',
 
   'install.header.missing': '缺少媒體工具',
   'install.header.running': '正在安裝媒體工具',
@@ -160,6 +160,13 @@ export const zhTW: Record<TranslationKey, string> = {
   'output.empty.body': '完成的 GIF 或影片會在這裡循環播放，隨時可以分享。',
   'output.file': '檔案',
   'output.size': '大小',
+  'output.fill': 'AI 填補',
+  'output.fill.clean': '與周圍畫面融合',
+  'output.fill.soft': '比周圍畫面模糊',
+  'output.fill.seam': '仍看得見邊緣',
+  'output.fill.unknown': '無法量測',
+  'output.fill.numbers': '量測值',
+  'output.fill.values': '細節 {detail} · 邊緣 {seam}（{windows} 個視窗）',
   'output.openFolder': '開啟資料夾',
   'output.copyImage': '複製圖片',
   'output.copyPath': '複製路徑',
@@ -416,7 +423,6 @@ export const zhTW: Record<TranslationKey, string> = {
   'guide.step3': '匯出後把成果拖出去',
   'guide.step3.body': '直接拖進 Discord、Slack 或聊天視窗。',
   'guide.dismiss': '知道了',
-  'guide.reopen': '顯示導引',
 
   'shortcuts.title': '鍵盤快捷鍵',
   'shortcuts.close': '關閉',
@@ -483,6 +489,7 @@ export const zhTW: Record<TranslationKey, string> = {
   'watermark.preview.after': '已移除',
   'watermark.preview.drag': '拖曳比較',
   'watermark.preview.took': '在這台電腦上花了 {seconds} 秒',
+  'watermark.preview.quality': '量測：細節 {detail}、邊緣 {seam} —— 細節 1.00 表示與周圍一樣銳利，邊緣 1.00 表示沒有接縫。',
   'watermark.preview.tookWindows': '花了 {seconds} 秒，以 {windows} 個視窗在全解析度下處理',
   'watermark.preview.log': '已預覽單格的去浮水印結果，耗時 {seconds} 秒（{windows} 個視窗）',
   'leftover.title': '還有一個舊版 ClipForge 安裝在電腦上',

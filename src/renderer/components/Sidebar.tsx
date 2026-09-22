@@ -1,4 +1,5 @@
 import { Home, Settings } from 'lucide-react'
+import type { ReactNode } from 'react'
 
 // Generated from assets/icon-source.png by `npm run make:icon`, so the app mark and the
 // Windows shell icon are always the same artwork.
@@ -14,6 +15,10 @@ interface Props {
   page: Page
   onNavigate: (page: Page) => void
   missingDependencies: number
+  /** The running version, read from the app rather than from the dictionary. */
+  version: string
+  /** The update control, built by the workspace; empty when there is nothing to say. */
+  updateControl: ReactNode
   /** False in fullscreen, where the rail stops grabbing the mouse. */
   drag?: boolean
 }
@@ -24,7 +29,7 @@ interface Props {
  * the way at every pointer position - the rail *is* the sidebar at that size, not a
  * collapsed state that expands under the cursor - and the nav tooltips name each row.
  */
-export function Sidebar({ page, onNavigate, missingDependencies, drag = true }: Props): JSX.Element {
+export function Sidebar({ page, onNavigate, missingDependencies, version, updateControl, drag = true }: Props): JSX.Element {
   const { t } = useI18n()
 
   /** One navigation row, in both the full and the icon-rail form. */
@@ -82,12 +87,35 @@ export function Sidebar({ page, onNavigate, missingDependencies, drag = true }: 
       {navItem('home', <Home className="size-[18px]" />, t('nav.home'))}
       {navItem('settings', <Settings className="size-[18px]" />, t('nav.settings'), missingDependencies)}
 
-      <div className="mt-auto flex flex-col gap-3 max-[1180px]:hidden">
-        <div className="rounded-xl border border-border-soft bg-elevated px-4 py-3.5">
-          <strong className="text-sm font-semibold">{t('app.name')}</strong>
-          <div className="text-[0.71875rem] leading-[1.35] text-meta">{t('app.version')}</div>
+      {/*
+       * The bottom of the rail: the update control, then the version it would replace.
+       *
+       * Only the update control survives the narrow rail. The version line and the pitch are
+       * text, and text is what the 76px rail has no room for - but the control is icon-only
+       * there rather than gone, because an update the user cannot reach from the window they
+       * happen to have open is the bug this whole area exists to prevent.
+       */}
+      <div className="mt-auto flex flex-col gap-3">
+        {updateControl}
+        <div className="flex flex-col gap-3 max-[1180px]:hidden">
+          <div className="rounded-xl border border-border-soft bg-elevated px-4 py-3.5">
+            <strong className="text-sm font-semibold">{t('app.name')}</strong>
+            {/*
+             * The version, from `app.getVersion()`.
+             *
+             * This line used to be `t('app.version')` - a literal in the dictionary - and it
+             * read `v0.1.0 · Desktop` on every build up to 0.4.7, because a string in a
+             * translation file has no way to know what it is running inside. The template
+             * takes the number now, and a test keeps a literal one from creeping back.
+             */}
+            {version.length > 0 && (
+              <div data-slot="rail-version" className="text-[0.71875rem] leading-[1.35] text-meta tabular-nums">
+                {t('app.version', { version })}
+              </div>
+            )}
+          </div>
+          <div className="text-[0.71875rem] leading-[1.35] text-meta">{t('app.pitch')}</div>
         </div>
-        <div className="text-[0.71875rem] leading-[1.35] text-meta">{t('app.pitch')}</div>
       </div>
     </nav>
   )

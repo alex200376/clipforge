@@ -4,6 +4,7 @@ import {
   checkAge,
   checkIsStale,
   condenseUpdaterError,
+  forcedUpdateState,
   isNotNewer,
   isoReleaseDate,
   postUpdateReclaim,
@@ -325,6 +326,36 @@ describe('reading a release body', () => {
     const wide = releaseNoteLines(`- ${'x'.repeat(400)}`)
     expect(wide[0].length).toBeLessThanOrEqual(160)
     expect(wide[0].endsWith('…')).toBe(true)
+  })
+})
+
+describe('the forced update states', () => {
+  it('understands the four faces the rail draws', () => {
+    expect(forcedUpdateState('available', '9.9.9')?.status).toBe('available')
+    expect(forcedUpdateState('downloading', '9.9.9')?.percent).toBe(42)
+    expect(forcedUpdateState('downloading:67', '9.9.9')?.percent).toBe(67)
+    expect(forcedUpdateState('ready', '9.9.9')?.percent).toBe(100)
+    const failed = forcedUpdateState('error', '9.9.9')
+    expect(failed?.status).toBe('error')
+    // A *download* failure: the rail reports the half the railer knows about, and this is it.
+    expect(failed?.phase).toBe('download')
+    expect(failed?.error).toBeTruthy()
+  })
+
+  it('cannot be talked into nonsense', () => {
+    expect(forcedUpdateState(undefined, '9.9.9')).toBeNull()
+    expect(forcedUpdateState('', '9.9.9')).toBeNull()
+    expect(forcedUpdateState('current', '9.9.9')).toBeNull()
+    expect(forcedUpdateState('ready:5', '9.9.9')?.percent).toBe(100)
+    // A percent outside 0-100, or one that is not a number, is clamped rather than passed on:
+    // it ends up as the width of a bar.
+    expect(forcedUpdateState('downloading:140', '9.9.9')?.percent).toBe(100)
+    expect(forcedUpdateState('downloading:-3', '9.9.9')?.percent).toBe(0)
+    expect(forcedUpdateState('downloading:lots', '9.9.9')?.percent).toBe(42)
+  })
+
+  it('carries the version it was told to', () => {
+    expect(forcedUpdateState('ready', '9.9.9')?.version).toBe('9.9.9')
   })
 })
 

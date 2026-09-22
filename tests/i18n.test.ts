@@ -21,6 +21,17 @@ describe('dictionaries', () => {
     expect(empty).toEqual([])
   })
 
+  it('carries no literal version number', () => {
+    // `app.version` used to read `v0.1.0 · Desktop` in both dictionaries, and the rail printed
+    // it verbatim - so the sidebar advertised v0.1.0 on every build up to 0.4.7. A
+    // translation file cannot know what it is running inside, so the number is a placeholder
+    // and the renderer fills it from `app.getVersion()`. This is what stops it creeping back.
+    const versioned = [...Object.entries(en), ...Object.entries(zhTW)]
+      .filter(([, value]) => /\bv?\d+\.\d+\.\d+\b/.test(value))
+      .map(([key, value]) => `${key} = ${value}`)
+    expect(versioned).toEqual([])
+  })
+
   it('translates every error code we can raise', () => {
     const missing = ERROR_CODES.filter((code) => code !== 'unknown').filter((code) => errorKeyFor(code) === undefined)
     expect(missing).toEqual([])

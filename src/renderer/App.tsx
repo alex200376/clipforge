@@ -20,6 +20,7 @@ import { isRemoteUrl, sourceNameFor } from '../shared/sources'
 import { videoSizeBytes } from '../shared/videoSize'
 import { findWatermarks, onAiNote, preloadModels, previewRemoval, runAiRemoval } from './ai/client'
 import type { AiFramePreview } from './ai/client'
+import type { FillQuality } from './ai/quality'
 import type {
   AiAssets,
   AppSettings,
@@ -49,17 +50,9 @@ import { planSteps } from './progress'
 import { useExportProgress } from './useProgress'
 import { InstallCard } from './components/InstallCard'
 import type { InstallSummary } from './components/InstallCard'
-import {
-  DropZone,
-  ErrorCard,
-  FrameCompare,
-  LeftoverInstall,
-  Onboarding,
-  SessionPrompt,
-  ShortcutSheet,
-  Toast
-} from './components/Overlays'
-import type { ToastState } from './components/Overlays'
+import { DropZone, ErrorCard, FrameCompare, ShortcutSheet } from './components/Overlays'
+import { NoticeStack } from './components/NoticeStack'
+import { RailUpdate } from './components/RailUpdate'
 import { OutputPanel } from './components/OutputPanel'
 import type { OutputResult } from './components/OutputPanel'
 import { PreviewPane } from './components/PreviewPane'
@@ -70,12 +63,13 @@ import { Sidebar } from './components/Sidebar'
 import { Timeline } from './components/Timeline'
 import type { Filmstrip } from './components/Timeline'
 import { TopBar } from './components/TopBar'
-import { UpdateBanner } from './components/UpdateBanner'
 import { TooltipProvider } from './components/ui/tooltip'
 import { cn } from './lib/utils'
 import { clockTime, formatBytes, formatTime } from './format'
 import { codedFailureMessage, localizedError, stageLabel, useI18n } from './i18n'
 import { adoptProbe } from './sourceAdoption'
+import { EMPTY_QUEUE, dismissKind, dismissNotice, pushNotice } from './notices'
+import type { NoticeDraft, NoticeQueue } from './notices'
 import type {
   ErrorNotice,
   EstimateView,
@@ -244,6 +238,8 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null)
   /** What the AI pass is doing while it has no frames to count, e.g. reading weights. */
   const [phaseNote, setPhaseNote] = useState<string | null>(null)
+  /** What the AI pass measured about its own fill, once it has painted a batch to measure. */
+  const [aiQuality, setAiQuality] = useState<FillQuality | null>(null)
   const [detectBusy, setDetectBusy] = useState(false)
 
   const [status, setStatus] = useState<Status>({ text: t('status.ready'), kind: 'idle' })
@@ -259,7 +255,7 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [framePreview, setFramePreview] = useState<AiFramePreview | null>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
   const [leftover, setLeftover] = useState<InstalledCopy | null>(null)
-  const [toast, setToast] = useState<ToastState | null>(null)
+  const [notices, setNotices] = useState<NoticeQueue>(EMPTY_QUEUE)
   const [lastOutput, setLastOutput] = useState<string | null>(null)
   const [lastSize, setLastSize] = useState(0)
   const [optimised, setOptimised] = useState<{ before: number; actual: number } | null>(null)
@@ -309,6 +305,21 @@ export function App({ initialSettings }: Props): JSX.Element {
     setNotice(text)
     if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current)
     noticeTimer.current = window.setTimeout(() => setNotice(null), 2600)
+  }, [])
+
+  /**
+   * Raise a notice in the workspace corner.
+   *
+   * Stable, so effects and callbacks may depend on it without being rebuilt - which is what
+   * lets `loadMedia` raise the "what just loaded" notice from inside itself, the one place
+   * both the file path and the link path arrive.
+   */
+  const raise = useCallback((draft: NoticeDraft) => {
+    setNotices((queue) => pushNotice(queue, draft))
+  }, [])
+
+  const closeNotice = useCallback((id: number) => {
+    setNotices((queue) => dismissNotice(queue, id))
   }, [])
 
   const fail = useCallback(
@@ -647,8 +658,27 @@ export function App({ initialSettings }: Props): JSX.Element {
       setActiveRegion(0)
       setMeasured(null)
       setSessionName(null)
+
+      // What just loaded, in the corner rather than in a row of the workspace.
+      //
+      // This is the one place both the file path and the link path end up, so the notice
+      // cannot be raised twice for one clip or missed for one of the two kinds. A direct video
+      // link knows neither its length nor its frame size at this moment - the probe fills both
+      // in a second later, and the chip on the bar shows them - so an unknown one is left out
+      // rather than printed as `00:00:00.000`.
+      raise({
+        kind: 'clip-loaded',
+        title: info.name,
+        body: [
+          info.duration > 0 ? formatTime(info.duration) : '',
+          info.width > 0 && info.height > 0 ? `${info.width}×${info.height}` : ''
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        actions: []
+      })
     },
-    []
+    [raise]
   )
 
   const resolveUrl = useCallback(
@@ -1203,6 +1233,9 @@ export function App({ initialSettings }: Props): JSX.Element {
   const summary: Summary = useMemo(
     () => ({
       duration: formatTime(clipSeconds),
+      // Reset with every export and refilled if this one runs the AI pass, so the row can never
+      // describe a previous file's removal next to this one's numbers.
+      fill: aiQuality ?? undefined,
       engine: !isGif
         ? t('export.engine.h264')
         : format === 'webp'
@@ -1214,7 +1247,7 @@ export function App({ initialSettings }: Props): JSX.Element {
       resolution: isGif ? (effectiveWidth === null ? t('export.native') : `${effectiveWidth}p`) : t('export.native'),
       size: lastSize > 0 ? formatBytes(lastSize) : '—'
     }),
-    [clipSeconds, effectiveFps, effectiveWidth, engine, format, isGif, lastSize, t]
+    [aiQuality, clipSeconds, effectiveFps, effectiveWidth, engine, format, isGif, lastSize, t]
   )
 
   const runExport = useCallback(async () => {
@@ -1230,6 +1263,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     setBusy(true)
     setProgress(null)
     setPhaseNote(null)
+    setAiQuality(null)
     setJobStart(Date.now())
     setStatus({ text: t('status.working'), kind: 'busy' })
     try {
@@ -1276,7 +1310,10 @@ export function App({ initialSettings }: Props): JSX.Element {
             // The rest between batches, as a countdown rather than as a note: this is
             // minutes of a bar that is deliberately not moving, and the number is the
             // only thing that separates "resting" from "stuck".
-            onCooling: setCoolingMs
+            onCooling: setCoolingMs,
+            // Kept, not shown live: the answer to "was the removal clean?" belongs with the file
+            // it describes, in the output panel, rather than on a progress line that disappears.
+            onQuality: setAiQuality
           },
           assets,
           aiPace
@@ -1437,11 +1474,33 @@ export function App({ initialSettings }: Props): JSX.Element {
           setMeasured({ estimated: expected, actual: result.sizeBytes, mode: isGif ? 'gif' : 'video' })
         }
         setPanelTab('output')
-        setToast({
-          id: Date.now(),
+        raise({
+          kind: 'export-done',
           title: t('toast.done.title'),
           body: t('toast.done.body', { name: baseName(result.output), size: formatBytes(result.sizeBytes ?? 0) }),
-          path: result.output
+          path: result.output,
+          actions: [
+            {
+              label: t('toast.open'),
+              variant: 'default',
+              // The card stays until the file is actually open: opening can fail, and this is
+              // the notice that also carries "show in folder".
+              keepOpen: true,
+              run: () => {
+                void window.clipforge.openFile(result.output!).then((problem) => {
+                  // `shell.openPath` answers with '' when the system took it, and with the
+                  // reason it did not otherwise. A failure is logged and the notice stays,
+                  // because the other action - show in folder - is still the way to find it.
+                  if (problem) pushLog(problem, 'error')
+                  else setNotices((queue) => dismissKind(queue, 'export-done'))
+                })
+              }
+            },
+            {
+              label: t('toast.reveal'),
+              run: () => void window.clipforge.revealInFolder(result.output!)
+            }
+          ]
         })
         // The renderer sends what it knows - the preference and whether this window had the
         // focus - and the main process decides, because it is the side that can also ask
@@ -1502,6 +1561,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     failExport,
     failWith,
     pushLog,
+    raise,
     showNotice,
     t
   ])
@@ -1583,6 +1643,115 @@ export function App({ initialSettings }: Props): JSX.Element {
     setGuideOpen(false)
     void window.clipforge.saveSettings({ onboarded: true }).then(setSettings).catch(() => undefined)
   }, [])
+
+  /*
+   * The four notices that used to be cards in the workspace column.
+   *
+   * Each is raised once per thing it is about - per folder, per remembered clip, per
+   * version - because the queue replaces a notice of the same kind anyway and these are
+   * driven by effects that run on every render of the values they watch. The refs are the
+   * guard for "once": without one, dismissing the card would simply raise it again on the
+   * next render, and a dismissed notice that keeps coming back is worse than no notice.
+   */
+  const leftoverRaised = useRef<string | null>(null)
+  const sessionRaised = useRef<string | null>(null)
+  const guideRaised = useRef(false)
+  const updateReadyRaised = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!leftover || leftoverRaised.current === leftover.location) return
+    leftoverRaised.current = leftover.location
+    const location = leftover.location
+    /** Marks the folder as answered, whichever button was pressed. */
+    const settled = () => {
+      setLeftover(null)
+      void saveSettings({ leftoverInstallSeen: location }).catch(() => undefined)
+    }
+    raise({
+      kind: 'leftover-install',
+      title: t('leftover.title'),
+      body: t('leftover.body', { dir: location }),
+      actions: [
+        {
+          label: t('leftover.remove'),
+          variant: 'default',
+          run: () => {
+            void window.clipforge.removeInstalledCopy(location).then((problem) => {
+              if (problem) {
+                pushLog(t('leftover.failed', { reason: problem }), 'error')
+                return
+              }
+              // The uninstaller is now the user's window to answer; this copy records the
+              // decision so it is not raised again either way.
+              pushLog(t('leftover.started'), 'done')
+              settled()
+            })
+          }
+        },
+        { label: t('leftover.keep'), run: settled }
+      ]
+    })
+  }, [leftover, pushLog, raise, saveSettings, t])
+
+  useEffect(() => {
+    if (!guideOpen || source || guideRaised.current) return
+    guideRaised.current = true
+    // The step sentences are the tooltips: the card is four lines now, and the explanation
+    // of each step is still one hover away rather than two lines of the corner.
+    raise({
+      kind: 'guide',
+      title: t('guide.title'),
+      lines: [
+        { text: `1  ${t('guide.step1')}`, hint: t('guide.step1.body') },
+        { text: `2  ${t('guide.step2')}`, hint: t('guide.step2.body') },
+        { text: `3  ${t('guide.step3')}`, hint: t('guide.step3.body') }
+      ],
+      actions: [{ label: t('guide.dismiss'), variant: 'default', run: dismissGuide }]
+    })
+  }, [dismissGuide, guideOpen, raise, source, t])
+
+  useEffect(() => {
+    if (!sessionName || source || sessionRaised.current === sessionName) return
+    sessionRaised.current = sessionName
+    const name = sessionName
+    /** Reopen the remembered clip exactly as the card's own button did. */
+    const reopen = () => {
+      setSessionName(null)
+      void window.clipforge.loadSession().then((session) => {
+        if (!session.source || !session.available) return
+        // A remembered link is resolved again through yt-dlp; only a remembered file goes to
+        // the local probe.
+        if (session.source.kind === 'url') void resolveUrl(session.source.path)
+        else void loadFilePath(session.source.path)
+      })
+    }
+    raise({
+      kind: 'resume-last',
+      title: t('session.title'),
+      body: t('session.body', { name }),
+      actions: [
+        { label: t('session.resume'), variant: 'default', run: reopen },
+        { label: t('session.dismiss'), run: () => setSessionName(null) }
+      ]
+    })
+  }, [loadFilePath, raise, resolveUrl, sessionName, source, t])
+
+  useEffect(() => {
+    if (update.status !== 'ready' || !update.version) return
+    if (updateReadyRaised.current === update.version) return
+    updateReadyRaised.current = update.version
+    // The rail carries the button; this is the one-off tap on the shoulder, at the moment a
+    // download finishes, so someone who is not watching the corner of the rail still knows.
+    raise({
+      kind: 'update-ready',
+      title: t('update.ready', { version: update.version }),
+      body: t('update.readyHint'),
+      actions: [
+        { label: t('update.restart'), variant: 'default', run: () => void window.clipforge.installUpdate() },
+        { label: t('update.later'), run: () => setUpdateHidden(true) }
+      ]
+    })
+  }, [raise, t, update.status, update.version])
 
   const onDrop = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
@@ -1916,6 +2085,10 @@ export function App({ initialSettings }: Props): JSX.Element {
             session={linkSession}
             onSignIn={() => void signInForLinks()}
             onSignOut={() => void signOutOfLinks()}
+            // The same queue as the workspace's, in the one other corner the app has: the
+            // Settings page covers the workspace, so this is the only way an update that
+            // finished downloading while it was open could be seen before leaving.
+            noticeSlot={<NoticeStack queue={notices} onDismiss={closeNotice} placement="above" />}
             drag={!chrome.fullscreen}
           />
         ) : (
@@ -1924,9 +2097,36 @@ export function App({ initialSettings }: Props): JSX.Element {
               page={page}
               onNavigate={setPage}
               missingDependencies={missingTools.length}
+              version={version}
+              updateControl={
+                <RailUpdate
+                  state={update}
+                  hidden={updateHidden}
+                  onInstall={() => void window.clipforge.installUpdate()}
+                  // Only the ready state acts on its own; everything else is a status, and
+                  // its answers - the notes, the release date, "later", the auto-check
+                  // preference - live on the card this page has.
+                  onOpenDetails={() => setPage('settings')}
+                  onLater={() => setUpdateHidden(true)}
+                />
+              }
               drag={!chrome.fullscreen}
             />
-            <div className="flex min-h-0 min-w-0 flex-col gap-3.5 overflow-x-hidden overflow-y-auto px-5 pb-4">
+            {/*
+             * The column, plus the corner the notices appear in.
+             *
+             * The stack is a sibling of the scroller rather than a child of it for two
+             * reasons: content inside an `overflow-y-auto` box carries its absolutely
+             * positioned children along with the scroll, and the scroller scrolls here. It is
+             * `relative` for the same reason, so the notices are placed against this column
+             * rather than against the window - the window's bottom-right corner is the
+             * inspector's Export button.
+             */}
+            <div data-slot="notice-anchor" className="relative flex min-h-0 min-w-0 flex-col">
+              <div
+                data-slot="workspace"
+                className="flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 overflow-x-hidden overflow-y-auto px-5 pb-4"
+              >
               <TopBar
                 url={url}
                 onUrlChange={setUrl}
@@ -1948,75 +2148,23 @@ export function App({ initialSettings }: Props): JSX.Element {
                 }
                 onShortcuts={openShortcuts}
                 status={status}
+                source={source ? { name: source.name, duration: source.duration } : null}
                 notice={notice}
                 busy={busy}
                 maximized={chrome.maximized}
                 drag={!chrome.fullscreen}
               />
 
-              <div className={cn('flex items-center gap-2.5 py-1 text-sm text-soft', !chrome.fullscreen && 'drag')}>
-                {source ? t('media.loaded', { name: source.name, time: formatTime(source.duration) }) : t('media.none')}
-              </div>
-
-              {!updateHidden && (
-                <UpdateBanner
-                  state={update}
-                  onCheck={() => void window.clipforge.checkForUpdates().then(setUpdate)}
-                  onInstall={() => void window.clipforge.installUpdate()}
-                  onDismiss={() => setUpdateHidden(true)}
-                />
-              )}
-
-              {leftover && (
-                <LeftoverInstall
-                  location={leftover.location}
-                  onDismiss={() => {
-                    // Remembered by folder, so this one is not raised again but a different
-                    // stray copy later still would be.
-                    setLeftover(null)
-                    saveSettings({ leftoverInstallSeen: leftover.location })
-                  }}
-                  onRemove={() => {
-                    void window.clipforge.removeInstalledCopy(leftover.location).then((problem) => {
-                      if (problem) {
-                        pushLog(t('leftover.failed', { reason: problem }), 'error')
-                        return
-                      }
-                      // The uninstaller is now the user's window to answer; this copy records
-                      // the decision so it is not raised again either way.
-                      pushLog(t('leftover.started'), 'done')
-                      setLeftover(null)
-                      saveSettings({ leftoverInstallSeen: leftover.location })
-                    })
-                  }}
-                />
-              )}
-
-              {sessionName && !source && !guideOpen && (
-                <SessionPrompt
-                  name={sessionName}
-                  onResume={() => {
-                    setSessionName(null)
-                    void window.clipforge.loadSession().then((session) => {
-                      if (!session.source || !session.available) return
-                      // A remembered link is resolved again through yt-dlp; only a
-                      // remembered file goes to the local probe.
-                      if (session.source.kind === 'url') void resolveUrl(session.source.path)
-                      else void loadFilePath(session.source.path)
-                    })
-                  }}
-                  onDismiss={() => setSessionName(null)}
-                />
-              )}
-
-              {guideOpen && !source && <Onboarding onDismiss={dismissGuide} />}
-
+              {/* The only card left in the column, and only while an export has just failed. */}
               <ErrorCard notice={errorNotice} onDismiss={() => setErrorNotice(null)} />
 
               {installCard}
 
-              <div className="grid min-h-[calc(var(--preview-min)+14px+var(--timeline-max))] flex-1 grid-cols-[minmax(0,1fr)_25rem] gap-3.5 max-[1400px]:grid-cols-[minmax(0,1fr)_356px]">
-                <div className="grid min-h-0 min-w-0 grid-rows-[minmax(var(--preview-min),1fr)_auto] gap-3.5">
+              <div
+                data-slot="workspace-grid"
+                className="grid min-h-[calc(var(--preview-min)+14px+var(--timeline-max))] flex-1 grid-cols-[minmax(0,1fr)_25rem] gap-3.5 max-[1400px]:grid-cols-[minmax(0,1fr)_356px]"
+              >
+                <div className="grid min-h-0 min-w-0 grid-rows-[minmax(var(--preview-min),1fr)_auto] gap-3.5 [@media(max-height:880px)]:gap-2.5 [@media(max-height:720px)]:gap-2">
                   <PreviewPane
                     preview={preview}
                     source={source ? { width: source.width, height: source.height } : null}
@@ -2159,7 +2307,10 @@ export function App({ initialSettings }: Props): JSX.Element {
                 />
               </div>
 
-              <ActivityLog lines={logs} onClear={() => setLogs([])} onCopy={copyLog} />
+                <ActivityLog lines={logs} onClear={() => setLogs([])} onCopy={copyLog} />
+              </div>
+
+              <NoticeStack queue={notices} onDismiss={closeNotice} />
             </div>
           </>
         )}
@@ -2167,21 +2318,6 @@ export function App({ initialSettings }: Props): JSX.Element {
         <DropZone visible={dropping} />
         <ShortcutSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
         <FrameCompare preview={framePreview} onClose={() => setFramePreview(null)} />
-
-        <Toast
-          toast={toast}
-          onClose={() => setToast(null)}
-          onReveal={(filePath) => void window.clipforge.revealInFolder(filePath)}
-          onOpen={(filePath) => {
-            void window.clipforge.openFile(filePath).then((problem) => {
-              // `shell.openPath` answers with '' when the system took it, and with the reason
-              // it did not otherwise. A failure is logged and the toast stays, because the
-              // other action on it - show in folder - is still the way to find the file.
-              if (problem) pushLog(problem, 'error')
-              else setToast(null)
-            })
-          }}
-        />
       </div>
     </TooltipProvider>
   )

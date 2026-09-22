@@ -1,262 +1,247 @@
-/**
- * What the AI removal actually puts back, scored against ground truth.
- *
- * Every other test in this file's neighbours pins geometry, and geometry is exactly where
- * this went wrong twice: the blend ramp ran inwards and left a ghost of the mark, and the
- * patch read the model's square back *without* the padding it had been drawn with, so a
- * marked box returned the squashed edge strip instead of the fill. Both were invisible to
- * a pure-maths test and obvious in a rendered frame - so this one renders one.
- *
- * The method: take a textured frame, paint a hard-edged mark over a known box, and inpaint
- * it with the real weights and the real window geometry. The clean frame is then the
- * answer key, and the score is how close the fill came. The same run also composites with
- * the old readback, so the number the fix bought is measured rather than asserted.
- *
- * Opt in, because it reads a 208 MB model and runs the network:
- *
- *   CLIPFORGE_AI_QUALITY=1 npx vitest run tests/aiQuality.test.ts
- */
-import { readFileSync } from 'node:fs'
-import path from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 import {
-  AI_INPUT,
-  AI_MASK_GROW,
-  boxInModel,
-  featherAlpha,
-  fitMargin,
-  contextMargin,
-  growBox,
-  modelReadback,
-  planWindow
-} from '../src/shared/aiWindow'
-import type { AiWindowPlan } from '../src/shared/aiWindow'
-import type { CropSpec } from '../src/shared/types'
+  FILL_DETAIL_FLOOR,
+  FILL_SEAM_CEILING,
+  RING_WIDTH,
+  formatQuality,
+  hasQuality,
+  measureFill,
+  mergeQuality,
+  verdictOf
+} from '../src/renderer/ai/quality'
+import type { FillQuality, FillSample } from '../src/renderer/ai/quality'
 
-const ENABLED = process.env.CLIPFORGE_AI_QUALITY === '1'
-const MODEL = path.join(process.cwd(), 'resources', 'models', 'lama_fp32.onnx')
+const SIZE = 160
 
-const FRAME = { width: 640, height: 400 }
-/** A hard-edged mark with internal structure, so a smear cannot look like a fill. */
-const MARK: CropSpec = { x: 200, y: 150, width: 120, height: 40 }
-const FEATHER = 2
-
-/** Deterministic noise, so a failing run can be re-run and believed. */
-function noise(seed: number): () => number {
-  let state = seed >>> 0
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0
-    return state / 0x100000000
-  }
-}
-
-/** A textured frame: smooth structure for the fill to continue, plus fine grain. */
-function texturedFrame(): Uint8Array {
-  const random = noise(20260918)
-  const pixels = new Uint8Array(FRAME.width * FRAME.height * 3)
-  for (let y = 0; y < FRAME.height; y += 1) {
-    for (let x = 0; x < FRAME.width; x += 1) {
-      const offset = (y * FRAME.width + x) * 3
-      const wave = Math.sin(x / 37) * Math.cos(y / 23) * 46 + Math.sin((x + y) / 13) * 18
-      // A couple of hard bands, so there is structure a blur would destroy.
-      const band = y % 64 < 3 || x % 96 < 3 ? -34 : 0
-      const grain = (random() - 0.5) * 22
-      const value = 120 + wave + band + grain
-      pixels[offset] = Math.max(0, Math.min(255, Math.round(value)))
-      pixels[offset + 1] = Math.max(0, Math.min(255, Math.round(value * 0.92 + 12)))
-      pixels[offset + 2] = Math.max(0, Math.min(255, Math.round(value * 0.8 + 34)))
-    }
-  }
-  return pixels
-}
-
-/** Paints an opaque, hard-edged mark over `box`, as a watermark would sit on the picture. */
-function paint(pixels: Uint8Array, box: CropSpec): Uint8Array {
-  const marked = Uint8Array.from(pixels)
-  for (let y = box.y; y < box.y + box.height; y += 1) {
-    for (let x = box.x; x < box.x + box.width; x += 1) {
-      if (x < 0 || y < 0 || x >= FRAME.width || y >= FRAME.height) continue
-      const offset = (y * FRAME.width + x) * 3
-      const edge = x === box.x || y === box.y || x === box.x + box.width - 1 || y === box.y + box.height - 1
-      // A stripe pattern inside a bright border: unmistakably not the picture.
-      const stripe = (x + y) % 12 < 6
-      marked[offset] = edge ? 20 : stripe ? 244 : 226
-      marked[offset + 1] = edge ? 20 : stripe ? 246 : 232
-      marked[offset + 2] = edge ? 24 : stripe ? 250 : 240
-    }
-  }
-  return marked
+/** A deterministic texture with real detail - noise a blur can be told apart from. */
+function texture(x: number, y: number): number {
+  return 128 + 60 * Math.sin(x / 3.1) + 40 * Math.cos(y / 2.7) + 20 * Math.sin((x + y) / 1.7)
 }
 
 /**
- * The window the worker draws into the model's square.
+ * A crop with a rectangular hole in it.
  *
- * Mirrors it step for step: the crop scaled and placed at `pad`, then the strips of
- * repeated edge pixels that fill the rest of the square.
+ * `fill` decides what the hole's pixels become, and it is handed the untouched brightness so a
+ * test can say "the same picture" or "a flat average of it" - the two answers a real removal
+ * gives. `plain` is always the untampered picture, which is what the ring is read from.
  */
-function buildWindow(frame: Uint8Array, plan: AiWindowPlan, scaled: { width: number; height: number }): Uint8Array {
-  const window = new Uint8Array(AI_INPUT * AI_INPUT * 3)
-  const { left, top } = plan.pad
-  const read = (x: number, y: number): [number, number, number] => {
-    const sx = Math.max(0, Math.min(plan.crop.width - 1, Math.floor(x)))
-    const sy = Math.max(0, Math.min(plan.crop.height - 1, Math.floor(y)))
-    const fx = Math.max(0, Math.min(FRAME.width - 1, plan.crop.x + sx))
-    const fy = Math.max(0, Math.min(FRAME.height - 1, plan.crop.y + sy))
-    const offset = (fy * FRAME.width + fx) * 3
-    return [frame[offset]!, frame[offset + 1]!, frame[offset + 2]!]
-  }
-  for (let y = 0; y < AI_INPUT; y += 1) {
-    for (let x = 0; x < AI_INPUT; x += 1) {
-      // Pixel centres, the same convention the readback undoes.
-      const localX = (x - left + 0.5) / plan.scale - 0.5
-      const localY = (y - top + 0.5) / plan.scale - 0.5
-      const clampedX = Math.max(0, Math.min(scaled.width - 1, localX))
-      const clampedY = Math.max(0, Math.min(scaled.height - 1, localY))
-      const [r, g, b] = read(clampedX, clampedY)
-      const offset = (y * AI_INPUT + x) * 3
-      window[offset] = r
-      window[offset + 1] = g
-      window[offset + 2] = b
+function crop(options: {
+  fill: (plain: number) => number
+  feather?: number
+}): { patched: Uint8ClampedArray; plain: Uint8ClampedArray; width: number; height: number } {
+  const plain = new Uint8ClampedArray(SIZE * SIZE * 4)
+  const patched = new Uint8ClampedArray(SIZE * SIZE * 4)
+  const feather = options.feather ?? 0
+  const box = { x: 52, y: 52, w: 56, h: 56 }
+
+  for (let y = 0; y < SIZE; y += 1) {
+    for (let x = 0; x < SIZE; x += 1) {
+      const value = Math.max(0, Math.min(255, texture(x, y)))
+      const offset = (y * SIZE + x) * 4
+      plain[offset] = plain[offset + 1] = plain[offset + 2] = value
+      plain[offset + 3] = 255
+
+      // Inside the box: the fill. In the `feather`-wide collar around it: partly replaced, which
+      // is how the real composite ramps one window into the picture it is pasted over.
+      const insideX = x >= box.x && x < box.x + box.w
+      const insideY = y >= box.y && y < box.y + box.h
+      const nearX = x >= box.x - feather && x < box.x + box.w + feather
+      const nearY = y >= box.y - feather && y < box.y + box.h + feather
+      const alpha = insideX && insideY ? 255 : nearX && nearY && feather > 0 ? 128 : 0
+      const painted = alpha === 0 ? value : options.fill(value)
+      patched[offset] = patched[offset + 1] = patched[offset + 2] = painted
+      patched[offset + 3] = alpha
     }
   }
-  return window
+  return { patched, plain, width: SIZE, height: SIZE }
 }
 
-/** Blends a patch back over the frame, exactly as the ffmpeg overlay does. */
-function composite(
-  frame: Uint8Array,
-  plan: AiWindowPlan,
-  filled: Float32Array,
-  readback: (x: number, y: number) => { x: number; y: number }
-): Uint8Array {
-  const out = Uint8Array.from(frame)
-  const area = AI_INPUT * AI_INPUT
-  const box = plan.box
-  for (let y = 0; y < plan.crop.height; y += 1) {
-    for (let x = 0; x < plan.crop.width; x += 1) {
-      const alpha = featherAlpha([box], x, y, FEATHER)
-      if (alpha === 0) continue
-      const source = readback(x, y)
-      const mx = Math.max(0, Math.min(AI_INPUT - 1, Math.round(source.x)))
-      const my = Math.max(0, Math.min(AI_INPUT - 1, Math.round(source.y)))
-      const fill = [0, 1, 2].map((plane) => filled[plane * area + my * AI_INPUT + mx] ?? 0)
-      const fx = plan.crop.x + x
-      const fy = plan.crop.y + y
-      if (fx < 0 || fy < 0 || fx >= FRAME.width || fy >= FRAME.height) continue
-      const offset = (fy * FRAME.width + fx) * 3
-      for (let channel = 0; channel < 3; channel += 1) {
-        const blended = (fill[channel]! * alpha + out[offset + channel]! * (255 - alpha)) / 255
-        out[offset + channel] = Math.max(0, Math.min(255, Math.round(blended)))
-      }
-    }
-  }
-  return out
-}
+describe('the fill quality metric', () => {
+  it('calls a fill that is the same picture as the picture a perfect one', () => {
+    const measured = measureFill(crop({ fill: (plain) => plain }))
+    expect(measured).not.toBeNull()
+    // Detail is 1 by construction: the fill's pixels are the ring's pixels. The seam is the
+    // interesting one - the boundary of a perfect fill still steps by whatever the picture changes
+    // across one pixel, so the honest reading of "no seam" is 1, not 0.
+    expect(measured!.detail).toBeCloseTo(1, 1)
+    expect(measured!.seam).toBeGreaterThan(0.5)
+    expect(measured!.seam).toBeLessThan(1.8)
+    expect(measured!.inside).toBe(56 * 56)
+  })
 
-/** How close a frame came to the answer key, over the pixels the removal touched. */
-function score(got: Uint8Array, want: Uint8Array, box: CropSpec): { psnr: number; deviation: number } {
-  let squared = 0
-  let deviation = 0
-  let count = 0
-  for (let y = box.y; y < box.y + box.height; y += 1) {
-    for (let x = box.x; x < box.x + box.width; x += 1) {
-      const offset = (y * FRAME.width + x) * 3
-      for (let channel = 0; channel < 3; channel += 1) {
-        const difference = got[offset + channel]! - want[offset + channel]!
-        squared += difference * difference
-        deviation += Math.abs(difference)
+  it('sees a flat fill as blurry, which is what an over-smoothed removal is', () => {
+    // The average of the hole, which is what a network that gave up produces - and what the eye
+    // reports as "the removed part is smeared".
+    let sum = 0
+    let count = 0
+    for (let y = 52; y < 108; y += 1) {
+      for (let x = 52; x < 108; x += 1) {
+        sum += texture(x, y)
         count += 1
       }
     }
-  }
-  const mse = squared / Math.max(1, count)
-  return { psnr: 10 * Math.log10((255 * 255) / Math.max(mse, 1e-9)), deviation: deviation / Math.max(1, count) }
-}
+    const average = sum / count
+    const sharp = measureFill(crop({ fill: (plain) => plain }))
+    const flat = measureFill(crop({ fill: () => average }))
+    expect(flat).not.toBeNull()
+    expect(sharp).not.toBeNull()
+    // No detail at all inside the hole, so the ratio is ~0 - and far under the floor the verdict
+    // uses, which is the only thing the number is for.
+    expect(flat!.detail).toBeLessThan(0.1)
+    expect(verdictOf(mergeQuality([flat!]))).toBe('soft')
+    expect(sharp!.detail).toBeGreaterThan(FILL_DETAIL_FLOOR)
+    expect(verdictOf(mergeQuality([sharp!]))).toBe('clean')
+  })
 
-describe.skipIf(!ENABLED)('what the AI removal actually puts back', () => {
-  it(
-    'fills a marked box with picture, not with a smear of the model square',
-    async () => {
-      const ort = await import('onnxruntime-web')
-      ort.env.logLevel = 'error'
-      ort.env.wasm.numThreads = 4
-      const session = await ort.InferenceSession.create(readFileSync(MODEL), {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'basic'
-      })
+  it('sees a fill that is 40 levels too bright as a visible patch', () => {
+    const measured = measureFill(crop({ fill: (plain) => plain + 40 }))
+    expect(measured).not.toBeNull()
+    // A 40-level step against a picture whose own neighbouring change is a couple of levels: the
+    // seam is many times the ceiling, while the detail stays near 1 because the fill is the
+    // picture, just brighter - which is the pair of numbers that says "sharp and wrongly toned".
+    expect(measured!.seam).toBeGreaterThan(FILL_SEAM_CEILING * 2)
+    expect(measured!.detail).toBeGreaterThan(FILL_DETAIL_FLOOR)
+    expect(verdictOf(mergeQuality([measured!]))).toBe('seam')
+  })
 
-      const clean = texturedFrame()
-      const marked = paint(clean, MARK)
-      // The margin the app asks for: as much real picture as the square can hold, cut back
-      // so the round trip stays at 1:1 pixels.
-      const margin = fitMargin(MARK, FRAME, { preferred: contextMargin(MARK) })
-      const plan = planWindow(MARK, FRAME, { margin })!
-      const scaled = {
-        width: Math.max(1, Math.round(plan.crop.width * plan.scale)),
-        height: Math.max(1, Math.round(plan.crop.height * plan.scale))
+  it('leaves the feathered collar out of the fill, so the ramp is not scored as blur', () => {
+    const hard = measureFill(crop({ fill: (plain) => plain }))
+    const soft = measureFill(crop({ fill: (plain) => plain, feather: 6 }))
+    expect(hard).not.toBeNull()
+    expect(soft).not.toBeNull()
+    // Both fills are the picture itself, so neither should be able to see its own edge: the
+    // feathered one is measured where the ramp ends, and because a ramp pixel is a mix rather
+    // than a step, it comes out no worse than the hard-edged one. That is the whole reason the
+    // feather exists, and reading the raw bytes instead of the composite scored it higher.
+    expect(soft!.detail).toBeCloseTo(hard!.detail!, 1)
+    expect(soft!.inside).toBe(hard!.inside)
+    expect(soft!.seam).toBeLessThanOrEqual(hard!.seam!)
+    expect(soft!.seam).toBeLessThan(FILL_SEAM_CEILING)
+  })
+
+  it('refuses to judge a flat picture rather than dividing by nothing', () => {
+    // A still, single-colour background: the ring has no detail and no gradient, so "is the fill
+    // as sharp as the picture?" has no answer. Saying so is the honest reply; returning infinity
+    // would read as a perfect fill and a number nobody could act on.
+    const width = 120
+    const height = 120
+    const plain = new Uint8ClampedArray(width * height * 4)
+    const patched = new Uint8ClampedArray(width * height * 4)
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4
+        plain[offset] = plain[offset + 1] = plain[offset + 2] = 100
+        plain[offset + 3] = 255
+        const hole = x >= 40 && x < 80 && y >= 40 && y < 80
+        patched[offset] = patched[offset + 1] = patched[offset + 2] = hole ? 140 : 100
+        patched[offset + 3] = hole ? 255 : 0
       }
-      expect(plan.scale).toBe(1)
+    }
+    const measured = measureFill({ width, height, patched, plain })
+    expect(measured).not.toBeNull()
+    expect(measured!.detail).toBeNull()
+    expect(measured!.seam).toBeNull()
+    expect(hasQuality(mergeQuality([measured!]))).toBe(false)
+    expect(verdictOf(mergeQuality([measured!]))).toBe('unknown')
+  })
 
-      const window = buildWindow(marked, plan, scaled)
-      const area = AI_INPUT * AI_INPUT
-      const image = new Float32Array(area * 3)
-      for (let index = 0; index < area; index += 1) {
-        image[index] = window[index * 3]! / 255
-        image[area + index] = window[index * 3 + 1]! / 255
-        image[area * 2 + index] = window[index * 3 + 2]! / 255
+  it('answers nothing for a crop with no fill in it at all', () => {
+    const empty = crop({ fill: (plain) => plain })
+    for (let index = 3; index < empty.patched.length; index += 4) empty.patched[index] = 0
+    expect(measureFill(empty)).toBeNull()
+    expect(hasQuality(mergeQuality([]))).toBe(false)
+    expect(verdictOf(mergeQuality([]))).toBe('unknown')
+  })
+
+  it('will not judge a fill with no untouched picture beside it', () => {
+    // A window entirely inside the mark: there is nothing left to compare against, so it says so
+    // rather than inventing a number from the few pixels it has.
+    const width = 60
+    const height = 60
+    const plain = new Uint8ClampedArray(width * height * 4)
+    const patched = new Uint8ClampedArray(width * height * 4)
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4
+        const value = Math.max(0, Math.min(255, texture(x, y)))
+        plain[offset] = plain[offset + 1] = plain[offset + 2] = value
+        plain[offset + 3] = 255
+        patched[offset] = patched[offset + 1] = patched[offset + 2] = value
+        patched[offset + 3] = 255
       }
-      // The mask is the marked box *plus* the few pixels past it, as the worker sends it.
-      // `boxInModel` reads its box in the window's coordinates, which is where `plan.box`
-      // lives - the same space the mask is defined in.
-      const modelBox = boxInModel(plan, plan.box)
-      const grown = growBox(modelBox, AI_MASK_GROW, AI_INPUT)
-      const mask = new Float32Array(area)
-      for (let y = grown.y; y < grown.y + grown.height; y += 1) {
-        for (let x = grown.x; x < grown.x + grown.width; x += 1) {
-          if (x < 0 || y < 0 || x >= AI_INPUT || y >= AI_INPUT) continue
-          mask[y * AI_INPUT + x] = 1
-        }
-      }
+    }
+    expect(measureFill({ width, height, patched, plain })).toBeNull()
+  })
+})
 
-      const names = [...session.inputNames]
-      const maskSlot = names.find((name) => /mask/i.test(name)) ?? names[1]!
-      const imageSlot = names.find((name) => name !== maskSlot) ?? names[0]!
-      const startedAt = Date.now()
-      const result = await session.run({
-        [imageSlot]: new ort.Tensor('float32', image, [1, 3, AI_INPUT, AI_INPUT]),
-        [maskSlot]: new ort.Tensor('float32', mask, [1, 1, AI_INPUT, AI_INPUT])
-      })
-      const seconds = (Date.now() - startedAt) / 1000
-      const filled = result[session.outputNames[0]!]!.data as Float32Array
+describe('combining several windows', () => {
+  it('weights each window by how much of the frame it painted', () => {
+    const big: FillSample = { detail: 1, seam: 0.1, inside: 900 }
+    const small: FillSample = { detail: 0, seam: 0.1, inside: 100 }
+    const merged = mergeQuality([big, small])
+    expect(merged.detail).toBeCloseTo(0.9, 5)
+    expect(merged.windows).toBe(2)
+  })
 
-      const fixed = composite(marked, plan, filled, (x, y) => {
-        const read = modelReadback({ x, y }, plan)
-        return { x: read.x, y: read.y }
-      })
-      // The readback this replaces: no padding, so a padded window reads its edge strip.
-      const smear = composite(marked, plan, filled, (x, y) => ({ x: x * plan.scale, y: y * plan.scale }))
-      // And no removal at all, as the floor: what the mark itself costs.
-      const untouched = score(marked, clean, MARK)
-      const smearScore = score(smear, clean, MARK)
-      const fixedScore = score(fixed, clean, MARK)
+  it('folds one batch into the next without forgetting how many windows each stood for', () => {
+    const first = mergeQuality([{ detail: 1, seam: null, inside: 300 }])
+    const second = mergeQuality([{ detail: 0, seam: null, inside: 100 }])
+    const run = mergeQuality([first, second])
+    expect(run.detail).toBeCloseTo(0.75, 5)
+    expect(run.windows).toBe(2)
+    expect(run.weight).toBe(400)
+  })
 
-      console.log(
-        [
-          `window ${plan.crop.width}x${plan.crop.height} at scale ${plan.scale}, pad ${plan.pad.left}/${plan.pad.top}`,
-          `marked box would score ${untouched.psnr.toFixed(1)} dB`,
-          `old readback (edge smear): ${smearScore.psnr.toFixed(1)} dB, mean error ${smearScore.deviation.toFixed(1)}`,
-          `this build: ${fixedScore.psnr.toFixed(1)} dB, mean error ${fixedScore.deviation.toFixed(1)}`,
-          `inference ${seconds.toFixed(1)}s for a ${AI_INPUT}x${AI_INPUT} frame`
-        ].join('\n')
-      )
+  it('leaves an unknown half out of the average instead of counting it as perfect', () => {
+    const merged = mergeQuality([
+      { detail: null, seam: 0.2, inside: 400 },
+      { detail: 0.8, seam: null, inside: 100 }
+    ])
+    expect(merged.detail).toBeCloseTo(0.8, 5)
+    expect(merged.seam).toBeCloseTo(0.2, 5)
+    expect(hasQuality(merged)).toBe(true)
+    expect(verdictOf(merged)).toBe('clean')
+  })
 
-      // The fix has to be a real improvement, not a rounding difference: the fill must beat
-      // the smear by a wide margin, and it must be closer to the picture than the mark was.
-      expect(fixedScore.psnr).toBeGreaterThan(smearScore.psnr + 6)
-      expect(fixedScore.psnr).toBeGreaterThan(untouched.psnr)
-    },
-    900_000
-  )
+  it('says nothing at all when no window could be judged', () => {
+    expect(mergeQuality([{ detail: null, seam: null, inside: 10 }])).toEqual({
+      detail: null,
+      seam: null,
+      windows: 0,
+      weight: 0
+    })
+    expect(mergeQuality([{ detail: 0.9, seam: 0.1, inside: 0 }])).toEqual({
+      detail: null,
+      seam: null,
+      windows: 0,
+      weight: 0
+    })
+  })
+})
+
+describe('what the numbers read as', () => {
+  const quality = (detail: number | null, seam: number | null): FillQuality => ({ detail, seam, windows: 1, weight: 100 })
+
+  it('reports a blurry fill as soft, and blur wins over a seam', () => {
+    expect(verdictOf(quality(FILL_DETAIL_FLOOR - 0.01, 0))).toBe('soft')
+    expect(verdictOf(quality(FILL_DETAIL_FLOOR - 0.01, FILL_SEAM_CEILING + 0.1))).toBe('soft')
+    expect(verdictOf(quality(FILL_DETAIL_FLOOR, FILL_SEAM_CEILING + 0.01))).toBe('seam')
+  })
+
+  it('calls a fill that matches its surroundings clean', () => {
+    expect(verdictOf(quality(1, 0))).toBe('clean')
+    expect(verdictOf(quality(0.9, 0.2))).toBe('clean')
+  })
+
+  it('renders both numbers, and a dash where one could not be measured', () => {
+    expect(formatQuality(quality(0.916, 0.084))).toBe('detail 0.92, edge 0.08')
+    expect(formatQuality(quality(null, 0.2))).toBe('detail -, edge 0.20')
+  })
+})
+
+describe('the ring', () => {
+  it('is stated once, so the measurement and its comment cannot disagree', () => {
+    expect(RING_WIDTH).toBeGreaterThan(0)
+  })
 })

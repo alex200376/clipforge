@@ -288,8 +288,19 @@ export function PreviewPane({
               onEnded={() => onPlayingChange(false)}
             />
 
+            {/*
+              `text-foreground`, not the default variant's own ink: this button overrides the
+              background it was drawn for. A primary button's text is chosen to sit on
+              `--primary`, and the moment the surface became `--panel` at 82% the ink stopped
+              matching it - in shadcn's dark theme both came out at oklch(0.205), so the label
+              and the play glyph were painted in the button's own colour (1.04:1, measured) and
+              the button looked empty. Daylight had the same fault, white on white.
+            */}
             {!playing && (
-              <Button className="absolute top-1/2 left-1/2 h-12 -translate-x-1/2 -translate-y-1/2 gap-2.5 rounded-full border border-[color-mix(in_oklab,var(--accent-soft)_50%,transparent)] bg-[color-mix(in_oklab,var(--panel)_82%,transparent)] px-5" onClick={onTogglePlay}>
+              <Button
+                className="absolute top-1/2 left-1/2 h-12 -translate-x-1/2 -translate-y-1/2 gap-2.5 rounded-full border border-[color-mix(in_oklab,var(--accent-soft)_50%,transparent)] bg-[color-mix(in_oklab,var(--panel)_82%,transparent)] px-5 text-foreground"
+                onClick={onTogglePlay}
+              >
                 <Play className="size-4" />
                 {t('preview.play')}
               </Button>

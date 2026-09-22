@@ -221,7 +221,14 @@ echo   Writing the release notes...
 if /i "%SKIP_NOTES%"=="1" (
     echo         Skipped ^(SKIP_NOTES=1^).
 ) else (
-    node "scripts\release-footer.mjs" --version v!VERSION! --installer "!ARTIFACT!" --signature-file "release\signature.txt" --out "release\.release-notes.md"
+    rem A hand-written body wins when one is waiting for this version. The generated notes are a
+    rem list of commit subjects, and a release that lands as one commit - which is what a run of
+    rem this script produces - has exactly one of them. `release\.notes-<version>.md` is where the
+    rem real notes go, and it was previously applied by hand after publishing with `gh release
+    rem edit`, which is the step this replaces.
+    set "NOTES_BODY="
+    if exist "release\.notes-!VERSION!.md" set "NOTES_BODY=--body release\.notes-!VERSION!.md"
+    node "scripts\release-footer.mjs" --version v!VERSION! --installer "!ARTIFACT!" --signature-file "release\signature.txt" !NOTES_BODY! --out "release\.release-notes.md"
     if errorlevel 1 goto :notes_failed
     where gh >nul 2>nul
     if errorlevel 1 (

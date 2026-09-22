@@ -203,6 +203,15 @@ export function InstallCard({
         </div>
       )}
 
+      {/*
+       * The per-tool rows are only worth their height while something is happening: a
+       * finished or failed tool has a phase and an error to report, and a running one has a
+       * bar. Before the install starts they would be three rows of "Queued" under a header
+       * that already names the missing tools, in the workspace's own column - 90-odd pixels
+       * spent saying nothing. In Settings they stay, because it is the only place a user can
+       * check a specific tool.
+       */}
+      {(active || failed > 0 || cancelled || variant === 'compact') && (
       <ul className="flex flex-col gap-2">
         {tools.map((tool) => (
           <li
@@ -228,6 +237,7 @@ export function InstallCard({
           </li>
         ))}
       </ul>
+      )}
 
       {!active && summary?.error && failed === 0 && (
         <p className="text-xs text-destructive">{errorMessage(summary.error)}</p>

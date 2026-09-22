@@ -1,6 +1,7 @@
-import { ClipboardPaste, FilePlus2, Link2, Keyboard } from 'lucide-react'
+import { ClipboardPaste, FilePlus2, FileVideo, Link2, Keyboard } from 'lucide-react'
 
 import { cn } from '../lib/utils'
+import { formatTime } from '../format'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -17,6 +18,8 @@ interface Props {
   onPaste: () => void
   onShortcuts: () => void
   status: Status
+  /** Name and length of the open clip, for the chip on the right. */
+  source: { name: string; duration: number } | null
   /** Short-lived confirmation such as "copied to the clipboard". */
   notice: string | null
   busy: boolean
@@ -40,6 +43,7 @@ export function TopBar({
   onPaste,
   onShortcuts,
   status,
+  source,
   notice,
   busy,
   maximized,
@@ -51,7 +55,10 @@ export function TopBar({
     // The whole row is a drag region; every control inside opts back out through the
     // base rule in the stylesheet, so the gaps between the buttons are what grabs the
     // window and the controls still take their own clicks.
-    <div className={cn('flex items-center gap-2 border-b border-border px-4 py-3', drag && 'drag')}>
+    <div
+      data-slot="top-bar"
+      className={cn('flex items-center gap-2 border-b border-border px-4 py-3', drag && 'drag')}
+    >
       <Input
         className="min-w-0 flex-[2_1_320px] font-mono text-xs"
         value={url}
@@ -111,6 +118,26 @@ export function TopBar({
       {/* Takes the slack the URL field leaves. It is a plain div, so unlike the buttons
           around it the whole area stays draggable - this is the bar's main grab handle. */}
       <div className="flex min-w-0 flex-[1_1_80px] items-center justify-end gap-2.5">
+        {/*
+         * What is open.
+         *
+         * This used to be a row of its own under this bar - a full line of the workspace
+         * column, plus the 14px gap above and below it, to say four words. Name and length
+         * are worth having on screen at all times; they are not worth 42px of the preview.
+         * The name truncates rather than wraps or pushes, and the whole of it is the chip's
+         * tooltip, because a long name is the normal case rather than the exception.
+         */}
+        {source && (
+          <span
+            data-slot="clip-chip"
+            className="flex min-w-0 items-center gap-1.5 rounded-md border border-border-soft bg-elevated px-2 py-0.5 text-xs text-soft"
+            title={`${source.name} · ${formatTime(source.duration)}`}
+          >
+            <FileVideo className="size-3.5 shrink-0 text-brand" />
+            <span className="min-w-0 max-w-[16rem] truncate">{source.name}</span>
+            <span className="shrink-0 tabular-nums text-dim">{formatTime(source.duration)}</span>
+          </span>
+        )}
         {notice && (
           <span className="truncate text-xs whitespace-nowrap text-accent-soft motion-safe:animate-[notice-in_160ms_ease]">
             {notice}

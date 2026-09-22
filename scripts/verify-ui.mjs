@@ -198,7 +198,7 @@ socket.addEventListener('message', (event) => {
   }
 })
 
-const send = (method, params = {}) =>
+const send = (method, params = {}, timeoutMs = 90_000) =>
   new Promise((resolve, reject) => {
     const id = nextId
     nextId += 1
@@ -209,7 +209,7 @@ const send = (method, params = {}) =>
         pending.delete(id)
         reject(new Error(`${method} timed out`))
       }
-    }, 90_000)
+    }, timeoutMs)
   })
 
 const evaluate = async (expression) => {
@@ -297,9 +297,32 @@ const key = async (keyName, modifiers = 0) => {
 const resize = (width, height) =>
   send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
 
+/**
+ * A screenshot, and none of the suite rests on one.
+ *
+ * The screenshots are the contact sheet's input, not its assertions, and this host's compositor
+ * is occasionally slow to hand one over - a capture that timed out used to end the whole run,
+ * which is a bad trade: the checks after it were never run. So each attempt is bounded, the
+ * second one asks for the renderer's own view rather than the composited surface, and a name
+ * that still will not capture is recorded as a failure of its own.
+ */
 const shot = async (name) => {
-  const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
-  writeFileSync(path.join(SHOTS, `${name}.png`), Buffer.from(data, 'base64'))
+  // The composited surface first: it is what the window actually looks like. The renderer's own
+  // view is the fallback, not the default - a capture from it is a different picture.
+  const attempts = [
+    { format: 'png', captureBeyondViewport: false },
+    { format: 'png', captureBeyondViewport: false, fromSurface: false }
+  ]
+  for (const params of attempts) {
+    try {
+      const { data } = await send('Page.captureScreenshot', params, 25_000)
+      writeFileSync(path.join(SHOTS, `${name}.png`), Buffer.from(data, 'base64'))
+      return
+    } catch {
+      // Try the other way of asking.
+    }
+  }
+  record(`the ${name} screenshot could not be captured`, false, 'the compositor never handed one over')
 }
 
 /** What the window says about its own layout: nothing clipped, nothing off the edge. */
@@ -380,6 +403,166 @@ record(
   `${before.titleText} · header=${before.header} icon=${before.icon} description=${before.description}`
 )
 
+// ---------------------------------------------------------------- 2. the notices
+// The workspace used to spend its own column on notices: about 124px for an update card,
+// about 140px for the remembered clip, and a 28px row for the clip that was open - between
+// them, on a 684px-tall window, over 40% of the app. They are one stack in the corner now,
+// and these are the checks that keep it that way: what the column contains, where a card
+// lands, and that a card costs the flow nothing at all.
+const noticeGeometry = () =>
+  evaluate(`(() => {
+    const box = (el) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), w: Math.round(r.width), h: Math.round(r.height) }
+    }
+    const anchor = document.querySelector('[data-slot="notice-anchor"]')
+    const workspace = document.querySelector('[data-slot="workspace"]')
+    const bar = document.querySelector('[data-slot="top-bar"]')
+    const grid = document.querySelector('[data-slot="workspace-grid"]')
+    const exportButton = [...document.querySelectorAll('button')].find((el) => /export clip|匯出/i.test((el.textContent || '').trim()))
+    return {
+      anchor: box(anchor),
+      cards: [...document.querySelectorAll('[data-slot="toast"]')].map((el) => ({
+        kind: el.getAttribute('data-notice') || '?',
+        ...box(el),
+        lines: el.querySelectorAll('li').length,
+        title: (el.querySelector('[data-slot="toast-title"]')?.textContent || '').trim().slice(0, 40),
+        description: (el.querySelector('[data-slot="toast-description"]')?.textContent || '').trim().slice(0, 60),
+        actions: [...el.querySelectorAll('[data-slot="toast-action"]')].map((el) => (el.textContent || '').trim()),
+        close: Boolean(el.querySelector('[data-slot="toast-close"]'))
+      })),
+      alerts: workspace ? workspace.querySelectorAll('[data-slot="alert"]').length : -1,
+      // Anything but the bar, the grid and the log would be a notice back in the flow, which
+      // is the whole thing this change is about.
+      flow: workspace ? [...workspace.children].map((el) => el.getAttribute('data-slot') || el.className.slice(0, 20)) : [],
+      // One flex gap (14px) between the bar and the grid, now that the media row is gone.
+      // It used to be 14 + a 28px row + another 14.
+      barToGrid: bar && grid ? Math.round(grid.getBoundingClientRect().top - bar.getBoundingClientRect().bottom) : null,
+      exportButton: box(exportButton)
+    }
+  })()`)
+
+const firstRun = await noticeGeometry()
+// Named rather than "the first one": a fresh profile raises the leftover-install card too when
+// this machine has an older ClipForge in Program Files, and which of the two is raised first is
+// an IPC round trip's worth of luck.
+const guide = firstRun.cards.find((card) => card.kind === 'guide') ?? null
+record(
+  'the first-run guide is a card in the corner, four lines instead of a card in the column',
+  Boolean(guide) && guide.lines === 3 && guide.actions.length >= 1 && guide.close,
+  JSON.stringify(guide)
+)
+record(
+  'no notice is left in the workspace column',
+  firstRun.alerts === 0 && firstRun.flow.length <= 3,
+  `${firstRun.alerts} alert(s) · flow=[${firstRun.flow.join(', ')}]`
+)
+record(
+  'the column starts one gap below the bar',
+  firstRun.barToGrid !== null && firstRun.barToGrid <= 20,
+  `${firstRun.barToGrid}px (was 56px with the media row)`
+)
+record(
+  'the card is anchored bottom-right of the column',
+  Boolean(guide && firstRun.anchor) &&
+    firstRun.anchor.right - guide.right <= 40 &&
+    firstRun.anchor.bottom - guide.bottom <= 40 &&
+    guide.left >= firstRun.anchor.left &&
+    guide.top >= firstRun.anchor.top,
+  guide && firstRun.anchor ? `card=${guide.right},${guide.bottom} anchor=${firstRun.anchor.right},${firstRun.anchor.bottom}` : 'no card'
+)
+record(
+  'a notice never covers the export button',
+  Boolean(guide && firstRun.exportButton) &&
+    !(
+      guide.left < firstRun.exportButton.right &&
+      guide.right > firstRun.exportButton.left &&
+      guide.top < firstRun.exportButton.bottom &&
+      guide.bottom > firstRun.exportButton.top
+    ),
+  guide && firstRun.exportButton ? `card ${guide.left}-${guide.right}, button ${firstRun.exportButton.left}-${firstRun.exportButton.right}` : 'missing box'
+)
+
+await shot('notice-corner')
+
+// ---------------------------------------------------------------- 1b. the corner follows to Settings
+/*
+ * The stack used to live inside the workspace column, which the Settings page replaces - so an
+ * update that finished downloading while the page was open was invisible until the user went
+ * back. It is anchored to the save row now, and this measures exactly that: the same card, on
+ * the other page, in a corner that cannot cover the button that commits the page.
+ *
+ * Left to the end of this run the cards are long gone, so it is done here, while the guide is
+ * still up and answering it has not been asked.
+ */
+const toSettings = await pressLabelled('^(Settings|設定)$')
+await sleep(700)
+const settingsCorner = await evaluate(`(() => {
+  const box = (el) => {
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { left: Math.round(r.left), top: Math.round(r.top), right: Math.round(r.right), bottom: Math.round(r.bottom) }
+  }
+  const card = document.querySelector('[data-notice="guide"]') ?? document.querySelector('[data-notice]')
+  return {
+    onSettings: Boolean(document.querySelector('[data-slot="settings-bar"]')),
+    bar: box(document.querySelector('[data-slot="settings-bar"]')),
+    viewport: box(document.querySelector('[data-slot="toast-viewport"]')),
+    card: box(card),
+    kind: card ? card.getAttribute('data-notice') : null,
+    width: window.innerWidth
+  }
+})()`)
+// The same card, by name: the guide is the sticky one a fresh profile raises, and comparing it
+// to what the workspace showed is what makes this "the corner followed" rather than "a card".
+const expectedKind = guide ? guide.kind : (firstRun.cards[0]?.kind ?? null)
+record(
+  'the notice corner follows to the settings page',
+  toSettings.pressed && settingsCorner.onSettings && settingsCorner.card !== null && settingsCorner.kind === expectedKind,
+  `${settingsCorner.kind ?? 'no card'} on settings=${settingsCorner.onSettings}, expected ${expectedKind ?? 'none'}`
+)
+record(
+  'a notice on the settings page cannot cover the save row',
+  Boolean(settingsCorner.card && settingsCorner.bar) && settingsCorner.card.bottom <= settingsCorner.bar.top,
+  settingsCorner.card && settingsCorner.bar
+    ? `card ends at ${settingsCorner.card.bottom}, save row starts at ${settingsCorner.bar.top}`
+    : 'missing box'
+)
+await shot('notice-settings-corner')
+await key('Escape')
+await sleep(700)
+const backOnWorkspace = await evaluate(`!document.querySelector('[data-slot="settings-bar"]')`)
+record('Escape leaves the settings page, not the app', backOnWorkspace, backOnWorkspace ? 'back on the workspace' : 'still on settings')
+
+// The version in the rail is read from the app, not written in a dictionary. It said v0.1.0
+// on every build up to 0.4.7, because that is what a translation file said.
+const rail = await evaluate(`(() => ({
+  version: (document.querySelector('[data-slot="rail-version"]')?.textContent || '').trim(),
+  control: (() => {
+    const el = document.querySelector('[data-slot="rail-update"]')
+    return el ? { tag: el.tagName, label: (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 40) } : null
+  })()
+}))()`)
+record(
+  'the rail prints the version the app is running',
+  /v\d+\.\d+\.\d+/.test(rail.version) && !/v0\.1\.0/.test(rail.version),
+  rail.version || 'no version line'
+)
+// `CLIPFORGE_FORCE_UPDATE` makes an unpackaged run report a state it otherwise cannot
+// reach, so the same script covers both the quiet rail and the one with something to do.
+const forced = (process.env.CLIPFORGE_FORCE_UPDATE ?? '').trim().toLowerCase()
+if (forced.length > 0) {
+  record('a forced update shows up in the rail', rail.control !== null, JSON.stringify(rail.control))
+  await shot('notice-rail-update')
+} else {
+  record(
+    'the rail says nothing when there is no update to talk about',
+    rail.control === null,
+    rail.control ? JSON.stringify(rail.control) : 'quiet'
+  )
+}
+
 // ---------------------------------------------------------------- 2. the drag contract
 const drag = await evaluate(`(() => {
   const region = (el) => (getComputedStyle(el).getPropertyValue('app-region') || getComputedStyle(el).getPropertyValue('-webkit-app-region')).trim()
@@ -411,6 +594,20 @@ await resize(1440, 900)
 await sleep(500)
 
 // ---------------------------------------------------------------- 3. a real import
+// The guide's own button, which is also the check that a sticky notice answers its question
+// and then goes: the rail's update card, when one is forced, is the only one left.
+const guideDismissed = await pressLabelled('^(Got it|知道了)$')
+await sleep(500)
+const leftAfterGuide = await evaluate(`(() => ({
+  guide: Boolean(document.querySelector('[data-notice="guide"]')),
+  kinds: [...document.querySelectorAll('[data-slot="toast"]')].map((el) => el.getAttribute('data-notice'))
+}))()`)
+record(
+  'the guide card goes when its button is pressed',
+  guideDismissed.pressed && !leftAfterGuide.guide,
+  `${guideDismissed.name ?? 'no button'} · left: [${leftAfterGuide.kinds.join(', ')}]`
+)
+
 // Typed through the editor rather than poked into the DOM, so React's own change tracking
 // sees it - a value written with the prototype setter leaves the field controlled by React
 // and the Resolve button disabled, which reads as "the import is broken" when it is not.
@@ -431,6 +628,43 @@ record('the link field takes the URL', typed.value === CLIP_URL, JSON.stringify(
 record('a typed URL enables Resolve', typed.disabled === false, `disabled=${typed.disabled}`)
 const pressed = await pressLabelled('^(Resolve|解析)')
 record('the resolve button is on the bar', pressed.pressed && /resolve|解析/i.test(pressed.name ?? ''), JSON.stringify(pressed))
+
+/*
+ * What just loaded, said in the corner.
+ *
+ * Waited for here rather than after the import finishes, and that is not a shortcut: the card
+ * reports the *load*, while the checks below wait for the filmstrip and the preview, which are
+ * seconds behind. Waiting for the end of the import would be testing a card that had already
+ * said its piece - and a six-second countdown is exactly what turns that into a race.
+ */
+const loadedCard = () =>
+  evaluate(`(() => {
+    const el = document.querySelector('[data-notice="clip-loaded"]')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return {
+      title: (el.querySelector('[data-slot="toast-title"]')?.textContent || '').trim(),
+      description: (el.querySelector('[data-slot="toast-description"]')?.textContent || '').trim(),
+      actions: [...el.querySelectorAll('[data-slot="toast-action"]')].length,
+      close: Boolean(el.querySelector('[data-slot="toast-close"]')),
+      box: { left: Math.round(r.left), top: Math.round(r.top), right: Math.round(r.right), bottom: Math.round(r.bottom) }
+    }
+  })()`)
+let announced = null
+try {
+  await waitFor(`Boolean(document.querySelector('[data-notice="clip-loaded"]'))`, 'the loaded clip to be announced', 60_000)
+  announced = await loadedCard()
+} catch {
+  announced = null
+}
+record(
+  'the clip that loaded is announced in the corner',
+  // No body on this one: a direct video link knows neither its length nor its size at the
+  // moment it loads, and the card leaves both out rather than printing `00:00:00.000`.
+  Boolean(announced) && announced.title.length > 0 && announced.close,
+  announced ? `${announced.title} · "${announced.description}"` : 'no [data-notice="clip-loaded"]'
+)
+
 let imported = false
 try {
   // The frame count is what proves the clip's geometry arrived; the page can also reach a
@@ -453,6 +687,71 @@ record('a link import fills the workspace', imported, `${loaded.meta} · ${loade
 record('the export button is live once a clip is in', imported && loaded.export === 'enabled', `export=${loaded.export}`)
 const after = await emptyStates()
 record("the preview's empty state gives way to the clip", imported && after.total === 0, `${after.total} left`)
+
+// The clip that is open, on the bar, where a row of the column used to name it. One line, and
+// it truncates rather than pushing the bar around.
+const chip = await evaluate(`(() => {
+  const el = document.querySelector('[data-slot="clip-chip"]')
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  const style = getComputedStyle(el)
+  return {
+    text: (el.textContent || '').trim().slice(0, 60),
+    title: el.getAttribute('title'),
+    h: Math.round(r.height),
+    w: Math.round(r.width),
+    lines: r.height / (parseFloat(style.fontSize) * 1.5),
+    overflow: el.scrollWidth - el.clientWidth
+  }
+})()`)
+record(
+  'the open clip is a chip on the bar, one line',
+  Boolean(chip) && /\d+:\d\d/.test(chip.text) && chip.h <= 26 && chip.lines < 1.6,
+  JSON.stringify(chip)
+)
+const stillFlowless = await noticeGeometry()
+record(
+  'the clip costs the column nothing',
+  stillFlowless.alerts === 0 && stillFlowless.flow.length <= 3 && stillFlowless.barToGrid !== null && stillFlowless.barToGrid <= 20,
+  `${stillFlowless.barToGrid}px · ${stillFlowless.alerts} alert(s) · cards=${stillFlowless.cards.length}`
+)
+/*
+ * A notice that only reports something leaves on its own.
+ *
+ * The countdown pauses while the pointer is over the card, or while focus is inside it - that
+ * is the primitive's design, and it is what makes it possible to click an action without the
+ * card disappearing mid-click. It also means this check has to let go first: the pointer is
+ * parked in the corner and anything focused inside the stack is blurred, so what is measured
+ * is the countdown and not whether a cursor happens to be resting on the card (which, on a
+ * real desktop, is wherever the user left it).
+ */
+await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 8, y: 8 })
+await evaluate(`(() => {
+  const stack = document.querySelector('[data-slot="toast-viewport"]')
+  const active = document.activeElement
+  if (stack && active && stack.contains(active)) active.blur()
+  return true
+})()`)
+// The window is brought forward first, and the reason is not ceremony: a Radix toast pauses its own
+// countdown while the document is not visible, so a harness that runs in the background (this one
+// is driven while a terminal has the focus) would watch a timer that is deliberately stopped and
+// report a product bug. It failed exactly once that way. The focus state is in the detail string so
+// the next failure says which of the two happened.
+await send('Page.bringToFront')
+await sleep(300)
+const watching = await evaluate(`document.hasFocus() && document.visibilityState === 'visible'`)
+let leftAlone = false
+try {
+  await waitFor(`!document.querySelector('[data-notice="clip-loaded"]')`, 'the notice to leave on its own', 20_000)
+  leftAlone = true
+} catch {
+  leftAlone = false
+}
+record(
+  'a notice that only reports something goes on its own',
+  leftAlone,
+  leftAlone ? 'gone' : `still there after 20s (page focused=${watching})`
+)
 
 // ---------------------------------------------------------------- 3b. the stage and the log
 // Three rules the migration to utilities dropped, and none of the failures looks like a missing
@@ -516,7 +815,11 @@ record(
   'the transport strip sits below the picture rather than over it',
   stage !== null &&
     stage.controls !== null &&
-    Math.abs(stage.area.h + stage.controls.h - stage.panel.h) <= 1 &&
+    // Three independently rounded measurements, so the sum can be a couple of pixels out
+    // without anything being wrong - the two panes are laid out as `stage - --transport-h`,
+    // and 3.75rem is not a whole number of pixels. The failure this catches was 56px of
+    // picture painted under the buttons, so the tolerance costs the check nothing.
+    Math.abs(stage.area.h + stage.controls.h - stage.panel.h) <= 3 &&
     (stage.pictureUnderControls ?? 99) <= 1,
   stage
     ? `box=${stage.area.h} + strip=${stage.controls?.h} = ${(stage.area.h + (stage.controls?.h ?? 0))} vs stage=${stage.panel.h} · picture runs ${stage.pictureUnderControls}px under it`
@@ -823,13 +1126,149 @@ for (const [width, height] of SIZES) {
       room ? `preview=${room.stage}px timeline=${room.timeline}px` : 'no preview stage or timeline'
     )
   }
+
+  /*
+   * What the timeline gives back on a short window, measured rather than assumed.
+   *
+   * Two things it can stop spending: the words on the two "set to playhead" buttons, which are
+   * what make the trim row wrap onto a second line at the window's minimum (28px one line, 65px
+   * two), and the ruler, which is read off rather than operated - the transport row and the trim
+   * row already carry both ends as numbers. Both are height variants on the elements themselves.
+   */
+  const room = await evaluate(`(() => {
+    const section = document.querySelector('.track')?.closest('section')
+    const stage = document.querySelector('[data-slot="preview-stage"]')
+    if (!section || !stage) return null
+    const row = section.children[3]
+    const ruler = section.querySelector('.track-ticks')
+    const labels = row ? [...row.querySelectorAll('span')].filter((el) => /set start|set end|設為/i.test(el.textContent || '')) : []
+    return {
+      preview: Math.round(stage.getBoundingClientRect().height),
+      timeline: Math.round(section.getBoundingClientRect().height),
+      trim: row ? Math.round(row.getBoundingClientRect().height) : null,
+      rulerShown: ruler ? getComputedStyle(ruler).display !== 'none' : null,
+      labelsShown: labels.some((el) => el.getBoundingClientRect().width > 0)
+    }
+  })()`)
+  record(
+    `the trim row stays on one line ${width}x${height}`,
+    room !== null && room.trim !== null && room.trim <= 34,
+    room ? `${room.trim}px (two lines is 65px), buttons ${room.labelsShown ? 'with their words' : 'icon only'}` : 'no trim row'
+  )
+  // 780 is the height at which the two "Set start" / "Set end" labels go. Above it they fit on
+  // one line and are worth having; below it they are the words that push the row onto a second.
+  record(
+    `the playhead buttons keep their words ${width}x${height}`,
+    room !== null && room.labelsShown === height > 780,
+    room ? `labels ${room.labelsShown ? 'shown' : 'hidden'} at ${height}px tall` : 'no trim row'
+  )
+  // 720 is the height at which the ruler goes: at and below it the timeline is a 42px track
+  // under a 15px strip of labels, and the preview above needs those 21px more than the ruler does.
+  record(
+    `the ruler gives way on a short window ${width}x${height}`,
+    room !== null && room.rulerShown === height > 720,
+    room ? `ruler ${room.rulerShown ? 'shown' : 'hidden'} at ${height}px tall` : 'no ruler'
+  )
+  record(
+    `the picture keeps its room ${width}x${height}`,
+    room !== null && room.preview >= 200,
+    room ? `preview=${room.preview}px timeline=${room.timeline}px` : 'no preview stage'
+  )
   await shot(`workspace-${width}x${height}`)
 }
 await resize(1440, 900)
 await sleep(400)
+
+/*
+ * The play button, in every theme.
+ *
+ * It is the one control whose ink and whose surface come from different tokens: the default
+ * variant paints it as a primary button, and the preview overrides that background with a
+ * translucent panel so the picture shows through. In shadcn's dark theme both landed on
+ * oklch(0.205) - a play button drawn in its own colour, measured at 1.04:1 - and daylight had
+ * the same fault with white ink on a white panel. Nothing else in the app does this, so this is
+ * the check that keeps it from happening again.
+ */
+const PLAY_CONTRAST = `(() => {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 1
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  const parse = (value) => {
+    ctx.clearRect(0, 0, 1, 1)
+    ctx.fillStyle = value
+    ctx.fillRect(0, 0, 1, 1)
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data
+    return { r, g, b, a: a / 255 }
+  }
+  const over = (top, bottom) => ({
+    r: top.r * top.a + bottom.r * (1 - top.a),
+    g: top.g * top.a + bottom.g * (1 - top.a),
+    b: top.b * top.a + bottom.b * (1 - top.a),
+    a: 1
+  })
+  const luminance = ({ r, g, b }) => {
+    const channel = (value) => {
+      const c = value / 255
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+  }
+  const ratio = (a, b) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (high + 0.05) / (low + 0.05)
+  }
+  const backdrop = (el) => {
+    const chain = []
+    for (let node = el; node; node = node.parentElement) chain.unshift(node)
+    let painted = { r: 0, g: 0, b: 0, a: 1 }
+    for (const node of chain) {
+      const own = parse(getComputedStyle(node).backgroundColor)
+      if (own && own.a > 0) painted = over(own, painted)
+    }
+    return painted
+  }
+  const probe = (el) => {
+    if (!el) return null
+    const style = getComputedStyle(el)
+    const ink = parse(style.color)
+    const back = backdrop(el)
+    return {
+      ink: style.color,
+      back: 'rgb(' + [back.r, back.g, back.b].map((v) => Math.round(v)).join(',') + ')',
+      ratio: Math.round(ratio(over(ink, back), back) * 100) / 100
+    }
+  }
+  const inStage = (el) => Boolean(el.closest('[data-slot="preview-stage"]'))
+  const buttons = [...document.querySelectorAll('[data-slot="button"]')].filter(
+    (el) => inStage(el) && /play|pause/i.test((el.getAttribute('aria-label') || '') + ' ' + (el.textContent || ''))
+  )
+  return { theme: document.documentElement.dataset.theme, overlay: probe(buttons.find((el) => el.textContent.trim())), transport: probe(buttons.find((el) => !el.textContent.trim())) }
+})()`
+
+// The overlay only exists while the picture is paused, and the clip arrived playing.
+const ensurePaused = async () => {
+  const shown = await evaluate(`Boolean([...document.querySelectorAll('[data-slot="preview-stage"] [data-slot="button"]')].find((el) => el.textContent.trim().length > 1))`)
+  if (shown) return true
+  await pointerClick(`[...document.querySelectorAll('[data-slot="preview-transport"] [data-slot="button"]')].find((el) => /pause/i.test(el.getAttribute('aria-label') || ''))`)
+  await sleep(500)
+  return evaluate(`Boolean([...document.querySelectorAll('[data-slot="preview-stage"] [data-slot="button"]')].find((el) => el.textContent.trim().length > 1))`)
+}
+await ensurePaused()
+
 for (const theme of ['midnight', 'graphite', 'ember', 'aurora', 'daylight', 'shadcn']) {
   await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-  await sleep(300)
+  // Long enough for the button's own `transition-[background,color]` to land. Read too early, the
+  // computed colour is still the *previous* theme's - which is how a first pass at this measured
+  // shadcn and reported daylight's numbers, one theme behind all the way down the list.
+  await sleep(450)
+  const play = await evaluate(PLAY_CONTRAST)
+  record(
+    `the play button is legible in ${theme}`,
+    play !== null && play.overlay !== null && play.overlay.ratio >= 4.5 && play.transport !== null && play.transport.ratio >= 4.5,
+    play && play.overlay && play.transport
+      ? `overlay ${play.overlay.ratio}:1 (${play.overlay.ink} on ${play.overlay.back}) · transport ${play.transport.ratio}:1`
+      : 'no play button found'
+  )
   await shot(`workspace-${theme}-1440x900`)
 }
 // The settings page, at the same three sizes, in the default theme.
@@ -974,6 +1413,11 @@ for (const [width, height] of SIZES) {
   // Scrolled with real input rather than a scrollTop write, because a write would prove the
   // number moves while a wheel is what the user actually has.
   await evaluate(`document.querySelector('[data-slot="tabs"]').scrollTop = 0`)
+  // The pointer is moved to where the wheel is aimed first. Chromium routes a wheel event to
+  // whatever the pointer is *over*, not to the coordinates on the event, so a pointer parked
+  // somewhere else - which is what a previous check leaves behind - lands the wheel on the
+  // wrong element and scrolls nothing.
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(width / 2), y: Math.round(height / 2) })
   await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round(width / 2), y: Math.round(height / 2), deltaX: 0, deltaY: 4000 })
   await sleep(600)
   const scrolled = await settingsScroller()

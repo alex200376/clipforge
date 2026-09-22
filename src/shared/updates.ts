@@ -11,6 +11,8 @@
  * and here it can be tested without launching Electron.
  */
 
+import type { UpdateState } from './types'
+
 /** Anything longer than this is not a sentence, it is a payload. */
 const MAX_LENGTH = 220
 
@@ -149,6 +151,47 @@ export function postUpdateReclaim(options: {
  *
  * `undefined` means no check has finished yet, which is stale by definition.
  */
+/**
+ * A whole update state, forced from outside, for verification.
+ *
+ * `CLIPFORGE_FORCE_UPDATE=available|downloading|ready|error`, optionally with a percent
+ * (`downloading:42`). The rail's update control has four faces - a status line, a status line
+ * with a number, a real install button and a warning - and an unpackaged run can reach none
+ * of them, because a state only ever comes from a real feed. `verify:ui` drives all four
+ * through this.
+ *
+ * Pure, and here rather than in the updater, for the usual reason: it is a parser, and a
+ * parser that lives beside `app.whenReady()` can only be tested by launching Electron. The
+ * caller is what refuses to honour it in a packaged build.
+ *
+ * `error` means a *download* failure - the interesting one. A check failure is already
+ * reachable from the settings card without any hook at all.
+ */
+export function forcedUpdateState(raw: string | undefined, version: string): UpdateState | null {
+  const cleaned = (raw ?? '').trim().toLowerCase()
+  if (cleaned.length === 0) return null
+  const [kind, percentRaw] = cleaned.split(':')
+  if (kind !== 'available' && kind !== 'downloading' && kind !== 'ready' && kind !== 'error') return null
+  const percent = Number(percentRaw)
+  return {
+    status: kind,
+    version,
+    // A ready update is at 100 by definition - that is what `update-downloaded` reports - and
+    // a number in the variable cannot talk it out of that.
+    percent:
+      kind === 'ready'
+        ? 100
+        : kind === 'downloading'
+          ? Number.isFinite(percent)
+            ? Math.min(100, Math.max(0, percent))
+            : 42
+          : undefined,
+    phase: kind === 'error' ? 'download' : undefined,
+    error: kind === 'error' ? 'The download did not finish (forced for verification).' : undefined,
+    checkedAt: Date.now()
+  }
+}
+
 export function checkIsStale(checkedAt: number | undefined, now: number, maxAgeMs: number): boolean {
   if (checkedAt === undefined) return true
   const age = now - checkedAt

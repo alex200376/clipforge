@@ -3,7 +3,7 @@ import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'node:fs'
 
 import type { UpdateState } from '../shared/types'
-import { checkIsStale, condenseUpdaterError, isoReleaseDate, releaseNoteLines } from '../shared/updates'
+import { checkIsStale, condenseUpdaterError, forcedUpdateState, isoReleaseDate, releaseNoteLines } from '../shared/updates'
 import { loadSettings } from './settings'
 import { differentialBase } from './storage'
 
@@ -205,22 +205,37 @@ export function initUpdates(handlers: { emit: Emit; log: (line: string) => void 
     // exactly as a published release would, which is how `npm run verify:ui` checks that the
     // body is printed as text rather than parsed as markup.
     //
-    // The status stays `unsupported` on purpose: a seeded run must not raise the workspace's
-    // "restart to install" banner, or the checks that measure the workspace would be measuring
-    // a state no real unpackaged run can be in.
+    // The status stays `unsupported` on purpose: a seeded run must not raise anything the
+    // workspace can act on, or the checks that measure the workspace would be measuring a
+    // state no real unpackaged run can be in. The second hook below is the one that *does*
+    // raise a state, and it says so plainly.
+    const version = process.env.CLIPFORGE_UPDATE_VERSION || '9.9.9'
     const notes = process.env.CLIPFORGE_UPDATE_NOTES
     if (notes !== undefined && notes.length > 0) {
-      const version = process.env.CLIPFORGE_UPDATE_VERSION || '9.9.9'
       state = {
         status: 'unsupported',
         version,
         ...releaseInfo(version, { releaseNotes: notes, releaseDate: process.env.CLIPFORGE_UPDATE_DATE })
       }
     }
+    const forced = forcedUpdate(version)
+    if (forced) state = { ...state, ...forced }
     return
   }
 
   if (loadSettings().autoUpdate) scheduleFirstCheck()
+}
+
+/**
+ * The forced-update hook, refused where it must not apply.
+ *
+ * The parse itself is `forcedUpdateState` in `shared/updates.ts`, where it is testable without
+ * Electron. What lives here is the one rule that matters: a **packaged** build cannot be told
+ * that it has an update waiting by an environment variable, no matter who set it.
+ */
+function forcedUpdate(version: string): UpdateState | null {
+  if (app.isPackaged) return null
+  return forcedUpdateState(process.env.CLIPFORGE_FORCE_UPDATE, version)
 }
 
 /** Restarts the startup check after the preference is toggled on. */

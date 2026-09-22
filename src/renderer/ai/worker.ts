@@ -15,6 +15,15 @@
 import type * as Ort from 'onnxruntime-web/webgpu'
 
 import { AI_INPUT, AI_MASK_GROW, clampCoord, featherAlpha, growBox, modelReadback, patchRamp } from '../../shared/aiWindow'
+import {
+  FILL_DETAIL_FLOOR,
+  FILL_SEAM_CEILING,
+  formatQuality,
+  hasQuality,
+  measureFill,
+  mergeQuality
+} from './quality'
+import type { FillQuality, FillSample } from './quality'
 import { blendFill, meanChannelDifference, temporalWeight } from '../../shared/aiTemporal'
 import { patchReverseSlices, patchUnsupportedOpset } from '../../shared/onnxGraph'
 import type { CropSpec } from '../../shared/types'
@@ -23,13 +32,15 @@ import {
   decodeDenseDetections,
   decodeQueryDetections,
   detectionSettings,
-  detectStaticBlobs,
+  dominantBoxes,
+  groupRankedBoxes,
+  rankStaticBlobs,
+  relativeStrength,
   detectorLayout,
   type Detection,
   type DetectorLayout,
   expandBox,
   fromLetterbox,
-  groupBoxes,
   mergeCandidates,
   temporalConsensus
 } from './detect'
@@ -622,7 +633,9 @@ async function runWithFallback<T>(which: 'lama' | 'detector', run: (session: Ses
  * is what makes "nothing outside the box changes" an exact statement rather than a
  * hopeful one.
  */
-async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array[]; note?: string }> {
+async function inpaint(
+  request: AiInpaintRequest
+): Promise<{ patches: Uint8Array[]; note?: string; quality?: FillQuality }> {
   if (!lama) throw new Error('The inpainting model is not loaded yet.')
   const { crop, box, modelBox, scale, pad, overlap, leading } = request.region
   const scaled = {
@@ -665,6 +678,8 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
   let reused = 0
   /** Frames whose fill was held partly still, which is the number that stops the boiling. */
   let eased = 0
+  /** One measurement per painted frame and window, averaged at the end. */
+  const samples: FillSample[] = []
   for (const bytes of request.frames) {
     const frameStarted = Date.now()
     const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]))
@@ -697,9 +712,28 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
       const filled = await runWithFallback('lama', (session) => runLama(session.ort, image, mask))
       const modelEnded = Date.now()
       spent.model += modelEnded - modelStarted
-      const target = patchCtx.createImageData(Math.max(1, crop.width), Math.max(1, crop.height))
+      const width = Math.max(1, crop.width)
+      const height = Math.max(1, crop.height)
+      const target = patchCtx.createImageData(width, height)
+      // The same crop with the fill taken back out, which is what the quality measurement compares
+      // the patch against: inside the mask the patch holds no untouched pixels at all, so the
+      // ring it has to match exists only here. Read through the same mapping as the fill, or the
+      // two buffers would describe different pixels and the "detail" ratio would be noise.
+      const plain = new Uint8ClampedArray(target.data.length)
       for (let y = 0; y < crop.height; y += 1) {
         for (let x = 0; x < crop.width; x += 1) {
+          // Undo the draw exactly: the window was placed at `pad` and scaled, so the
+          // readback has to add both back. Reading `x * scale` alone returned the
+          // replicated edge strip whenever the picture was padded at all.
+          const read = modelReadback({ x, y }, { scale, pad })
+          const mx = clampCoord(read.x, AI_INPUT)
+          const my = clampCoord(read.y, AI_INPUT)
+          const offset = (y * crop.width + x) * 4
+          const source = (my * AI_INPUT + mx) * 4
+          plain[offset] = pixels[source] ?? 0
+          plain[offset + 1] = pixels[source + 1] ?? 0
+          plain[offset + 2] = pixels[source + 2] ?? 0
+          plain[offset + 3] = 255
           // Two rules in one number. `featherAlpha` says which pixels this window replaces
           // outright and ramps the two just outside the box into the untouched picture;
           // `patchRamp` fades this window in over the one before it wherever a mark was cut
@@ -707,15 +741,8 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
           const alpha = Math.round(
             featherAlpha([box], x, y, request.feather) * patchRamp(box, x, y, { overlap, leading })
           )
-          const offset = (y * crop.width + x) * 4
           target.data[offset + 3] = alpha
           if (alpha === 0) continue
-          // Undo the draw exactly: the window was placed at `pad` and scaled, so the
-          // readback has to add both back. Reading `x * scale` alone returned the
-          // replicated edge strip whenever the picture was padded at all.
-          const read = modelReadback({ x, y }, { scale, pad })
-          const mx = clampCoord(read.x, AI_INPUT)
-          const my = clampCoord(read.y, AI_INPUT)
           target.data[offset] = toByte(sample(filled, 0, mx, my))
           target.data[offset + 1] = toByte(sample(filled, 1, mx, my))
           target.data[offset + 2] = toByte(sample(filled, 2, mx, my))
@@ -734,6 +761,10 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
           eased += 1
         }
       }
+      // Measured on the pixels that are about to be encoded, after the temporal blend, so the
+      // number describes the frame that ships rather than the network's first answer.
+      const sampleOfFrame = measureFill({ width, height, patched: target.data, plain })
+      if (sampleOfFrame) samples.push(sampleOfFrame)
       patchCtx.putImageData(target, 0, 0)
       const blob = await patch.convertToBlob({ type: 'image/png' })
       const painted = new Uint8Array(await blob.arrayBuffer())
@@ -753,11 +784,17 @@ async function inpaint(request: AiInpaintRequest): Promise<{ patches: Uint8Array
       `Inpainting: ${(spent.prep + spent.model + spent.compose + spent.reused) / count / 1000}s a frame over ${count} frame(s) - ${per(spent.model)}s in the network, ${per(spent.prep)}s reading the window, ${per(spent.compose)}s writing the fill back, ${reused} of ${count} frame(s) already known, ${eased} held steady against the frame before, on ${ortThreads} thread(s)`
     )
   }
+  // The quality of what was painted, in the log next to the speed: "it came out in two minutes"
+  // and "it came out clean" are the two questions, and the numbers answer the second one.
+  const quality = mergeQuality(samples)
+  if (hasQuality(quality)) {
+    notes.push(`Fill quality: ${formatQuality(quality)} over ${quality.windows} window(s) - ${quality.detail === null ? 'the picture around the fill is too flat to judge its sharpness' : quality.detail < FILL_DETAIL_FLOOR ? 'softer than the picture around it' : 'as sharp as the picture around it'}, ${quality.seam === null ? 'no nearby edge to judge a step against' : quality.seam > FILL_SEAM_CEILING ? 'with a visible edge where the fill meets the picture' : 'with no visible edge'}`)
+  }
   // Notes collected while painting - the GPU giving up on a kernel, most of all - travel
   // with the batch, because a load-time note would never be seen again.
   const note = notes.length > 0 ? notes.join(' · ') : undefined
   notes.length = 0
-  return { patches: out, note }
+  return { patches: out, note, quality: hasQuality(quality) ? quality : undefined }
 }
 
 /**
@@ -813,6 +850,22 @@ function detectWith(
   return []
 }
 
+/**
+ * How much weaker than the best still region another one may be and still be reported.
+ *
+ * It is a *relative* rule on purpose, because the absolute rank of a real mark changes with the
+ * picture: a logo on white paper and the same logo on a busy frame are the same watermark and
+ * very different numbers.
+ *
+ * Measured on the clip this was set against - a portrait video whose only mark is a banner across
+ * the bottom - the three still regions ranked 922 · 49 · 43, so the runner-up is 5% of the best
+ * and a rule at a half keeps the watermark and drops both. The margin is that wide because the
+ * comparison is against the picture *around* each region: a thing that held still while the
+ * picture moved is one measurement, and a thing that stands out against that picture as well is
+ * a much rarer one.
+ */
+const TEMPORAL_KEEP_RATIO = 0.5
+
 async function detect(request: AiDetectRequest): Promise<{ candidates: AiCandidate[]; note?: string }> {
   const bitmaps: ImageBitmap[] = []
   for (const frame of request.frames) {
@@ -851,7 +904,7 @@ async function detect(request: AiDetectRequest): Promise<{ candidates: AiCandida
   })
   // A few more than the export accepts, because the merge below can only reduce: asking for
   // exactly the cap would drop a piece of a line that then has nothing to join.
-  const temporalBoxes = detectStaticBlobs(
+  const stillRegions = rankStaticBlobs(
     luminance,
     small.width,
     small.height,
@@ -860,14 +913,23 @@ async function detect(request: AiDetectRequest): Promise<{ candidates: AiCandida
   // One more merge, in source pixels and at a scale the user would recognise: the words of
   // a handle come back from the detector as separate regions often enough that joining
   // them here is the difference between one box over the mark and three over its letters.
-  const temporal: AiCandidate[] = groupBoxes(
-    temporalBoxes.map((box) => toSource(box)),
+  const joined = groupRankedBoxes(
+    stillRegions.map((blob) => ({ box: toSource(blob.box), rank: blob.rank })),
     Math.max(2, Math.round(request.frame.width * 0.02))
-  ).map((group, index) => ({
-    box: group.box,
-    // Ordered by how far the mark stands out against the picture around it, so the best
-    // box is first and the cap keeps the ones that matter.
-    score: Math.max(0.2, 0.5 - index * 0.06),
+  )
+  // A watermark is the one thing here that stands out on its own, so what is not within
+  // `TEMPORAL_KEEP_RATIO` of the strongest region is picture that merely held still.
+  const dominant = relativeStrength(dominantBoxes(joined, TEMPORAL_KEEP_RATIO))
+  if (joined.length > dominant.length) {
+    notesHere.push(
+      `the motion analysis found ${joined.length} still region(s) and kept ${dominant.length}: ${joined.map((blob) => Math.round(blob.rank)).join(' · ')} by how far each stands out from the picture around it (best ${Math.round(Math.max(...joined.map((blob) => blob.rank)))})`
+    )
+  }
+  const temporal: AiCandidate[] = dominant.map((blob) => ({
+    box: blob.box,
+    // The strongest region is 1 by construction and everything else is its share of it, which
+    // is a statement about the clip: how much the best mark stands out against the runner-up.
+    score: blob.rank,
     source: 'temporal' as const
   }))
 

@@ -4,6 +4,10 @@ import {
   componentBoxes,
   decodeCombinedDetections,
   detectStaticBlobs,
+  dominantBoxes,
+  groupRankedBoxes,
+  rankStaticBlobs,
+  relativeStrength,
   decodeDenseDetections,
   decodeQueryDetections,
   detectionSettings,
@@ -589,5 +593,57 @@ describe('the built-in detector', () => {
     const mask = new Uint8Array(64 * 48)
     for (let index = 0; index < mask.length; index += 7) mask[index] = 1
     expect(componentBoxes(mask, 64, 48, options)).toHaveLength(0)
+  })
+})
+
+/**
+ * The ranking that comes out of the still-region detector, and the rule that says a clip has one
+ * watermark.
+ *
+ * These are the numbers behind the reported bug: a portrait clip with a single banner across the
+ * bottom had three still regions found, ranked 922 / 49 / 43, and all three were offered as
+ * watermarks - because the rank was computed and then thrown away, and the caller filled the gap
+ * with a counter (0.5, 0.44, 0.38...) that reached the user as "50% confidence".
+ */
+describe('the still-region ranking', () => {
+  const blob = (x: number, rank: number) => ({ box: { x, y: 0, width: 40, height: 20 }, rank })
+
+  it('carries the measurement out rather than dropping it', () => {
+    const frames = [new Uint8Array(64 * 48), new Uint8Array(64 * 48)]
+    const ranked = rankStaticBlobs(frames, 64, 48, detectionSettings(64, 48, 4))
+    // Whether it finds anything is the geometry tests' business; what matters here is that the
+    // shape is the ranked one and that the box-only helper agrees with it.
+    expect(ranked.every((entry) => typeof entry.rank === 'number')).toBe(true)
+    const boxes = detectStaticBlobs(frames, 64, 48, detectionSettings(64, 48, 4))
+    expect(boxes).toEqual(ranked.map((entry) => entry.box))
+  })
+
+  it('keeps the mark and drops the two regions that merely held still', () => {
+    // The measurement from the clip this was fixed against, at the ratio the worker uses.
+    const found = [blob(0, 922), blob(200, 49), blob(400, 43)]
+    expect(dominantBoxes(found, 0.5).map((entry) => entry.rank)).toEqual([922])
+    // A second mark of comparable strength survives: two real watermarks are two watermarks.
+    expect(dominantBoxes([blob(0, 922), blob(200, 700), blob(400, 43)], 0.5)).toHaveLength(2)
+  })
+
+  it('always answers with the best it found, however weak it is', () => {
+    const weak = [blob(0, 0.4), blob(200, 0.1)]
+    expect(dominantBoxes(weak, 0.5)).toHaveLength(1)
+    expect(dominantBoxes([blob(0, 0), blob(200, 0)], 0.5)).toHaveLength(1)
+    expect(dominantBoxes([], 0.5)).toEqual([])
+  })
+
+  it('reports strength as a share of the best, so the best is 1 by construction', () => {
+    const strengths = relativeStrength([blob(0, 922), blob(200, 49), blob(400, 43)]).map((entry) => Math.round(entry.rank * 100) / 100)
+    expect(strengths).toEqual([1, 0.05, 0.05])
+    expect(relativeStrength([])).toEqual([])
+  })
+
+  it('takes a group of boxes as strong as its strongest member, not as strong as its count', () => {
+    // Two words of one mark, and one separate mark beside them: the pair must not add up to more
+    // than the mark it is part of, or a broken-up line would outrank the watermark.
+    const grouped = groupRankedBoxes([blob(0, 300), blob(44, 250), blob(400, 900)], 6)
+    expect(grouped).toHaveLength(2)
+    expect(grouped.map((entry) => entry.rank).sort((a, b) => b - a)).toEqual([900, 300])
   })
 })

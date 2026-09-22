@@ -1,4 +1,5 @@
 import type { AiRegionPlan, CropSpec } from '../../shared/types'
+import type { FillQuality } from './quality'
 
 export interface AiLoadRequest {
   /** Echoed back so the client can match a reply to the call that made it. */
@@ -99,6 +100,14 @@ export interface AiInpaintResponse {
   patches: Uint8Array[]
   /** Anything worth saying that happened while painting, such as a fallback to the CPU. */
   note?: string
+  /**
+   * How clean the fill came out, measured on the pixels of this batch.
+   *
+   * Absent when nothing could be judged - a window with no untouched picture around it, or a
+   * batch that came back entirely from the reuse cache - because a number invented from nothing
+   * would be worse than the number being missing.
+   */
+  quality?: FillQuality
 }
 
 export interface AiDetectResponse {
