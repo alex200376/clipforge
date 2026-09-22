@@ -123,24 +123,37 @@ export function ActivityLog({ lines, onClear, onCopy }: Props): JSX.Element {
 
       {!collapsed && (
         <div
+          data-slot="activity-log"
           ref={containerRef}
           className={cn(
             'flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto px-3.5 pb-3 font-mono text-xs leading-relaxed',
-            // Height, not width, is the scarce dimension in a short window: the log gives
-            // space back to the preview and the timeline rather than pushing them out of
-            // the workspace.
-            '[@media(max-height:880px)]:max-h-[68px] [@media(max-height:780px)]:max-h-[60px] [@media(max-height:720px)]:max-h-[48px]'
+            // Height is the scarce dimension in a short window, so this is a share of the
+            // window rather than a fixed slice of it: three stepped caps of 68/60/48px used to
+            // sit here, and at 720px tall the log was 48px - under three lines, and *less than
+            // the fixed 80px it replaced*. The floor keeps it a panel rather than a strip; the
+            // ceiling keeps it from pushing the preview and the timeline out of the workspace,
+            // which is why the floor is 68 and not the 80 it replaced: at the window's own
+            // minimum a log that asked for 80 would have clipped the page, and the space came
+            // from the timeline's hint instead.
+            'max-h-[clamp(88px,15vh,200px)] min-h-[68px]'
           )}
         >
           {visible.length === 0 ? (
-            <div className="text-ghost">{rawOpen && raw.length === 0 ? t('log.noWarnings') : t('log.empty')}</div>
+            <div className="shrink-0 text-ghost">
+              {rawOpen && raw.length === 0 ? t('log.noWarnings') : t('log.empty')}
+            </div>
           ) : (
             visible.map((line) => (
               <div
                 key={line.id}
                 data-kind={line.kind === 'raw' ? rawSeverity(line.text) : line.kind}
                 className={cn(
-                  'flex gap-2.5 overflow-hidden whitespace-nowrap',
+                  // `shrink-0` is load-bearing. The panel is a flex column and a row carries
+                  // `overflow-hidden`, so its automatic minimum height is zero: without this,
+                  // a log longer than the box squeezed every line instead of scrolling - 43
+                  // lines of tool output compressed into 103px, each one 0.4px tall, which
+                  // reads as an empty log rather than as a crowded one.
+                  'flex shrink-0 gap-2.5 overflow-hidden whitespace-nowrap',
                   'data-[kind=error]:text-[var(--text-danger)]',
                   'data-[kind=warn]:text-[var(--text-warning)]',
                   'data-[kind=done]:text-[var(--text-success)]'

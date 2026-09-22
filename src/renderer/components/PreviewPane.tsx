@@ -115,6 +115,8 @@ export function PreviewPane({
 }: Props): JSX.Element {
   const { t } = useI18n()
   const panelRef = useRef<HTMLDivElement | null>(null)
+  /** The box the picture is letterboxed into: the panel minus the transport row. */
+  const areaRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<RegionDrag | null>(null)
   const [volume, setVolume] = useState(1)
   const [muted, setMuted] = useState(false)
@@ -128,22 +130,25 @@ export function PreviewPane({
   }, [])
 
   useEffect(() => {
-    const panel = panelRef.current
-    if (!panel) return
+    const area = areaRef.current
+    if (!area) return
     const measure = (): void => {
-      const rect = panel.getBoundingClientRect()
+      const rect = area.getBoundingClientRect()
       setPanelSize({ width: rect.width, height: rect.height })
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(measure)
-    observer.observe(panel)
+    observer.observe(area)
     return () => observer.disconnect()
-  }, [])
+  }, [preview])
 
   /**
-   * The video is letterboxed with `object-fit: contain`, so the picture area has
-   * to be derived from the source aspect rather than assumed to be the panel.
+   * The video is letterboxed with `object-fit: contain`, so the picture area has to be derived
+   * from the source aspect rather than assumed to be the box it sits in - and that box is the
+   * area above the transport row, not the whole panel. Deriving it from the panel drew every
+   * overlay against a picture 53px taller than the one on screen, because the bottom of the
+   * frame was painted underneath the controls.
    */
   const picture = useMemo(() => {
     if (!source || source.width <= 0 || source.height <= 0) return null
@@ -236,34 +241,66 @@ export function PreviewPane({
 
   return (
     <div
-      className="relative flex min-h-[var(--preview-min)] items-center justify-center overflow-hidden rounded-xl border border-border bg-stage"
+      data-slot="preview-stage"
+      // Fullscreen keeps the panel as the element that goes fullscreen, so the chrome it does
+      // not want there has to be undone per state rather than by a `.preview-panel` rule that
+      // no longer exists.
+      className="relative flex min-h-[var(--preview-min)] items-center justify-center overflow-hidden rounded-xl border border-border bg-stage [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:bg-void"
       ref={panelRef}
     >
       {preview ? (
         <>
-          <video
-            ref={videoRef}
-            src={preview.url}
-            playsInline
-            onError={(event) => onPlaybackError(event.currentTarget.error?.code ?? 0)}
-            onTimeUpdate={(event) => onTimeUpdate(event.currentTarget.currentTime)}
-            onPlay={() => onPlayingChange(true)}
-            onPause={() => onPlayingChange(false)}
-            onEnded={() => onPlayingChange(false)}
-          />
+          {/*
+            `w-full h-full` with `object-contain` is the geometry the overlay maths above
+            assumes: the frame is letterboxed inside the picture box, so `picture` is where the
+            picture actually lands and a crop or logo box drawn from it sits on the frame.
 
-          {!playing && (
-            <Button className="absolute top-1/2 left-1/2 h-12 -translate-x-1/2 -translate-y-1/2 gap-2.5 rounded-full border border-[color-mix(in_oklab,var(--accent-soft)_50%,transparent)] bg-[color-mix(in_oklab,var(--panel)_82%,transparent)] px-5" onClick={onTogglePlay}>
-              <Play className="size-4" />
-              {t('preview.play')}
-            </Button>
-          )}
+            Without it the element is sized by its own aspect - Tailwind's preflight gives a
+            bare `video` a `max-width: 100%` and `height: auto` - so a portrait clip renders
+            taller than the stage and is clipped by it: a magnified crop of the top of the
+            frame, with the boxes drawn on a picture that is not on screen. The old
+            stylesheet had this rule on `.preview-panel video`, and it did not survive the
+            migration to utilities.
 
-          {loop && (
-            <div className="absolute top-3 right-3 rounded-full border border-[var(--border-note)] bg-[color-mix(in_oklab,var(--panel)_90%,transparent)] px-3 py-1 text-xs text-bright">
-              {t('preview.loopOn')}
-            </div>
-          )}
+            The box it is contained *in* is the stage minus the transport strip, not the whole
+            stage. The strip is a real row at the bottom of the panel, and a picture that used
+            the full stage height had its last `--transport-h` painted underneath the buttons:
+            for a portrait clip that is the bottom fifth of every frame, and every crop and
+            logo box was drawn against a rectangle whose lower edge was not on screen. The box
+            starts at the stage's own origin, so the layer maths below - measured from this
+            element, positioned in the stage - still lands in the same place.
+          */}
+          <div
+            data-slot="preview-area"
+            ref={areaRef}
+            className="absolute inset-x-0 top-0 bottom-[var(--transport-h)] flex items-center justify-center overflow-hidden"
+          >
+            <video
+              data-slot="preview-video"
+              ref={videoRef}
+              src={preview.url}
+              className="h-full w-full object-contain"
+              playsInline
+              onError={(event) => onPlaybackError(event.currentTarget.error?.code ?? 0)}
+              onTimeUpdate={(event) => onTimeUpdate(event.currentTarget.currentTime)}
+              onPlay={() => onPlayingChange(true)}
+              onPause={() => onPlayingChange(false)}
+              onEnded={() => onPlayingChange(false)}
+            />
+
+            {!playing && (
+              <Button className="absolute top-1/2 left-1/2 h-12 -translate-x-1/2 -translate-y-1/2 gap-2.5 rounded-full border border-[color-mix(in_oklab,var(--accent-soft)_50%,transparent)] bg-[color-mix(in_oklab,var(--panel)_82%,transparent)] px-5" onClick={onTogglePlay}>
+                <Play className="size-4" />
+                {t('preview.play')}
+              </Button>
+            )}
+
+            {loop && (
+              <div className="absolute top-3 right-3 rounded-full border border-[var(--border-note)] bg-[color-mix(in_oklab,var(--panel)_90%,transparent)] px-3 py-1 text-xs text-bright">
+                {t('preview.loopOn')}
+              </div>
+            )}
+          </div>
 
           {showCrop && picture && (
             <div
@@ -312,8 +349,13 @@ export function PreviewPane({
             </div>
           )}
 
-          {/* Always visible: hover-only controls are invisible on a desktop app. */}
-          <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-[linear-gradient(to_top,color-mix(in_oklab,var(--scrim)_95%,transparent),color-mix(in_oklab,var(--scrim)_55%,transparent)_60%,transparent)] px-3.5 py-2.5">
+          {/* Always visible: hover-only controls are invisible on a desktop app. It is an
+              overlay so the gradient can sit over the stage edge, but the picture stops above
+              it - see `--transport-h`. */}
+          <div
+            data-slot="preview-transport"
+            className="absolute inset-x-0 bottom-0 flex h-[var(--transport-h)] items-center gap-2 bg-[linear-gradient(to_top,color-mix(in_oklab,var(--scrim)_95%,transparent),color-mix(in_oklab,var(--scrim)_55%,transparent)_60%,transparent)] px-3.5"
+          >
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button size="icon" variant="secondary" onClick={() => onStep(-1)} aria-label={t('preview.stepBack')}>

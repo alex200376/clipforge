@@ -103,6 +103,12 @@
      frozen alternative — a tall floor — is what made the panes overlap. */
   --preview-min: 130px;
   --timeline-max: 196px;
+  /* The height of the preview's transport strip - play, scrub, loop, sound, fullscreen. It is a
+     named length rather than a padding on that row because the picture above it has to stop
+     exactly where the strip begins: the two are one measurement, and they drifted apart once
+     already (the picture was letterboxed into the whole panel and painted its bottom under the
+     buttons). In rem, like the buttons themselves, so the two grow together. */
+  --transport-h: 3.75rem;
 }
 
 /* ===== ClipForge themes ===== */

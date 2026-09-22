@@ -454,6 +454,141 @@ record('the export button is live once a clip is in', imported && loaded.export 
 const after = await emptyStates()
 record("the preview's empty state gives way to the clip", imported && after.total === 0, `${after.total} left`)
 
+// ---------------------------------------------------------------- 3b. the stage and the log
+// Three rules the migration to utilities dropped, and none of the failures looks like a missing
+// CSS rule: a portrait clip rendered *taller than its stage* reads as a deliberately cropped
+// view, a picture letterboxed into the whole panel hides its bottom behind the transport strip,
+// and a log capped at 48px reads as a panel that is simply small.
+const stage = await evaluate(`(() => {
+  const panel = document.querySelector('[data-slot="preview-stage"]')
+  const area = document.querySelector('[data-slot="preview-area"]')
+  const video = document.querySelector('[data-slot="preview-video"]')
+  const bar = document.querySelector('[data-slot="preview-transport"]')
+  const log = document.querySelector('[data-slot="activity-log"]')
+  if (!panel || !area || !video) return null
+  const box = panel.getBoundingClientRect()
+  const stageArea = area.getBoundingClientRect()
+  const frame = video.getBoundingClientRect()
+  const controls = bar ? bar.getBoundingClientRect() : null
+  // The letterboxed picture, which is what the crop and watermark boxes are drawn against.
+  // Measured from the box the video is contained *in* - the stage minus the transport strip -
+  // because that is the box the overlay maths uses.
+  const source = video.videoWidth && video.videoHeight ? { width: video.videoWidth, height: video.videoHeight } : null
+  const scale = source ? Math.min(frame.width / source.width, frame.height / source.height) : 0
+  return {
+    fit: getComputedStyle(video).objectFit,
+    panel: { w: Math.round(box.width), h: Math.round(box.height) },
+    area: { w: Math.round(stageArea.width), h: Math.round(stageArea.height) },
+    video: { w: Math.round(frame.width), h: Math.round(frame.height), top: Math.round(frame.top - box.top), bottom: Math.round(box.bottom - frame.bottom) },
+    picture: source ? { w: Math.round(source.width * scale), h: Math.round(source.height * scale) } : null,
+    // How much of the picture's box the controls take: the two are one measurement, and this
+    // is the number that says whether they disagree.
+    controls: controls ? { h: Math.round(controls.height), gapToPanelBottom: Math.round(box.bottom - controls.bottom) } : null,
+    pictureUnderControls: source && controls
+      ? Math.round(frame.top + (frame.height + source.height * scale) / 2 - controls.top)
+      : null,
+    logHeight: log ? Math.round(log.getBoundingClientRect().height) : null,
+    logOverflow: log ? getComputedStyle(log).overflowY : null,
+    // How tall the log can get, and how far it may be squeezed - the panel's capacity rather
+    // than the handful of lines an import happens to leave in it.
+    logCap: log ? Math.round(Number.parseFloat(getComputedStyle(log).maxHeight)) : null,
+    logFloor: log ? Math.round(Number.parseFloat(getComputedStyle(log).minHeight)) : null
+  }
+})()`)
+record(
+  'the frame is letterboxed inside its picture box, not clipped by it',
+  stage !== null &&
+    stage.fit === 'contain' &&
+    stage.video.top >= -1 &&
+    stage.video.bottom >= -1 &&
+    // A video rendered from its own aspect overflows its box vertically, which is exactly the
+    // difference between "contained" and "cropped and scrolled out of sight".
+    stage.video.h <= stage.area.h + 1,
+  stage
+    ? `object-fit=${stage.fit} stage=${stage.panel.w}x${stage.panel.h} box=${stage.area.w}x${stage.area.h} frame=${stage.video.w}x${stage.video.h} picture=${stage.picture?.w}x${stage.picture?.h} gaps=${stage.video.top}/${stage.video.bottom}`
+    : 'no [data-slot="preview-stage"], [data-slot="preview-area"] or preview video'
+)
+// The strip and the picture box have to agree on one number: the box ends exactly where the
+// strip begins. They were allowed to disagree once - the picture was letterboxed into the whole
+// panel - and the result was every frame's bottom `--transport-h` painted under the buttons,
+// which no measurement of the panel could see.
+record(
+  'the transport strip sits below the picture rather than over it',
+  stage !== null &&
+    stage.controls !== null &&
+    Math.abs(stage.area.h + stage.controls.h - stage.panel.h) <= 1 &&
+    (stage.pictureUnderControls ?? 99) <= 1,
+  stage
+    ? `box=${stage.area.h} + strip=${stage.controls?.h} = ${(stage.area.h + (stage.controls?.h ?? 0))} vs stage=${stage.panel.h} · picture runs ${stage.pictureUnderControls}px under it`
+    : 'no [data-slot="preview-transport"]'
+)
+// Measured as capacity rather than as the height of the moment: with three lines of import
+// output the body sits on its floor, which says nothing about whether a long export's output has
+// anywhere to go.
+record(
+  'the activity log is a panel, not a three-line strip',
+  stage !== null &&
+    stage.logOverflow === 'auto' &&
+    (stage.logCap ?? 0) >= 72 &&
+    (stage.logFloor ?? 0) >= 64,
+  stage
+    ? `${stage.logHeight}px now, ${stage.logFloor}..${stage.logCap}px, overflow-y=${stage.logOverflow}`
+    : 'no [data-slot="activity-log"]'
+)
+// A log longer than its box must scroll. It did not: the panel is a flex column and each row
+// carries `overflow-hidden`, so every row's automatic minimum height was zero and a long log was
+// *compressed* instead of scrolling - 42 lines in a 103px box, each 0.4px tall, which is a blank
+// panel with no scrollbar and no way to tell there was anything in it. The raw output of an
+// import is the cheapest way to make the log longer than its box.
+const clickRaw = () =>
+  evaluate(`(() => {
+    const button = [...document.querySelectorAll('button')].find((el) => /raw output/i.test((el.textContent || '').trim()))
+    if (!button) return false
+    button.click()
+    return true
+  })()`)
+const stepRows = await evaluate(`document.querySelector('[data-slot="activity-log"]')?.children.length ?? 0`)
+const rawOpened = await clickRaw()
+await sleep(600)
+const crowded = await evaluate(`(() => {
+  const body = document.querySelector('[data-slot="activity-log"]')
+  if (!body) return null
+  const rows = [...body.children]
+  const boxes = rows.map((row) => row.getBoundingClientRect())
+  const last = boxes[boxes.length - 1]
+  const box = body.getBoundingClientRect()
+  return {
+    rows: rows.length,
+    shortest: Math.round(Math.min(...boxes.map((b) => b.height)) * 10) / 10,
+    scrolls: body.scrollHeight > body.clientHeight + 1,
+    // The newest line is the one worth seeing, and auto-scroll is supposed to keep it in view.
+    newestInView: last ? last.bottom <= box.bottom + 1 && last.top >= box.top - 1 : false,
+    overflowY: getComputedStyle(body).overflowY
+  }
+})()`)
+record(
+  'a log longer than its box scrolls, keeping every line its own height',
+  rawOpened === true &&
+    crowded !== null &&
+    crowded.rows >= 8 &&
+    crowded.shortest >= 14 &&
+    crowded.scrolls &&
+    crowded.overflowY === 'auto' &&
+    crowded.newestInView,
+  crowded
+    ? `${crowded.rows} lines, shortest ${crowded.shortest}px, scrolls=${crowded.scrolls}, newest in view=${crowded.newestInView}`
+    : 'no [data-slot="activity-log"]'
+)
+// Closed again, so the rest of the run measures the panel the user left behind.
+const rawClosed = await clickRaw()
+await sleep(500)
+const stepRowsAfter = await evaluate(`document.querySelector('[data-slot="activity-log"]')?.children.length ?? 0`)
+record(
+  'the raw view closes again',
+  rawClosed === true && stepRowsAfter === stepRows && stepRows > 0,
+  `${stepRows} row(s) before, ${stepRowsAfter} after`
+)
+
 // The output panel only exists once its tab is selected, so its own empty state is checked
 // here rather than at boot - it is a second consumer of the same component.
 const toOutput = await pointerClick(
@@ -670,6 +805,24 @@ for (const [width, height] of SIZES) {
     state.horizontalScroll <= 1 && state.verticalScroll <= 1 && state.outside.length === 0,
     `overflow=${state.horizontalScroll}px vertical=${state.verticalScroll}px outside=[${state.outside.join(', ')}] controls=${state.controls} root=${state.rootFont}`
   )
+  // The picture is what the app is for, so at any ordinary size it gets at least as much of
+  // the centre column as the timeline under it. It did not, until the trim hint stopped
+  // stealing a line the preview needed - at 1180x720 the timeline was 186px to a 275px preview.
+  // The window's own 900x560 minimum is excluded: there the column is at its floor and the
+  // timeline is allowed to win, which is the trade `--preview-min` exists to make.
+  if (width > 900) {
+    const room = await evaluate(`(() => {
+      const stage = document.querySelector('[data-slot="preview-stage"]')
+      const timeline = document.querySelector('.track')?.closest('section')
+      if (!stage || !timeline) return null
+      return { stage: Math.round(stage.getBoundingClientRect().height), timeline: Math.round(timeline.getBoundingClientRect().height) }
+    })()`)
+    record(
+      `the preview out-ranks the timeline ${width}x${height}`,
+      room !== null && room.stage >= room.timeline,
+      room ? `preview=${room.stage}px timeline=${room.timeline}px` : 'no preview stage or timeline'
+    )
+  }
   await shot(`workspace-${width}x${height}`)
 }
 await resize(1440, 900)

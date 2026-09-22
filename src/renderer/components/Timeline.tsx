@@ -584,7 +584,13 @@ export function Timeline({
 
         <span className="flex-1" />
         {clipLength > 15 && <span className="tabular-nums text-warning">{t('timeline.tooLong')}</span>}
-        <span className="flex min-w-0 flex-col gap-0.5 text-xs leading-[1.4] text-dim">
+        {/*
+          Two lines of explanation that the handles themselves already show, and on a short
+          window they are the difference between the trim row fitting on one line and wrapping
+          into two - height the preview above needs more. The preview's own shortcuts line is
+          dropped at the same size, for the same reason.
+        */}
+        <span className="flex min-w-0 flex-col gap-0.5 text-xs leading-[1.4] text-dim [@media(max-height:780px)]:hidden">
           {selectedStep > 0 ? t('timeline.zoomHint') : t('timeline.dragHint')}
           <span className="text-[0.71875rem] text-meta">{t('timeline.freeHint', { px: MAGNET_PX })}</span>
         </span>

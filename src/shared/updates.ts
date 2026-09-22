@@ -210,15 +210,34 @@ export function releaseNoteLines(raw: unknown): string[] {
     typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((entry) => noteText(entry)).join('\n') : ''
   if (joined.trim().length === 0) return []
 
-  const lines: string[] = []
+  // First pass: logical lines. A body written in an editor - or by GitHub's own release form -
+  // is hard-wrapped at 80 columns, which makes one bullet or sentence into three lines. Markdown
+  // treats those as a single block, and so does this: a line that is neither a heading nor a new
+  // item is folded into the one before it, so the card shows sentences rather than a ragged
+  // column and the twelve-line budget is spent on content instead of on wrapping.
+  const blocks: string[] = []
+  let open = false
   for (const rawLine of joined.split(/\r?\n/)) {
+    const trimmed = rawLine.trim()
     // The generated footer, and everything after it, is build metadata rather than a change.
-    if (/^-{3,}\s*$/.test(rawLine.trim()) || rawLine.includes('<!-- clipforge-build-info -->')) break
-    const line = plainLine(rawLine)
-    if (line.length > 0) lines.push(line)
-    if (lines.length >= NOTES_MAX_LINES) break
+    if (trimmed.length > 0 && (/^-{3,}$/.test(trimmed) || trimmed.includes('<!-- clipforge-build-info -->'))) break
+    if (trimmed.length === 0) {
+      open = false
+      continue
+    }
+    const heading = /^#{1,6}\s/.test(trimmed)
+    if (open && !heading && !/^[-*+]\s/.test(trimmed)) {
+      blocks.push(`${blocks.pop() ?? ''} ${trimmed}`)
+      continue
+    }
+    blocks.push(trimmed)
+    // A heading stands alone: the paragraph under it is its own block, while a wrapped
+    // sentence or bullet is a continuation of the one before it.
+    open = !heading
+    if (blocks.length >= NOTES_MAX_LINES) break
   }
-  return lines
+
+  return blocks.map(plainLine).filter((line) => line.length > 0)
 }
 
 /** The text of one entry of the feed's `releaseNotes`, whichever shape it arrived in. */

@@ -274,6 +274,32 @@ describe('reading a release body', () => {
     expect(releaseNoteLines([{ version: '0.4.6', note: null }])).toEqual([])
   })
 
+  it('folds a hard-wrapped paragraph and bullet into one line', () => {
+    // What an editor - or GitHub's own release form - produces: one sentence spread over
+    // three lines. The card has no room to show the wrap, and half a sentence reads worse
+    // than a long one, so a continuation is folded into the block it belongs to.
+    const wrapped = [
+      '## What changed',
+      '',
+      'The export panel now holds a GIF to a size you chose,',
+      'and it spends quality before it touches the frame size.',
+      '',
+      '- **A new limit** — pick it from the size list,',
+      '  which is the same list the settings use.',
+      '- A short one.'
+    ].join('\n')
+    expect(releaseNoteLines(wrapped)).toEqual([
+      'What changed',
+      'The export panel now holds a GIF to a size you chose, and it spends quality before it touches the frame size.',
+      '• A new limit — pick it from the size list, which is the same list the settings use.',
+      '• A short one.'
+    ])
+  })
+
+  it('keeps a paragraph under a heading separate from it', () => {
+    expect(releaseNoteLines('### Notes\nThis is its own block.')).toEqual(['Notes', 'This is its own block.'])
+  })
+
   it('leaves identifiers and globs alone', () => {
     // The reason `__x__` and `*x*` are not treated as emphasis: a changelog is built from
     // commit subjects, and those are full of things that look like markdown and are not.
