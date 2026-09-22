@@ -1,3 +1,4 @@
+import type { GifTuning } from '../shared/gifTuning'
 import type { InstallProgressEvent } from '../shared/types'
 
 export type Page = 'home' | 'settings'
@@ -55,9 +56,6 @@ export interface ErrorNotice {
   retry?: () => void
 }
 
-/** How hard the export should be squeezed into a byte budget. */
-export type BudgetChoice = 'off' | '8mb'
-
 export type PresetId = 'discord' | 'x' | 'slack' | 'wallpaper'
 
 /** Where a corner preset drops a logo box. */
@@ -67,6 +65,28 @@ export interface EstimateView {
   /** Rough size for the current settings; null until a clip is loaded. */
   bytes: number | null
   /**
+   * How far out that number can be, before anything has been encoded.
+   *
+   * Null wherever `bytes` is, and paired with it rather than replacing it: the panel shows one
+   * number and says what it is worth, because a promise of exactly 7.4 MB is one this model
+   * cannot keep until something has actually been written.
+   */
+  range: { low: number; high: number } | null
+  /**
+   * True once a real export of this source has replaced the model's guess about the content.
+   *
+   * It is what the panel reads to say whether the number is measured or estimated, and it is
+   * what narrows `range`.
+   */
+  calibrated: boolean
+  /**
+   * Whether the size limit will be enforced by re-encoding if the first pass overshoots.
+   *
+   * The point estimate can be 2x low on content unlike the model's reference clips, so the
+   * limit is a promise about the file, and this is what makes it one.
+   */
+  enforcing: boolean
+  /**
    * Why there is no number yet, when there is none.
    *
    * A clip can be loaded and still have no estimate - a link whose length is still being
@@ -74,8 +94,26 @@ export interface EstimateView {
    * wrong and unhelpful. Null whenever `bytes` is a number.
    */
   unknown: 'noClip' | 'noLength' | 'reading' | null
-  /** Set when a byte limit forced a smaller frame size or frame rate. */
-  fitted: { width: number; fps: number; bytes: number; fits: boolean } | null
+  /** Set when a byte limit forced a smaller frame size, frame rate or picture quality. */
+  fitted: {
+    width: number
+    /** The frame height that width implies, so a retry can plan from what was encoded. */
+    height: number
+    fps: number
+    bytes: number
+    fits: boolean
+    /** Which knob the fit moved, so the panel can say what the limit cost. */
+    changed: 'nothing' | 'quality' | 'frameRate' | 'resolution'
+    /**
+     * The picture quality the fit settled on.
+     *
+     * Carried here because the export has to be given these numbers: the ladder is allowed to
+     * meet a limit by lowering the quality, and an export that still sent the sliders' value
+     * would write exactly the file that did not fit.
+     */
+    quality: number
+    tuning: GifTuning
+  } | null
   /** Last measured estimate against reality for this source. */
   measured: { estimated: number; actual: number } | null
 }

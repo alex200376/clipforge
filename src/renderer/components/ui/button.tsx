@@ -6,7 +6,7 @@ import type { ComponentProps } from 'react'
 import { cn } from '../../lib/utils'
 
 export const buttonVariants = cva(
-  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg font-semibold outline-none transition-[background,color,border-color,filter] disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium outline-none transition-[background,color,border-color,filter] focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4",
   {
     variants: {
       variant: {
@@ -17,12 +17,14 @@ export const buttonVariants = cva(
         destructive: 'border border-destructive/60 bg-destructive/15 text-destructive hover:bg-destructive/25',
         link: 'h-auto px-0 text-soft hover:text-foreground hover:underline'
       },
+      // Stock shadcn control heights, and the `icon-sm` size the app already uses for
+      // the small quiet buttons in headers.
       size: {
-        default: 'h-10 px-5 text-[0.875rem]',
-        sm: 'h-9 rounded-lg px-3.5 text-[0.8125rem]',
-        lg: 'h-12 rounded-xl px-7 text-[0.9375rem]',
-        icon: 'size-10',
-        'icon-sm': 'size-9'
+        default: 'h-9 px-4 text-sm',
+        sm: 'h-8 rounded-md px-3 text-xs',
+        lg: 'h-10 rounded-lg px-6 text-sm',
+        icon: 'size-9',
+        'icon-sm': 'size-8'
       }
     },
     defaultVariants: { variant: 'default', size: 'default' }

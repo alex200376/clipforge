@@ -10,13 +10,13 @@ export function Slider({ className, ...props }: ComponentProps<typeof SliderPrim
       className={cn('relative flex w-full touch-none items-center select-none data-[disabled]:opacity-50', className)}
       {...props}
     >
-      <SliderPrimitive.Track className="relative h-2 w-full grow overflow-hidden rounded-full bg-[var(--accent)]">
+      <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-input">
         <SliderPrimitive.Range className="absolute h-full bg-primary" />
       </SliderPrimitive.Track>
       <SliderPrimitive.Thumb
         className={cn(
-          'block size-[18px] shrink-0 cursor-grab rounded-full border-2 border-white/90 bg-brand shadow-md transition-transform',
-          'hover:scale-110 focus-visible:outline-2 focus-visible:outline-brand active:cursor-grabbing'
+          'block size-4 shrink-0 cursor-grab rounded-full border-2 border-brand bg-popover shadow-sm transition-transform',
+          'hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing'
         )}
       />
     </SliderPrimitive.Root>

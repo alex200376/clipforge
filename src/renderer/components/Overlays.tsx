@@ -1,23 +1,52 @@
 import { AlertTriangle, CircleCheck, FolderOpen, Image as ImageIcon, Play, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
+import { Alert, AlertDescription, AlertTitle } from './ui/alert'
 import { Button } from './ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
+import { Kbd, KbdGroup } from './ui/kbd'
 import { Label } from './ui/label'
+import { Slider } from './ui/slider'
+import { Toast as ToastSurface, ToastAction, ToastDescription, ToastTitle } from './ui/toast'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
 import type { ErrorNotice } from '../types'
+
+/**
+ * Remembers what had focus when a dialog opened, and hands it back when it closes.
+ *
+ * Radix restores focus to its own `DialogTrigger`. ClipForge's two dialogs have no trigger
+ * to speak of - they are opened from a button on the top bar and from an action inside the
+ * export panel - and a controlled `<Dialog open>` without one leaves focus on the document
+ * body, so a keyboard user lost their place every time a dialog closed. Capturing on the
+ * single render where `active` turns true is early enough: the dialog's own focus lands
+ * after this render commits, not before it.
+ */
+function useFocusReturn(active: boolean): (event: Event) => void {
+  const opener = useRef<HTMLElement | null>(null)
+  const wasActive = useRef(active)
+  if (active && !wasActive.current) opener.current = document.activeElement as HTMLElement | null
+  wasActive.current = active
+  return (event: Event) => {
+    event.preventDefault()
+    opener.current?.focus()
+  }
+}
 
 /** Full-window target shown while a file or link is dragged over the app. */
 export function DropZone({ visible }: { visible: boolean }): JSX.Element | null {
   const { t } = useI18n()
   if (!visible) return null
   return (
-    <div className="drop-zone" aria-hidden="true">
-      <div className="drop-zone-inner">
-        <ImageIcon />
-        <strong>{t('drop.title')}</strong>
-        <span>{t('drop.body')}</span>
+    <div
+      className="pointer-events-none fixed inset-0 z-40 grid place-items-center bg-[color-mix(in_oklab,var(--scrim)_78%,transparent)] backdrop-blur-[2px]"
+      aria-hidden="true"
+    >
+      <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-brand/70 bg-panel/85 px-12 py-10 text-center">
+        <ImageIcon className="size-8 text-brand" />
+        <strong className="text-base font-semibold">{t('drop.title')}</strong>
+        <span className="text-sm text-dim">{t('drop.body')}</span>
       </div>
     </div>
   )
@@ -39,29 +68,24 @@ interface GuideProps {
 
 export function GuideCard({ title, actions, onDismiss, tone = 'info', children }: GuideProps): JSX.Element {
   return (
-    <section className={`guide-card ${tone}`}>
-      <div className="guide-head">
-        <strong>{title}</strong>
+    <Alert variant={tone === 'error' ? 'destructive' : 'info'} className="flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <AlertTitle>{title}</AlertTitle>
         {onDismiss && (
-          <Button size="icon-sm" variant="ghost" className="btn-quiet" onClick={onDismiss} aria-label="Dismiss">
+          <Button size="icon-sm" variant="ghost" onClick={onDismiss} aria-label="Dismiss">
             <X />
           </Button>
         )}
       </div>
-      <div className="guide-body">{children}</div>
-      <div className="guide-actions">
+      <AlertDescription className="gap-2 text-sm text-foreground">{children}</AlertDescription>
+      <div className="flex flex-wrap gap-2">
         {actions.map((action) => (
-          <Button
-            key={action.label}
-            size="sm"
-            variant={action.variant ?? 'default'}
-            onClick={action.onClick}
-          >
+          <Button key={action.label} size="sm" variant={action.variant ?? 'default'} onClick={action.onClick}>
             {action.label}
           </Button>
         ))}
       </div>
-    </section>
+    </Alert>
   )
 }
 
@@ -74,13 +98,18 @@ export function Onboarding({ onDismiss }: { onDismiss: () => void }): JSX.Elemen
   ]
   return (
     <GuideCard title={t('guide.title')} actions={[{ label: t('guide.dismiss'), onClick: onDismiss }]}>
-      <ol className="guide-steps">
+      <ol className="flex flex-col gap-3">
         {steps.map((step, index) => (
-          <li key={step.title}>
-            <span className="guide-index">{index + 1}</span>
-            <span>
-              <strong>{t(step.title)}</strong>
-              <em>{t(step.body)}</em>
+          <li key={step.title} className="flex items-start gap-3">
+            <span
+              aria-hidden="true"
+              className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+            >
+              {index + 1}
+            </span>
+            <span className="flex flex-col gap-0.5">
+              <strong className="text-sm font-semibold">{t(step.title)}</strong>
+              <em className="text-xs not-italic leading-relaxed text-dim">{t(step.body)}</em>
             </span>
           </li>
         ))}
@@ -116,7 +145,7 @@ export function LeftoverInstall({
         { label: t('leftover.keep'), onClick: onDismiss, variant: 'ghost' }
       ]}
     >
-      <p className="guide-line">{t('leftover.body', { dir: location })}</p>
+      <p>{t('leftover.body', { dir: location })}</p>
     </GuideCard>
   )
 }
@@ -140,7 +169,7 @@ export function SessionPrompt({
         { label: t('session.dismiss'), onClick: onDismiss, variant: 'ghost' }
       ]}
     >
-      <p className="guide-line">{t('session.body', { name })}</p>
+      <p>{t('session.body', { name })}</p>
     </GuideCard>
   )
 }
@@ -150,13 +179,13 @@ export function ErrorCard({ notice, onDismiss }: { notice: ErrorNotice | null; o
   const { t } = useI18n()
   if (!notice) return null
   return (
-    <section className="error-card">
-      <AlertTriangle />
-      <div className="error-body">
-        <strong>{t('error.card.title')}</strong>
-        <p>{notice.message}</p>
+    <Alert variant="destructive" className="items-start">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+      <div className="flex flex-1 flex-col gap-2">
+        <AlertTitle className="text-destructive">{t('error.card.title')}</AlertTitle>
+        <AlertDescription className="text-xs text-foreground">{notice.message}</AlertDescription>
       </div>
-      <div className="error-actions">
+      <div className="flex shrink-0 gap-2">
         {notice.retry && (
           <Button
             size="sm"
@@ -173,7 +202,7 @@ export function ErrorCard({ notice, onDismiss }: { notice: ErrorNotice | null; o
           {t('error.card.dismiss')}
         </Button>
       </div>
-    </section>
+    </Alert>
   )
 }
 
@@ -184,6 +213,14 @@ export interface ToastState {
   path: string | null
 }
 
+/**
+ * The "your file is ready" confirmation.
+ *
+ * The countdown and the swipe-to-dismiss come from the toast primitive, so hovering it or
+ * tabbing into it holds it open - a plain `setTimeout` used to take it away mid-click. A key
+ * on the id remounts the surface for each new export, which is what restarts that countdown
+ * when two exports finish in quick succession.
+ */
 export function Toast({
   toast,
   onClose,
@@ -196,56 +233,62 @@ export function Toast({
   onOpen: (filePath: string) => void
 }): JSX.Element | null {
   const { t } = useI18n()
-  useEffect(() => {
-    if (!toast) return
-    const timer = window.setTimeout(onClose, 8000)
-    return () => window.clearTimeout(timer)
-  }, [toast, onClose])
-
   if (!toast) return null
   return (
-    <aside className="toast" role="status">
-      <CircleCheck />
-      <div className="toast-body">
-        <strong>{toast.title}</strong>
-        <span>{toast.body}</span>
+    <ToastSurface
+      key={toast.id}
+      variant="success"
+      defaultOpen
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <CircleCheck className="mt-0.5 size-4 shrink-0 text-[var(--text-success)]" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <ToastTitle>{toast.title}</ToastTitle>
+        <ToastDescription>{toast.body}</ToastDescription>
       </div>
-      <div className="toast-actions">
+      <div className="flex shrink-0 items-center gap-1.5">
         {/*
          * Watching the clip used to mean going and finding it: the only action here opened
          * the folder that holds it. Opening the file is the action most people want at the
          * moment it is ready, so it leads, and revealing stays beside it for the other case.
          */}
         {toast.path && (
-          <Button size="sm" onClick={() => onOpen(toast.path!)}>
+          <ToastAction altText={t('toast.open')} onClick={() => onOpen(toast.path!)}>
             <Play />
             {t('toast.open')}
-          </Button>
+          </ToastAction>
         )}
         {toast.path && (
-          <Button size="sm" variant="ghost" onClick={() => onReveal(toast.path!)}>
+          <ToastAction altText={t('toast.reveal')} onClick={() => onReveal(toast.path!)}>
             <FolderOpen />
             {t('toast.reveal')}
-          </Button>
+          </ToastAction>
         )}
-        <Button size="icon-sm" variant="ghost" className="btn-quiet" onClick={onClose} aria-label={t('shortcuts.close')}>
-          <X />
-        </Button>
       </div>
-    </aside>
+    </ToastSurface>
   )
 }
 
-const SHORTCUTS: Array<{ keys: string; label: TranslationKey }> = [
-  { keys: 'Space', label: 'shortcuts.play' },
-  { keys: '← →', label: 'shortcuts.step' },
-  { keys: 'Shift + ← →', label: 'shortcuts.nudge' },
-  { keys: 'I / O', label: 'shortcuts.inOut' },
-  { keys: 'Alt', label: 'shortcuts.snap' },
-  { keys: 'Ctrl + V', label: 'shortcuts.paste' },
-  { keys: 'Ctrl + 1 / 2', label: 'shortcuts.panels' },
-  { keys: 'F11', label: 'shortcuts.fullscreen' },
-  { keys: '?', label: 'shortcuts.help' }
+/**
+ * One row per shortcut, with its keys as separate entries rather than one string.
+ *
+ * The keys used to be written out the way they read - `'Shift + ← →'` - and drawn as a
+ * single chip. They are an array now because the sheet renders them through the registry's
+ * `Kbd`, which draws one chip per key: the separator between keys is the group's, so the
+ * literal `+` and `/` are gone from the data instead of being printed twice.
+ */
+const SHORTCUTS: Array<{ keys: string[]; label: TranslationKey }> = [
+  { keys: ['Space'], label: 'shortcuts.play' },
+  { keys: ['←', '→'], label: 'shortcuts.step' },
+  { keys: ['Shift', '←', '→'], label: 'shortcuts.nudge' },
+  { keys: ['I', 'O'], label: 'shortcuts.inOut' },
+  { keys: ['Alt'], label: 'shortcuts.snap' },
+  { keys: ['Ctrl', 'V'], label: 'shortcuts.paste' },
+  { keys: ['Ctrl', '1', '2'], label: 'shortcuts.panels' },
+  { keys: ['F11'], label: 'shortcuts.fullscreen' },
+  { keys: ['?'], label: 'shortcuts.help' }
 ]
 
 /**
@@ -256,9 +299,8 @@ const SHORTCUTS: Array<{ keys: string; label: TranslationKey }> = [
  * on both sides of a line and drag it. Beside each other, the eye spends its time finding the
  * seam between two panes and none of it on the removal.
  *
- * The divider is a range input, which is the whole interaction - draggable with a mouse,
- * movable with the arrow keys, and reachable by tab - instead of a pointer handler that would
- * have to reimplement all three.
+ * It is a dialog rather than a positioned div, so Tab cannot wander out of it into the
+ * workspace behind and Escape closes it without a listener of our own.
  */
 export function FrameCompare({
   preview,
@@ -269,112 +311,112 @@ export function FrameCompare({
 }): JSX.Element | null {
   const { t } = useI18n()
   const [split, setSplit] = useState(50)
-
-  useEffect(() => {
-    if (!preview) return
-    setSplit(50)
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [preview, onClose])
+  const restoreFocus = useFocusReturn(preview !== null)
 
   if (!preview) return null
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div
-        className="sheet compare-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('watermark.preview.title')}
-        onClick={(event) => event.stopPropagation()}
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent
+        className="w-[min(920px,94vw)]"
+        aria-describedby={undefined}
+        onOpenAutoFocus={() => setSplit(50)}
+        onCloseAutoFocus={restoreFocus}
       >
-        <div className="sheet-head">
-          <strong>{t('watermark.preview.title')}</strong>
-          <span className="compare-time">
+        <DialogHeader>
+          <DialogTitle>{t('watermark.preview.title')}</DialogTitle>
+          <DialogDescription>
             {preview.windows > 1
               ? t('watermark.preview.tookWindows', { seconds: preview.seconds.toFixed(1), windows: preview.windows })
               : t('watermark.preview.took', { seconds: preview.seconds.toFixed(1) })}
-          </span>
-          <Button size="icon-sm" variant="ghost" className="btn-quiet" onClick={onClose} aria-label={t('shortcuts.close')}>
-            <X />
-          </Button>
-        </div>
+          </DialogDescription>
+        </DialogHeader>
 
         <div
-          className="compare-stage"
+          className="relative w-full overflow-hidden rounded-lg bg-stage"
           style={{ aspectRatio: `${preview.width} / ${preview.height}` }}
         >
-          <img className="compare-image" src={preview.before} alt={t('watermark.preview.before')} />
+          <img className="absolute inset-0 size-full" src={preview.before} alt={t('watermark.preview.before')} />
           {/*
            * The 'after' picture is clipped rather than resized: its wrapper is the split
            * width and hides its overflow, while the picture itself stays the width of the
            * whole stage - which is `100 / split` of its wrapper. Both pictures are therefore
            * pixel-for-pixel aligned, and the drag only moves where one stops being drawn.
            */}
-          <div className="compare-after" style={{ width: `${split}%` }}>
+          <div className="absolute inset-y-0 left-0 overflow-hidden" style={{ width: `${split}%` }}>
             <img
-              className="compare-image"
+              className="absolute top-0 left-0 max-w-none"
               src={preview.after}
               alt={t('watermark.preview.after')}
               style={{ width: split > 0 ? `${10000 / split}%` : '100%' }}
             />
           </div>
-          <span className="compare-line" style={{ left: `${split}%` }} aria-hidden />
-          <span className="compare-label compare-label-before">{t('watermark.preview.before')}</span>
-          <span className="compare-label compare-label-after">{t('watermark.preview.after')}</span>
+          <span className="pointer-events-none absolute inset-y-0 w-px bg-white/80" style={{ left: `${split}%` }} aria-hidden />
+          <span className="absolute top-3 left-3 rounded bg-black/60 px-2 py-0.5 text-xs font-medium text-white">
+            {t('watermark.preview.before')}
+          </span>
+          <span className="absolute top-3 right-3 rounded bg-black/60 px-2 py-0.5 text-xs font-medium text-white">
+            {t('watermark.preview.after')}
+          </span>
         </div>
 
-        <div className="compare-controls">
-          <Label>{t('watermark.preview.drag')}</Label>
-          <input
-            className="compare-slider"
-            type="range"
+        <div className="flex items-center gap-4">
+          <Label className="shrink-0">{t('watermark.preview.drag')}</Label>
+          <Slider
+            value={[split]}
             min={0}
             max={100}
-            value={split}
+            step={1}
             aria-label={t('watermark.preview.drag')}
-            onChange={(event) => setSplit(Number(event.target.value))}
+            onValueChange={([next]) => setSplit(next)}
           />
-          <span className="compare-hint">{t('watermark.preview.hint')}</span>
+          <span className="shrink-0 text-xs text-dim">{t('watermark.preview.hint')}</span>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
 export function ShortcutSheet({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element | null {
   const { t } = useI18n()
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
+  const restoreFocus = useFocusReturn(open)
   if (!open) return null
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-        <div className="sheet-head">
-          <strong>{t('shortcuts.title')}</strong>
-          <Button size="icon-sm" variant="ghost" className="btn-quiet" onClick={onClose} aria-label={t('shortcuts.close')}>
-            <X />
-          </Button>
-        </div>
-        <ul className="sheet-list">
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+    >
+      <DialogContent aria-describedby={undefined} className="w-[min(560px,92vw)]" onCloseAutoFocus={restoreFocus}>
+        <DialogHeader>
+          <DialogTitle>{t('shortcuts.title')}</DialogTitle>
+        </DialogHeader>
+        <ul className="flex flex-col overflow-y-auto">
           {SHORTCUTS.map((entry) => (
-            <li key={entry.keys}>
-              <kbd>{entry.keys}</kbd>
-              <span>{t(entry.label)}</span>
+            <li
+              key={entry.keys.join(' ')}
+              className="flex items-center gap-4 border-b border-border/60 py-2.5 text-sm last:border-b-0"
+            >
+              {/* A fixed-width cell, so the keys of every row start at one x and the
+                  descriptions at another - the chips are different widths, and without
+                  this each row would find its own alignment down the list. */}
+              <span className="flex w-[7.5rem] shrink-0 items-center">
+                <KbdGroup>
+                  {entry.keys.map((key) => (
+                    <Kbd key={key}>{key}</Kbd>
+                  ))}
+                </KbdGroup>
+              </span>
+              <span className="text-soft">{t(entry.label)}</span>
             </li>
           ))}
         </ul>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

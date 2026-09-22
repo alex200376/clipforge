@@ -64,14 +64,32 @@ export function ProgressBlock({
   const waiting = view.fraction === 0 && note !== null
   const unmeasured = view.indeterminate || waiting
 
+  /** One label-and-value line of the running detail. */
+  const metaRow = (label: string, value: string, cooling = false): JSX.Element => (
+    <div
+      className={
+        cooling
+          ? 'flex items-baseline justify-between gap-2.5 text-xs text-warning [&>span:first-child]:whitespace-nowrap'
+          : 'flex items-baseline justify-between gap-2.5 text-xs text-dim [&>span:first-child]:whitespace-nowrap [&>span:first-child]:text-soft'
+      }
+    >
+      <span>{label}</span>
+      <span className="tabular-nums">{value}</span>
+    </div>
+  )
+
   return (
-    <div className="progress-block">
-      <div className="progress-head">
-        <span className="progress-title">
+    <div data-slot="progress-block" className="flex flex-col gap-2.5 rounded-xl border border-border bg-elevated/70 p-4">
+      <div className="flex items-baseline justify-between gap-2.5">
+        <span className="flex min-w-0 flex-col gap-0.5 text-sm font-semibold text-soft">
           {label}
-          {subtitle && <em className="progress-subtitle">{subtitle}</em>}
+          {/* What the stage is doing inside its step ("Cutting window 1 of 1"): the step
+              label names the phase, this names the work. */}
+          {subtitle && <em className="text-xs font-normal not-italic text-faint">{subtitle}</em>}
         </span>
-        <span className="progress-percent tabular-nums">{Math.round(view.overall)}%</span>
+        <span className="text-[1.0625rem] font-semibold tracking-[-0.01em] text-foreground tabular-nums">
+          {Math.round(view.overall)}%
+        </span>
       </div>
 
       <Progress
@@ -80,43 +98,20 @@ export function ProgressBlock({
         aria-label={t('export.working')}
       />
 
-      <div className="progress-meta">
-        <span>{stageNote}</span>
-        <span className="tabular-nums">
-          {unmeasured ? '' : `${Math.round(view.fraction * 100)}%`}
-        </span>
-      </div>
+      {metaRow(stageNote ?? '', unmeasured ? '' : `${Math.round(view.fraction * 100)}%`)}
 
-      {cooling > 0 && (
-        <div className="progress-meta progress-cooling">
-          <span>{t('export.progress.cooling', { seconds: Math.max(1, Math.ceil(cooling / 1000)) })}</span>
-          <span />
-        </div>
-      )}
+      {cooling > 0 && metaRow(t('export.progress.cooling', { seconds: Math.max(1, Math.ceil(cooling / 1000)) }), '', true)}
 
-      <div className="progress-meta">
-        <span>{t('export.elapsed', { time: formatDuration(view.elapsed) ?? '0s' })}</span>
-        <span className="tabular-nums">{eta}</span>
-      </div>
+      {metaRow(t('export.elapsed', { time: formatDuration(view.elapsed) ?? '0s' }), eta)}
 
-      {view.rate !== null && (
-        <div className="progress-meta">
-          <span>{t('export.progress.rate', { rate: view.rate.toFixed(1) })}</span>
-          <span />
-        </div>
-      )}
+      {view.rate !== null && metaRow(t('export.progress.rate', { rate: view.rate.toFixed(1) }), '')}
 
       {/* Seconds a frame, once the stage has painted a few. The inpainting network is the
           one stage where this decides whether the export is worth waiting for, and it is
           the number that shows a runtime which quietly fell back to one thread. */}
-      {view.perFrame !== null && (
-        <div className="progress-meta">
-          <span>{t('export.progress.perFrame', { seconds: view.perFrame.toFixed(1) })}</span>
-          <span />
-        </div>
-      )}
+      {view.perFrame !== null && metaRow(t('export.progress.perFrame', { seconds: view.perFrame.toFixed(1) }), '')}
 
-      <ol className="step-list">
+      <ol className="flex flex-col gap-1 text-xs">
         {view.steps.map((step, index) => {
           const state = index < view.index ? 'done' : index === view.index ? 'active' : 'pending'
           const seconds = view.stepTimes[index]
@@ -135,9 +130,13 @@ export function ProgressBlock({
                   : `${Math.round(view.fraction * 100)}%`
                 : ''
           return (
-            <li key={step.key} className={state}>
-              <span className="step-name">{t(step.key)}</span>
-              {rowNote !== '' && <span className="step-note tabular-nums">{rowNote}</span>}
+            <li
+              key={step.key}
+              data-state={state}
+              className="flex items-center justify-between gap-2 text-dim data-[state=done]:text-success data-[state=active]:text-soft data-[state=pending]:text-faint"
+            >
+              <span className="truncate">{t(step.key)}</span>
+              {rowNote !== '' && <span className="shrink-0 tabular-nums">{rowNote}</span>}
             </li>
           )
         })}

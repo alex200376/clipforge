@@ -8,6 +8,16 @@ export type ExportMode = 'gif' | 'video'
 /** gifski and palette encode directly; gifsicle runs as an optimising second pass. */
 export type GifEngine = 'palette' | 'gifski' | 'gifsicle'
 export type VideoSize = 'original' | '5mb' | '10mb' | '15mb' | '25mb' | '50mb' | '100mb'
+
+/**
+ * The byte budget an animated export can be squeezed into.
+ *
+ * Names match `VideoSize`, and for the same reason: they live in `settings.json`, where a
+ * bare `8` would be indistinguishable from a width. The two lists are separate because
+ * they are quoted in different units of the same currency - a GIF at 25 MB is not a
+ * preset anybody wants, and a video at 2 MB will not encode at all.
+ */
+export type GifLimit = 'off' | '2mb' | '5mb' | '8mb' | '10mb'
 export type BinaryName = 'ffmpeg' | 'ffprobe' | 'yt-dlp' | 'gifski' | 'gifsicle'
 
 export interface RangeSpec {
@@ -265,6 +275,16 @@ export interface GifRequest extends RangeSpec {
   /** A prepared AI session whose patched master replaces `source`. */
   aiToken?: string
   /**
+   * An output path to overwrite, instead of deriving a fresh one.
+   *
+   * Set only by the second encode that enforces a size limit. Without it that retry would be
+   * written beside the file that overshot - `name-2.gif` next to a `name.gif` that is over the
+   * limit - which is two files where the user asked for one. The path is one this process
+   * handed back a moment earlier, and it is only honoured when its extension is the one this
+   * export produces, so a stale or mistyped value falls back to a fresh name.
+   */
+  replace?: string
+  /**
    * How the output is named.
    *
    * Built by the renderer, because that is where the output geometry, the frame rate and
@@ -395,7 +415,7 @@ export type Language = 'en' | 'zh-TW'
  * Palette names. Each one is a block in `styles.css` overriding the base tokens; the
  * order here is the order the settings dropdown offers them in.
  */
-export const THEMES = ['midnight', 'graphite', 'ember', 'aurora', 'daylight'] as const
+export const THEMES = ['midnight', 'graphite', 'ember', 'aurora', 'daylight', 'shadcn'] as const
 export type Theme = (typeof THEMES)[number]
 
 /**
@@ -450,6 +470,14 @@ export interface AppSettings {
   defaultFps: number
   defaultWidth: number | null
   defaultVideoSize: VideoSize
+  /**
+   * The size limit an animated (GIF/WebP) export starts with.
+   *
+   * Beside `defaultVideoSize` rather than among the GIF knobs, because it is the same kind
+   * of choice: how big the file is allowed to be. Off by default, so an upgrade does not
+   * start re-encoding exports nobody asked to limit.
+   */
+  defaultGifLimit: GifLimit
   defaultFormat: OutputFormat
   defaultEncoder: EncoderChoice
   /**
@@ -575,8 +603,28 @@ export interface UpdateState {
   percent?: number
   /** Localised-free technical detail, shown beside the error and written to the log. */
   error?: string
+  /**
+   * Which half of the update failed, when one did.
+   *
+   * Not a detail: "could not reach GitHub" and "GitHub named an installer this machine could
+   * not fetch" are both reported as a failed check otherwise, and the second one is not a
+   * failure to *find* the update at all - it was found and then not downloaded. Set only
+   * alongside `status: 'error'`.
+   */
+  phase?: 'check' | 'download'
   /** When the last check finished, so the UI can say how fresh the answer is. */
   checkedAt?: number
+  /**
+   * What the release says changed, as plain text lines.
+   *
+   * Fetched from the GitHub release by `electron-updater` and normalised on this side. It is
+   * remote content, so it is carried as text and rendered as text - never as markup.
+   */
+  notes?: string[]
+  /** The version `notes` describe, so a later check cannot show stale notes as new ones. */
+  notesFor?: string
+  /** When the release was published, when the feed says. */
+  releaseDate?: string
 }
 
 /** Which part of the app's disk use a clear applies to. */

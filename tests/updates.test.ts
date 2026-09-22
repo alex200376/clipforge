@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  checkAge,
+  checkIsStale,
   condenseUpdaterError,
   isNotNewer,
+  isoReleaseDate,
   postUpdateReclaim,
+  releaseNoteLines,
   updateWasInstalled,
   versionFromInstallerName
 } from '../src/shared/updates'
@@ -167,5 +171,145 @@ describe('what to reclaim after an update', () => {
 
   it('needs only one of the two proofs', () => {
     expect(postUpdateReclaim({ ...base, pendingVersion: '0.4.0', keepInstaller: true })).toBe('applied')
+  })
+})
+
+describe('deciding when an answer is old enough to replace', () => {
+  const NOW = 1_700_000_000_000
+  const MINUTE = 60_000
+
+  it('calls a window return stale after the age it is given', () => {
+    expect(checkIsStale(NOW - 6 * MINUTE, NOW, 5 * MINUTE)).toBe(true)
+    expect(checkIsStale(NOW - 4 * MINUTE, NOW, 5 * MINUTE)).toBe(false)
+    // The boundary itself counts as stale: the rule is "at least this old", not "older".
+    expect(checkIsStale(NOW - 5 * MINUTE, NOW, 5 * MINUTE)).toBe(true)
+  })
+
+  it('treats a check that never finished as stale', () => {
+    expect(checkIsStale(undefined, NOW, 5 * MINUTE)).toBe(true)
+  })
+
+  it('treats a clock that went backwards as stale, not as fresh forever', () => {
+    // A timezone change or a resume from sleep can move the wall clock back under a
+    // timestamp; the age would be negative, and a plain comparison would then never expire.
+    expect(checkIsStale(NOW + 60 * MINUTE, NOW, 5 * MINUTE)).toBe(true)
+  })
+})
+
+describe('saying how long ago the last check was', () => {
+  const NOW = 1_700_000_000_000
+
+  it('rounds to the largest unit that still says something', () => {
+    expect(checkAge(NOW - 5_000, NOW)).toEqual({ unit: 'second', value: 5 })
+    expect(checkAge(NOW - 90_000, NOW)).toEqual({ unit: 'minute', value: 2 })
+    // 45 minutes is 45 minutes: the unit only changes once the smaller one stops being
+    // readable as a number, which is why this rounds rather than divides.
+    expect(checkAge(NOW - 45 * 60_000, NOW)).toEqual({ unit: 'minute', value: 45 })
+    expect(checkAge(NOW - 70 * 60_000, NOW)).toEqual({ unit: 'hour', value: 1 })
+    expect(checkAge(NOW - 26 * 60 * 60_000, NOW)).toEqual({ unit: 'day', value: 1 })
+  })
+
+  it('says nothing when there is nothing to say', () => {
+    expect(checkAge(undefined, NOW)).toBeNull()
+    expect(checkAge(Number.NaN, NOW)).toBeNull()
+  })
+
+  it('never reports a negative age from a clock that moved back', () => {
+    expect(checkAge(NOW + 60_000, NOW)).toEqual({ unit: 'second', value: 0 })
+  })
+})
+
+/**
+ * A release body shaped like the one `release.bat` publishes: a hand-written heading, the
+ * commits since the previous tag, then the generated build section under a rule.
+ */
+const REAL_BODY = `## What changed since \`0.4.5\`
+
+- **Bump to 0.4.6** - the headline change
+- Fix the size limit on animated exports
+
+---
+
+**Build**
+
+- Version: \`0.4.6\`
+- SHA512: abc123
+
+<!-- clipforge-build-info -->
+`
+
+describe('reading a release body', () => {
+  it('turns markdown into lines a card can print', () => {
+    expect(releaseNoteLines(REAL_BODY)).toEqual([
+      'What changed since 0.4.5',
+      '• Bump to 0.4.6 - the headline change',
+      '• Fix the size limit on animated exports'
+    ])
+  })
+
+  it('stops at the generated build section', () => {
+    // Not a detail: the version, the hash and the signer are facts about the artifact, and the
+    // card that shows them is the one headed "what changed".
+    const lines = releaseNoteLines(REAL_BODY)
+    expect(lines.join('\n')).not.toMatch(/SHA512|Build|clipforge-build-info/)
+  })
+
+  it('reads the array form the feed also sends', () => {
+    expect(releaseNoteLines([{ version: '0.4.6', note: '- one thing' }, { note: '\n- another' }])).toEqual([
+      '• one thing',
+      '• another'
+    ])
+  })
+
+  it('keeps a link’s label and drops its URL', () => {
+    expect(releaseNoteLines('See [the changelog](https://example.com/a/b?c=d)')).toEqual(['See the changelog'])
+  })
+
+  it('says nothing rather than something empty', () => {
+    expect(releaseNoteLines(null)).toEqual([])
+    expect(releaseNoteLines(undefined)).toEqual([])
+    expect(releaseNoteLines('')).toEqual([])
+    expect(releaseNoteLines('\n \n\t')).toEqual([])
+    expect(releaseNoteLines(42)).toEqual([])
+    expect(releaseNoteLines([{ version: '0.4.6', note: null }])).toEqual([])
+  })
+
+  it('leaves identifiers and globs alone', () => {
+    // The reason `__x__` and `*x*` are not treated as emphasis: a changelog is built from
+    // commit subjects, and those are full of things that look like markdown and are not.
+    expect(releaseNoteLines('- Fix window.__proto__ handling and the *.mp4 filter')).toEqual([
+      '• Fix window.__proto__ handling and the *.mp4 filter'
+    ])
+    expect(releaseNoteLines('- Budget is 2 * 3 MB per clip')).toEqual(['• Budget is 2 * 3 MB per clip'])
+  })
+
+  it('carries a payload through as text, unchanged', () => {
+    // The whole reason the renderer can print these lines as text nodes: there is nothing here
+    // that interprets them. A release body is remote content, and this is where the claim that
+    // it cannot become markup is pinned.
+    const lines = releaseNoteLines('- <img src=x onerror="alert(1)"> and <script>alert(2)</script>')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('<img src=x onerror="alert(1)">')
+    expect(lines[0]).toContain('<script>alert(2)</script>')
+  })
+
+  it('bounds a body that is not a card but a document', () => {
+    const long = Array.from({ length: 40 }, (_, index) => `- change number ${index}`).join('\n')
+    expect(releaseNoteLines(long)).toHaveLength(12)
+    const wide = releaseNoteLines(`- ${'x'.repeat(400)}`)
+    expect(wide[0].length).toBeLessThanOrEqual(160)
+    expect(wide[0].endsWith('…')).toBe(true)
+  })
+})
+
+describe('the release date the feed sends', () => {
+  it('normalises what it can and refuses what it cannot', () => {
+    expect(isoReleaseDate('2026-09-22T10:11:12.000Z')).toBe('2026-09-22T10:11:12.000Z')
+    // A date without a zone is read as local time by `Date`, so it is normalised to an instant
+    // rather than passed through - the card formats an instant, not a string.
+    expect(isoReleaseDate('2026-09-22T10:11:12Z')).toMatch(/^2026-09-22T\d\d:11:12\.000Z$/)
+    expect(isoReleaseDate('not a date')).toBeNull()
+    expect(isoReleaseDate('')).toBeNull()
+    expect(isoReleaseDate(undefined)).toBeNull()
   })
 })

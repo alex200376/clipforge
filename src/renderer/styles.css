@@ -91,7 +91,7 @@
   --brand-top: color-mix(in oklab, var(--accent-bright) 74%, var(--foreground) 26%);
 
   /* Layout constants that no theme should change. */
-  --radius: 0.875rem;
+  --radius: 0.625rem;
   /* In rem, so the rail narrows with everything else on a small screen. */
   --sidebar-width: 16rem;
   /* Floors for the centre column. `--timeline-max` is the tallest the timeline card
@@ -107,8 +107,9 @@
 
 /* ===== ClipForge themes ===== */
 
-/* Each block restates the whole palette, so a token can never leak from :root into a
-   theme and produce an untested combination. */
+/* Each block restates the whole palette, so a token can never leak from :root into a theme
+   and produce an untested combination. Each one is a stock shadcn base family - neutral,
+   stone, zinc, slate - with the hue ClipForge gives it. */
 [data-theme='graphite'] {
   --background: #0f1113;
   --panel: #16191c;
@@ -223,6 +224,67 @@
   color-scheme: dark;
 }
 
+/*
+ * shadcn's own default dark theme, so the app can be seen wearing the palette its
+ * components were drawn against. The values are the `.dark` block from shadcn's repo
+ * (apps/v4/app/globals.css at the time of writing), kept as oklch rather than converted,
+ * so a future comparison against upstream is a diff and not a translation.
+ *
+ * Two deliberate departures from a bare copy. First, status colours: shadcn's palette has
+ * `destructive` but no success or warning token, and ClipForge's green and amber mean "the
+ * export finished" and "this needs your attention" - so those stay the same three values
+ * every other dark theme here uses, rather than being invented per theme. Second, the
+ * surfaces this app has and shadcn's does not - the stage, the timeline track, the text
+ * ramp - are stepped from the same neutral scale, so nothing is left pointing at Midnight.
+ *
+ * One thing to know about stock shadcn dark: its `primary` is near-white, so its primary
+ * *buttons* are light with dark ink. That is not a mistake here either, and it is why this
+ * block restates `--on-accent` and `--accent-foreground`: the app derives the text on a
+ * filled surface from one token, but shadcn uses dark ink on `primary` and light text on
+ * the dark `accent` hover surface.
+ */
+[data-theme='shadcn'] {
+  --background: oklch(0.145 0 0);
+  --panel: oklch(0.205 0 0);
+  --panel-deep: oklch(0.18 0 0);
+  --elevated: oklch(0.269 0 0);
+  --input-bg: oklch(0.19 0 0);
+  --stage: oklch(0.1 0 0);
+  --void: oklch(0 0 0);
+  --track: oklch(0.16 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --edge: oklch(1 0 0 / 6%);
+  --border-soft: oklch(1 0 0 / 8%);
+  --border-strong: oklch(1 0 0 / 16%);
+  --border-brand: oklch(1 0 0 / 28%);
+  --surface-hover: oklch(0.269 0 0);
+  --surface-nav-active: oklch(0.269 0 0);
+  --border-nav-active: oklch(1 0 0 / 20%);
+  --accent: oklch(0.371 0 0);
+  --foreground: oklch(0.985 0 0);
+  --text-soft: oklch(0.87 0 0);
+  --text-dim: oklch(0.708 0 0);
+  --text-faint: oklch(0.62 0 0);
+  --text-meta: oklch(0.6 0 0);
+  --text-ghost: oklch(0.556 0 0);
+  --accent-bright: oklch(0.922 0 0);
+  --accent-soft: oklch(0.87 0 0);
+  --primary: oklch(0.922 0 0);
+  --ring: oklch(0.556 0 0);
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.58 0.22 27);
+  --danger-solid: #d13438;
+  --scrim: oklch(0.09 0 0);
+  color-scheme: dark;
+
+  /* Dark ink on the light primary; light text on the dark hover surface. */
+  --on-accent: oklch(0.205 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+}
+
 [data-theme='daylight'] {
   --background: #f5f7fa;
   --panel: #ffffff;
@@ -290,13 +352,75 @@
   --color-brand-soft: var(--accent-soft);
   --color-success: var(--success);
   --color-warning: var(--warning);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  /* The rest of the app's own tokens, so markup can name them the same way it names
+     `bg-card` or `text-muted-foreground` instead of reaching for `bg-[var(…)]`. */
+  --color-panel-deep: var(--panel-deep);
+  --color-stage: var(--stage);
+  --color-void: var(--void);
+  --color-track: var(--track);
+  --color-edge: var(--edge);
+  --color-accent-bright: var(--accent-bright);
+  --color-accent-soft: var(--accent-soft);
+  --color-strong: var(--text-strong);
+  --color-bright: var(--text-bright);
+  --color-mid: var(--text-mid);
+  --color-faint: var(--text-faint);
+  --color-meta: var(--text-meta);
+  --color-ghost: var(--text-ghost);
+  --color-border-soft: var(--border-soft);
+  --color-border-strong: var(--border-strong);
+  --color-border-brand: var(--border-brand);
+  --color-surface-hover: var(--surface-hover);
+  --color-nav-active: var(--surface-nav-active);
+  --color-border-nav-active: var(--border-nav-active);
+  --color-on-accent: var(--on-accent);
+  --color-scrim: var(--scrim);
+  --color-danger-solid: var(--danger-solid);
+  /* Stock shadcn's radius scale: one base number, the rest in ratios. */
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
 }
 
 /* ---------- base ---------- */
+
+/* ---------- the frameless-window contract ----------
+   The window has no title bar, so a few containers have to say "drag me" — but every
+   control inside them has to say the opposite, or the drag region swallows the click.
+   Stating that per control was how a button could quietly become unclickable, so the
+   rule is inverted here: interactive things are *never* draggable, and the containers
+   that want to drag opt in with the `drag` utility. A new control cannot break the
+   window by forgetting to opt out. */
+@utility drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* For the rare surface that must not drag despite looking like part of the chrome. */
+@utility no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* Interactive things are never draggable, without every call site having to say so. */
+@layer base {
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  label,
+  summary,
+  [role],
+  [tabindex],
+  [data-slot],
+  [contenteditable='true'] {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}
 
 @layer base {
   * {
@@ -314,9 +438,10 @@
     /* One number sizes the whole app. The Tailwind primitives put their type,
        padding and control heights in rem, and the hand-written rules below do the
        same, so on a small screen everything — text, buttons, fields — tightens up
-       together instead of overflowing. It only ever shrinks: above ~1440px the
-       clamp is pinned at 15px, the largest the sheet is designed against. */
-    font-size: clamp(13px, 0.5vw + 7px, 15px);
+       together instead of overflowing. It settles at 16px on a wide window, which is
+       the root size stock shadcn is drawn against, and gives back 2px by the smallest
+       window we support instead of letting the layout overflow. */
+    font-size: clamp(14px, 0.25vw + 11px, 16px);
   }
 
   body {
@@ -363,436 +488,9 @@
   }
 }
 
-/* ---------- shell ---------- */
-
-.app {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  height: 100vh;
-  /* The window is frameless, so this hairline is the only edge it has. Inset:
-     a real border would eat into the 100vh the layout is sized against. */
-  box-shadow: inset 0 0 0 1px var(--edge);
-}
-
-.app.no-sidebar {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* ---------- frameless chrome ---------- */
-
-/* With no OS frame the app draws its own drag regions: the top row of each column
-   and the strip under it. Every control inside opts back out, so the gaps between
-   them are what grab the window and the controls still take their own clicks. */
-.sidebar,
-.topbar,
-.media-line,
-.settings-head {
-  -webkit-app-region: drag;
-  app-region: drag;
-}
-
-.sidebar button,
-.sidebar a,
-.topbar input,
-.topbar button,
-.topbar a,
-.settings-head button,
-.settings-head a,
-.window-controls {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.window-controls {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin-left: 6px;
-  flex: 0 0 auto;
-}
-
-.window-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-soft);
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-}
-
-.window-btn svg {
-  width: 15px;
-  height: 15px;
-}
-
-.window-btn:hover {
-  background: var(--edge);
-  border-color: var(--border-strong);
-  color: var(--foreground);
-}
-
-.window-btn:active {
-  background: var(--accent);
-}
-
-/* The one destructive control in the chrome reads the same everywhere. */
-.window-btn.close:hover {
-  background: var(--danger-solid);
-  border-color: var(--border-danger-solid);
-  color: var(--on-accent);
-}
-
-/* Fullscreen has no window to move or close, so the controls step aside and the
-   drag regions stop swallowing the pointer. */
-.app.fullscreen .window-controls {
-  display: none;
-}
-
-.app.fullscreen .sidebar,
-.app.fullscreen .topbar,
-.app.fullscreen .media-line,
-.app.fullscreen .settings-head {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.sidebar {
-  background: var(--panel-deep);
-  border-right: 1px solid var(--border);
-  padding: 16px 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-height: 0;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 2px 8px 18px;
-  min-width: 0;
-}
-
-.brand-mark {
-  display: block;
-  flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  /* The artwork is trimmed to its own edge, so the mark is a little larger than the
-     tile it replaced: the transparent corners give it the same optical weight. */
-  object-fit: contain;
-}
-
-.brand-text {
-  min-width: 0;
-}
-
-.brand-name {
-  font-size: 1.0625rem;
-  font-weight: 700;
-  letter-spacing: -0.3px;
-}
-
-/* Wraps rather than truncates: the tagline is the only place the app explains
-   itself up here, and "The All-in-One GIF & Video Stu…" explains nothing. */
-.brand-sub {
-  color: var(--text-meta);
-  font-size: 0.71875rem;
-  line-height: 1.35;
-}
-
-.nav-label {
-  /* Section headings are small and uppercase, so they need the same 4.5:1 the rest of
-     the body text gets: `--text-faint` measured 3.8:1 on the sidebar. */
-  color: var(--text-dim);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 1.3px;
-  padding: 4px 10px 8px;
-}
-
-.nav-item {
-  justify-content: flex-start;
-  gap: 10px;
-  height: 40px;
-  width: 100%;
-  padding: 0 12px;
-  border-radius: 9px;
-  color: var(--text-soft);
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.nav-item:hover {
-  background: var(--surface-hover);
-  color: var(--text-strong);
-}
-
-.nav-item.active {
-  background: var(--surface-nav-active);
-  border: 1px solid var(--border-nav-active);
-  color: var(--on-accent);
-}
-
-.nav-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-footer {
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.version-card {
-  background: var(--elevated);
-  border: 1px solid var(--border-soft);
-  border-radius: 12px;
-  padding: 14px 16px;
-}
-
-.version-card strong {
-  display: block;
-  margin-bottom: 2px;
-}
-
-.tagline {
-  color: var(--text-meta);
-  line-height: 1.5;
-  padding: 0 8px;
-  font-size: 0.78125rem;
-}
-
-/* ---------- workspace ---------- */
-
-.workspace {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  /* No top padding: it moves onto .topbar, which is a drag region. Padding here
-     would be dead pixels at the very top of the window - the strip people aim at
-     to move a frameless window. */
-  padding: 0 20px 16px;
-  min-width: 0;
-  min-height: 0;
-  /* Short windows — and windows with a session or install card in the flow — cannot
-     fit the preview, the timeline and the log at once. The workspace scrolls rather
-     than letting the panes' minimum heights paint over one another. */
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  /* The top edge gap belongs to the bar, so the whole strip above the controls is a
-     full-width grab handle rather than dead pixels. */
-  padding-top: 18px;
-  /* Nothing in the workspace may shrink: when it does not fit, it scrolls. */
-  flex: 0 0 auto;
-}
-
-.url-input {
-  /* Grows, but does not eat the row: whatever it leaves becomes the drag gap between
-     the buttons and the window controls. */
-  flex: 2 1 320px;
-  min-width: 0;
-  /* In rem, so the field matches the top bar's buttons at every scale. */
-  height: 2.5rem;
-  background: var(--elevated);
-  border: 1px solid var(--input);
-  border-radius: 10px;
-  padding: 0 14px;
-  outline: none;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-
-.url-input:focus {
-  border-color: var(--accent-bright);
-  background: var(--surface-hover);
-}
-
-.media-line {
-  color: var(--text-dim);
-  flex: 0 0 auto;
-  min-height: 18px;
-  font-size: 0.8125rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 25rem;
-  gap: 14px;
-  flex: 1;
-  /* Reserve both columns' minimums. `min-height: min-content` would do it, except
-     that the inspector reports its whole scrollable content as its minimum, which
-     would leave the panel unbounded and its pinned action unreachable. */
-  min-height: calc(var(--preview-min) + 14px + var(--timeline-max));
-}
-
-.center-column {
-  display: grid;
-  /* The first row may grow but never shrink below the preview's floor, so the pane
-     and the timeline cannot overlap however tall the window is. */
-  grid-template-rows: minmax(var(--preview-min), 1fr) auto;
-  gap: 14px;
-  min-width: 0;
-  min-height: 0;
-}
-
-.right-panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* ---------- preview ---------- */
-
-.preview-panel {
-  position: relative;
-  background: var(--stage);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: var(--preview-min);
-}
-
-.preview-panel video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  background: var(--void);
-}
-
-.preview-panel:fullscreen {
-  border: none;
-  border-radius: 0;
-  background: var(--void);
-}
-
-.preview-empty {
-  text-align: center;
-  color: var(--text-dim);
-  padding: 26px 22px;
-  line-height: 1.55;
-}
-
-.preview-empty strong {
-  display: block;
-  color: var(--foreground);
-  font-size: 1rem;
-  margin-bottom: 8px;
-}
-
-.preview-shortcuts {
-  display: block;
-  margin-top: 14px;
-  color: var(--text-ghost);
-  font-size: 0.75rem;
-}
-
-.preview-center {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  height: 3rem;
-  padding: 0 1.25rem;
-  border-radius: 999px;
-  border: 1px solid color-mix(in oklab, var(--accent-soft) 50%, transparent);
-  background: color-mix(in oklab, var(--panel) 82%, transparent);
-  gap: 9px;
-}
-
-.preview-controls {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: linear-gradient(to top, color-mix(in oklab, var(--scrim) 95%, transparent), color-mix(in oklab, var(--scrim) 55%, transparent) 60%, transparent);
-}
-
-.preview-time {
-  color: var(--text-bright);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  font-size: 0.78125rem;
-}
-
 .scrub {
   flex: 1;
   min-width: 60px;
-}
-
-.preview-note {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  background: color-mix(in oklab, var(--panel) 90%, transparent);
-  border: 1px solid var(--border-note);
-  border-radius: 999px;
-  padding: 5px 12px;
-  color: var(--text-bright);
-  font-size: 0.75rem;
-}
-
-.preview-note.loop {
-  left: auto;
-  right: 12px;
-  color: var(--text-brand);
-  border-color: var(--border-brand);
-}
-
-/* ---------- timeline ---------- */
-
-.timeline {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-
-.timeline-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.eyebrow {
-  color: var(--text-eyebrow);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
 }
 
 .track {
@@ -997,961 +695,20 @@
   font-size: 0.6875rem;
 }
 
-.trim-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
-}
-
-.field-label {
-  color: var(--text-dim);
-}
-
-.time-input {
-  width: 108px;
-  height: 32px;
-  text-align: center;
-  background: var(--input-bg);
-  border: 1px solid var(--input);
-  border-radius: 8px;
-  padding: 0 8px;
-  outline: none;
-  font-size: 0.8125rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.time-input:focus {
-  border-color: var(--accent-bright);
-}
-
-.trim-spacer {
-  flex: 1;
-}
-
-.duration-chip {
-  color: var(--text-soft);
-  font-variant-numeric: tabular-nums;
-}
-
-.duration-chip.warn {
-  color: var(--warning);
-}
-
-.muted {
-  color: var(--text-dim);
-}
-
-/* ---------- install card ---------- */
-
-.install-card {
-  background: var(--surface-warning-tint);
-  border: 1px solid var(--border-warning);
-  border-radius: 12px;
-  padding: 18px 20px;
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 auto;
-  gap: 14px;
-}
-
-.install-card.is-ready {
-  background: var(--surface-success-tint);
-  border-color: var(--border-success);
-}
-
-.install-card.has-error {
-  background: var(--surface-danger-tint);
-  border-color: var(--border-danger);
-}
-
-.install-card.compact {
-  background: var(--panel-deep);
-  border-color: var(--input);
-}
-
-.install-head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.install-heading {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.install-heading strong {
-  color: var(--text-warning);
-}
-
-.install-card.is-ready .install-heading strong {
-  color: var(--text-success);
-}
-
-.install-card.has-error .install-heading strong {
-  color: var(--text-danger);
-}
-
-.install-card.compact .install-heading strong {
-  color: var(--foreground);
-}
-
-.install-sub {
-  color: var(--text-warning-muted);
-  font-size: 0.78125rem;
-}
-
-.install-card.compact .install-sub {
-  color: var(--text-dim);
-}
-
-.install-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.install-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.install-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 6px 14px;
-  padding: 11px 14px;
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--background) 42%, transparent);
-  font-size: 0.8125rem;
-}
-
-.install-row .install-bar {
-  grid-column: 1 / -1;
-  display: block;
-  height: 3px;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--on-accent) 8%, transparent);
-  overflow: hidden;
-}
-
-.install-row .install-bar > span {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent-bright);
-  transition: width 180ms ease;
-}
-
-.install-row .install-error {
-  grid-column: 1 / -1;
-  color: var(--text-danger);
-  font-size: 0.71875rem;
-  word-break: break-word;
-}
-
-.install-name {
-  font-weight: 600;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.install-phase {
-  color: var(--text-soft);
-  white-space: nowrap;
-}
-
-.install-bytes {
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  min-width: 96px;
-  text-align: right;
-}
-
-.install-row.done .install-phase {
-  color: var(--text-success);
-}
-
-.install-row.failed .install-phase {
-  color: var(--text-danger);
-}
-
-.install-row.cancelled .install-phase {
-  color: var(--text-dim);
-}
-
-.install-row.downloading .install-phase,
-.install-row.installing .install-phase,
-.install-row.extracting .install-phase,
-.install-row.verifying .install-phase,
-.install-row.resolving .install-phase {
-  color: var(--text-brand);
-}
-
-/* ---------- output box ---------- */
-
-.output-box {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.output-stage {
-  position: relative;
-  background: var(--stage);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  min-height: 200px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-}
-
-.output-stage img,
-.output-stage video {
-  width: 100%;
-  height: 100%;
-  max-height: 320px;
-  object-fit: contain;
-  background: var(--void);
-}
-
-.output-empty {
-  color: var(--text-dim);
-  text-align: center;
-  padding: 48px 26px;
-  line-height: 1.6;
-}
-
-.output-empty strong {
-  display: block;
-  color: var(--foreground);
-  margin-bottom: 4px;
-}
-
-/* ---------- activity ---------- */
-
-.activity-panel {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--input-bg);
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 auto;
-  min-height: 0;
-}
-
-.activity-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 14px;
-}
-
-.activity-count {
-  color: var(--text-ghost);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.activity-head .link-btn:first-of-type {
-  margin-left: auto;
-}
-
-.activity {
-  padding: 0 14px 12px;
-  height: 80px;
-  overflow-y: auto;
-  color: var(--text-mid);
-  font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 0.78125rem;
-  line-height: 1.55;
-  user-select: text;
-}
-
-.activity-empty {
-  color: var(--text-ghost);
-}
-
-.activity-line {
-  display: flex;
-  gap: 10px;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.activity-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.activity-time {
-  color: var(--text-ghost);
-  flex: 0 0 auto;
-}
-
-.activity-line.error {
-  color: var(--text-danger);
-}
-
-.activity-line.done {
-  color: var(--text-success);
-}
-
-/* ---------- settings ---------- */
-
-/* Three rows: a head that never moves, the cards, and the save bar.
-   Only the middle row scrolls, so the save bar can never paint over a card - a
-   sticky bar looks fine and hides content the moment the window is short, which
-   is exactly when a settings page has the most to show. */
-.settings {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  /* Top padding lives on the head, which is a drag region (see .workspace), and
-     bottom padding on the footer, which is why neither is here. */
-  padding: 0 32px;
-  overflow: hidden;
-  min-height: 0;
-  height: 100vh;
-}
-
-.settings-head {
-  /* Static, not sticky: the head is outside the scroller below, so the window
-     controls stay reachable without any pinning. */
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding-top: 28px;
-  /* Full-bleed so the cards cannot show through the gutters. */
-  margin: 0 -32px;
-  padding-inline: 32px;
-  background: var(--background);
-}
-
-.settings-body {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: 940px;
-  width: 100%;
-  /* The only scroller on the page. `overflow-x: hidden` because this is a
-     vertical list: a sideways scrollbar in it is always a stray scrollbar. */
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
-  padding-bottom: 22px;
-  scrollbar-gutter: stable;
-}
-
-/* Label above control, the shape of every field on the page. */
-.setting-field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
+@keyframes progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(263%);
+  }
 }
 
 /*
- * The name a template produces, shown as the name itself rather than described.
- * Monospaced so that a template change reads as an edit rather than as new prose, and on
- * its own surface so it is obviously an output and not an instruction.
- */
-.naming-preview {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-inset, var(--panel-2));
-  color: var(--text-dim);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8125rem;
-  word-break: break-all;
-}
-
-.naming-preview svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  opacity: 0.7;
-}
-
-.naming-warning {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--text-warning);
-}
-
-/*
- * The before/after wipe for an AI removal.
- *
- * Both pictures are drawn at the same size and the top one is clipped, so the divider only
- * decides where one stops being drawn - the pixels line up exactly across it, which is what
- * makes a seam or a leftover outline visible instead of hidden behind a resize.
- */
-.compare-sheet {
-  width: min(720px, 92vw);
-  max-width: 720px;
-}
-
-.compare-time {
-  margin-left: auto;
-  margin-right: 10px;
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.compare-stage {
-  position: relative;
-  width: 100%;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--panel-2);
-  user-select: none;
-}
-
-.compare-image {
-  display: block;
-  width: 100%;
-  height: auto;
-  /* Never smoothed away: the whole point is judging the fill's own pixels. */
-  image-rendering: -webkit-optimize-contrast;
-}
-
-.compare-after {
-  position: absolute;
-  inset: 0 auto 0 0;
-  overflow: hidden;
-}
-
-.compare-after .compare-image {
-  /* Overridden inline to `100 / split` of this wrapper's width, i.e. the stage's own width. */
-  max-width: none;
-}
-
-.compare-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--accent, var(--text));
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--panel) 60%, transparent);
-  pointer-events: none;
-}
-
-.compare-label {
-  position: absolute;
-  bottom: 8px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: color-mix(in oklab, #000 62%, transparent);
-  color: #fff;
-  font-size: 0.6875rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  pointer-events: none;
-}
-
-.compare-label-before {
-  left: 8px;
-}
-
-.compare-label-after {
-  right: 8px;
-}
-
-.compare-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.compare-slider {
-  flex: 1;
-  accent-color: var(--accent, var(--text));
-}
-
-.compare-hint {
-  color: var(--text-dim);
-  font-size: 0.75rem;
-}
-
-/* Card headings carry an icon; it is what makes the tabs scannable rather than read. */
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.card-title svg {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 auto;
-  color: var(--text-dim);
-}
-
-/* The swatch paints itself from the theme it previews: `data-theme` on the chip makes
-   that theme's block apply to its subtree, so the stripes come from the same tokens
-   the app uses and cannot drift the way a copy of the palette in JavaScript would. */
-.theme-chip {
-  display: inline-flex;
-  flex: 0 0 auto;
-  width: 34px;
-  height: 20px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.theme-chip > i {
-  display: block;
-  height: 100%;
-}
-
-.theme-chip > i:nth-child(1) {
-  width: 42%;
-  background: var(--background);
-}
-
-.theme-chip > i:nth-child(2) {
-  width: 26%;
-  background: var(--panel);
-}
-
-.theme-chip > i:nth-child(3) {
-  width: 32%;
-  background: var(--accent-bright);
-}
-
-.theme-option {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 13px;
-}
-
-.card h3 {
-  margin: 0;
-  font-size: 1rem;
-}
-
-.card p {
-  margin: 0;
-  color: var(--text-dim);
-}
-
-.card-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-}
-
-.dep-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--rule);
-}
-
-.dep-row:last-of-type {
-  border-bottom: none;
-}
-
-.dep-name {
-  font-weight: 600;
-  min-width: 74px;
-}
-
-.dep-version {
-  color: var(--text-soft);
-  font-variant-numeric: tabular-nums;
-  min-width: 145px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dep-path {
-  color: var(--text-dim);
-  margin-left: auto;
-  max-width: 42%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-}
-
-.kv {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  color: var(--text-soft);
-}
-
-.kv span:last-child {
-  color: var(--foreground);
-  text-align: right;
-}
-
-.error-text {
-  color: var(--destructive);
-}
-
-/* A real footer row, not an overlay: the hairline sits above the bar and the band
-   spans the window so cards scroll behind nothing. */
-.settings-foot {
-  flex: 0 0 auto;
-  margin: 0 -32px;
-  padding: 14px 32px 20px;
-  background: var(--background);
-  border-top: 1px solid var(--rule);
-}
-
-.settings-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  max-width: 940px;
-}
-
-.settings-bar .primary-action {
-  margin-left: auto;
-}
-
-.settings-bar.dirty {
-  border-color: var(--border-brand);
-}
-
-/* ---------- export panel controls ---------- */
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.field-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-/* Add / remove a marked area, sitting on the label's line. */
-.region-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* Speed presets and the typed value on one line, because they are one control: the
-   quick picks write the same number the field shows. */
-.speed-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.speed-custom {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-}
-
-.speed-unit {
-  color: var(--text-dim);
-  font-size: 0.84375rem;
-}
-
-.speed-row .num-input {
-  width: 68px;
-}
-
-.field-hint {
-  color: var(--text-dim);
-  font-size: 0.78125rem;
-  font-style: normal;
-  line-height: 1.5;
-}
-
-.field-hint.warn {
-  color: var(--warning);
-}
-
-.num-input {
-  width: 76px;
-  height: 34px;
-  padding: 0 10px;
-  background: var(--input-bg);
-  border: 1px solid var(--input);
-  border-radius: 9px;
-  color: var(--foreground);
-  font-size: 0.84375rem;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.num-input:focus {
-  border-color: var(--accent-bright);
-  outline: none;
-}
-
-.check-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 4px 0;
-  cursor: pointer;
-}
-
-.check-row > span {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.check-row strong {
-  font-size: 0.84375rem;
-  font-weight: 600;
-}
-
-.check-row em {
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  font-style: normal;
-  line-height: 1.45;
-}
-
-.section-toggle {
-  justify-content: flex-start;
-  gap: 9px;
-  color: var(--text-soft);
-  padding-left: 2px;
-}
-
-.section-toggle svg {
-  width: 16px;
-  height: 16px;
-}
-
-.advanced-block {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--elevated) 55%, transparent);
-}
-
-.crop-actions {
-  display: flex;
-  gap: 10px;
-}
-
-/* The panel is taller than a short window. Rather than pinning the action row as a
-   sticky overlay (which let the last field slide underneath it), the panel is split
-   into a scrolling body and a footer that is a real flex row — so the primary action
-   is always visible and nothing is ever hidden behind it. */
-.export-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  /* A vertical control list; `overflow-x: hidden` keeps a subpixel of extra width
-     from raising a sideways scrollbar across the bottom of the panel. */
-  overflow-x: hidden;
-  overscroll-behavior: contain;
-  padding: 14px 16px 12px;
-  scrollbar-gutter: stable;
-}
-
-.export-footer {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  padding: 12px 16px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--panel);
-}
-
-.preset-row {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.preset-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-/* ---------- export panel sections ---------- */
-
-/* A titled group of controls. The heading plus the hairline between groups is what
-   keeps a long panel readable as a few decisions at a glance. */
-.panel-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.panel-section:last-of-type {
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
-.panel-section-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.panel-section-head svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  color: var(--accent-soft);
-}
-
-.panel-section-head h4 {
-  margin: 0;
-  font-size: 0.90625rem;
-  font-weight: 600;
-  letter-spacing: 0.1px;
-}
-
-/* In the footer now, so it is compact and horizontal: the label no longer needs its own
-   line, and the whole card has to leave room for the export button under it. */
-.estimate-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 11px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--panel) 55%, transparent);
-}
-
-.estimate-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.estimate-value {
-  color: var(--foreground);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.estimate-measure {
-  color: var(--text-dim);
-  font-size: 0.75rem;
-}
-
-.progress-block {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--elevated) 70%, transparent);
-}
-
-.progress-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.progress-title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  color: var(--text-soft);
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-
-/* What the running stage is doing inside its step ("Cutting window 1 of 1"): the step
-   label names the phase, this names the work. */
-.progress-subtitle {
-  color: var(--text-faint);
-  font-size: 0.75rem;
-  font-style: normal;
-  font-weight: 400;
-}
-
-.progress-percent {
-  color: var(--foreground);
-  font-size: 1.0625rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-/*
- * Steps whose tools report nothing - gifsicle, gifski's own size pass - sweep instead
- * of filling: a bar parked at 0% for a minute is indistinguishable from a hang, which
- * is the one thing a progress display must never say. The animation is what overrides
- * the indicator's inline transform.
+ * Steps whose tools report nothing - gifsicle, gifski's own size pass - sweep instead of
+ * filling: a bar parked at 0% for a minute is indistinguishable from a hang, which is the
+ * one thing a progress display must never say. The animation is what overrides the
+ * indicator's inline transform.
  */
 .progress-indeterminate [data-slot='progress-indicator'] {
   width: 38%;
@@ -1966,141 +723,11 @@
   animation: progress-sweep 1.5s ease-in-out infinite;
 }
 
-@keyframes progress-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(263%);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .progress-indeterminate [data-slot='progress-indicator'] {
-    width: 100%;
-    opacity: 0.4;
     animation: none;
-    transform: none !important;
+    width: 100%;
   }
-}
-
-.progress-meta {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--text-dim);
-  font-size: 0.78125rem;
-}
-
-.progress-meta span:first-child {
-  color: var(--text-soft);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.step-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 2px 0 0;
-  padding: 0;
-  list-style: none;
-  font-size: 0.78125rem;
-}
-
-.step-list li {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--text-faint);
-}
-
-.step-list li::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border-bullet);
-  flex: 0 0 auto;
-}
-
-.step-list li.done {
-  color: var(--text-soft);
-}
-
-.step-list li.done::before {
-  background: var(--success);
-  border-color: var(--success);
-}
-
-.step-list li.active {
-  color: var(--on-accent);
-  font-weight: 600;
-}
-
-.step-list li.active::before {
-  background: var(--accent-bright);
-  border-color: var(--accent-soft);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent);
-}
-
-.step-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The per-step figure on the right: how long a finished step took, or how far the
-   running one is. */
-.step-note {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  font-size: 0.75rem;
-}
-
-.step-list li.done .step-note,
-.step-list li.active .step-note {
-  color: inherit;
-  opacity: 0.72;
-}
-
-.btn-quiet {
-  color: var(--text-dim);
-}
-
-.btn-quiet:hover {
-  color: var(--foreground);
-}
-
-/* ---------- status area ---------- */
-
-.status-area {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  /* Takes the slack the URL field leaves. It is a plain div, so unlike the buttons
-     around it the whole area stays draggable - this is the bar's main grab handle. */
-  flex: 1 1 80px;
-  min-width: 0;
-}
-
-.status-pill {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.notice {
-  color: var(--accent-soft);
-  font-size: 0.78125rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  animation: notice-in 160ms ease;
 }
 
 @keyframes notice-in {
@@ -2108,31 +735,6 @@
     opacity: 0;
     transform: translateY(-2px);
   }
-}
-
-/* ---------- timeline extras ---------- */
-
-.timeline-meta {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.trim-hint {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  line-height: 1.4;
-  min-width: 0;
-}
-
-.trim-hint-alt {
-  color: var(--text-meta);
-  font-size: 0.71875rem;
 }
 
 .tick {
@@ -2309,18 +911,6 @@
   cursor: nwse-resize;
 }
 
-.preview-skeleton {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 200px;
-  overflow: hidden;
-  background: var(--track);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .skeleton-shimmer {
   position: absolute;
   inset: 0;
@@ -2337,234 +927,10 @@
   }
 }
 
-.preview-skeleton-text {
-  position: relative;
-  color: var(--text-dim);
-  font-size: 0.8125rem;
-}
+/* A downloaded update waiting on a restart is good news, so it reads green - the Alert's
+   `success` variant carries that now, which is why the old `.guide-card.ready` is gone. */
 
-.volume {
-  width: 68px;
-  flex: 0 0 auto;
-  accent-color: var(--accent-bright);
-  cursor: pointer;
-}
-
-/* ---------- drop zone ---------- */
-
-.drop-zone {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 28px;
-  background: color-mix(in oklab, var(--scrim) 72%, transparent);
-  backdrop-filter: blur(3px);
-}
-
-.drop-zone-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  max-width: 520px;
-  padding: 52px 44px;
-  border: 2px dashed var(--accent-soft);
-  border-radius: 20px;
-  background: color-mix(in oklab, var(--panel) 92%, transparent);
-  text-align: center;
-  box-shadow: 0 24px 60px color-mix(in oklab, var(--scrim) 60%, transparent);
-}
-
-.drop-zone-inner svg {
-  width: 34px;
-  height: 34px;
-  color: var(--accent-soft);
-}
-
-.drop-zone-inner strong {
-  font-size: 1.125rem;
-}
-
-.drop-zone-inner span {
-  color: var(--text-dim);
-  font-size: 0.84375rem;
-}
-
-/* ---------- guide cards ---------- */
-
-.guide-card {
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 auto;
-  gap: 14px;
-  padding: 16px 18px;
-  border: 1px solid color-mix(in oklab, var(--ring) 40%, transparent);
-  border-radius: var(--radius);
-  background: linear-gradient(135deg, var(--surface-brand-tint), color-mix(in oklab, var(--panel) 90%, transparent));
-}
-
-.guide-card.error {
-  border-color: color-mix(in oklab, var(--destructive) 45%, transparent);
-  background: linear-gradient(135deg, var(--surface-danger-tint), color-mix(in oklab, var(--panel) 90%, transparent));
-}
-
-/* A downloaded update waiting on a restart is good news, so it reads green. */
-.guide-card.ready {
-  border-color: color-mix(in oklab, var(--success) 45%, transparent);
-  background: linear-gradient(135deg, var(--surface-success-tint), color-mix(in oklab, var(--panel) 90%, transparent));
-}
-
-.update-status {
-  display: flex;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
-.guide-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.guide-head strong {
-  font-size: 0.96875rem;
-}
-
-.guide-head .btn-quiet {
-  margin-left: auto;
-}
-
-.guide-body {
-  color: var(--text-soft);
-  font-size: 0.84375rem;
-  line-height: 1.6;
-}
-
-.guide-line {
-  margin: 0;
-}
-
-.guide-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.guide-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.guide-steps li {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.guide-steps li span:last-child {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.guide-steps strong {
-  font-size: 0.84375rem;
-}
-
-.guide-steps em {
-  color: var(--text-dim);
-  font-size: 0.78125rem;
-  font-style: normal;
-  line-height: 1.45;
-}
-
-.guide-index {
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-/* ---------- error card ---------- */
-
-.error-card {
-  display: flex;
-  align-items: flex-start;
-  flex: 0 0 auto;
-  gap: 13px;
-  padding: 16px 18px;
-  border: 1px solid color-mix(in oklab, var(--destructive) 45%, transparent);
-  border-radius: var(--radius);
-  background: var(--surface-danger-tint);
-}
-
-.error-card > svg {
-  flex: 0 0 auto;
-  width: 19px;
-  height: 19px;
-  margin-top: 1px;
-  color: var(--destructive);
-}
-
-.error-body {
-  min-width: 0;
-  flex: 1;
-}
-
-.error-body strong {
-  display: block;
-  font-size: 0.84375rem;
-  margin-bottom: 4px;
-}
-
-.error-body p {
-  margin: 0;
-  color: var(--text-danger);
-  font-size: 0.8125rem;
-  line-height: 1.55;
-  word-break: break-word;
-}
-
-.error-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
-/* ---------- toast ---------- */
-
-.toast {
-  position: fixed;
-  right: 22px;
-  bottom: 22px;
-  z-index: 50;
-  display: flex;
-  align-items: flex-start;
-  gap: 13px;
-  max-width: 480px;
-  padding: 16px 18px;
-  border: 1px solid var(--border-toast);
-  border-radius: var(--radius);
-  background: var(--surface-success-tint);
-  box-shadow: 0 18px 44px color-mix(in oklab, var(--scrim) 65%, transparent);
-  animation: toast-in 180ms ease;
-}
-
+/* Used by the toast primitive's `data-[state=open]` animation. */
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -2572,536 +938,19 @@
   }
 }
 
-.toast > svg {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  margin-top: 1px;
-  color: var(--success);
-}
-
-.toast-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-
-.toast-body strong {
-  font-size: 0.84375rem;
-}
-
-.toast-body span {
-  color: var(--text-soft);
-  font-size: 0.78125rem;
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-.toast-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
-/* ---------- shortcut sheet ---------- */
-
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  display: grid;
-  place-items: center;
-  background: color-mix(in oklab, var(--scrim) 70%, transparent);
-}
-
-.sheet {
-  width: min(560px, 92vw);
-  max-height: 80vh;
-  overflow-y: auto;
-  padding: 22px 24px 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  box-shadow: 0 26px 70px color-mix(in oklab, var(--scrim) 70%, transparent);
-}
-
-.sheet-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.sheet-head strong {
-  font-size: 1.0625rem;
-}
-
-.sheet-head .btn-quiet {
-  margin-left: auto;
-}
-
-.sheet-list {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sheet-list li {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font-size: 0.84375rem;
-  color: var(--text-soft);
-}
-
-.sheet-list kbd {
-  flex: 0 0 148px;
-  padding: 6px 10px;
-  border: 1px solid var(--input);
-  border-radius: 8px;
-  background: var(--input-bg);
-  color: var(--foreground);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  text-align: center;
-}
-
-/* ---------- activity log extras ---------- */
-
-.activity-icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  color: var(--text-ghost);
-}
-
-.activity-icon svg {
-  width: 13px;
-  height: 13px;
-}
-
-.activity-line.done .activity-icon {
-  color: var(--success);
-}
-
-.activity-line.warn .activity-icon {
-  color: var(--warning);
-}
-
-.activity-line.error .activity-icon {
-  color: var(--destructive);
-}
-
-.activity-flag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in oklab, var(--warning) 40%, transparent);
-  border-radius: 999px;
-  background: var(--surface-warning-tint);
-  color: var(--warning);
-  font-size: 0.71875rem;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-}
-
-.activity-flag svg {
-  width: 11px;
-  height: 11px;
-}
-
-.activity-filters {
-  display: flex;
-  gap: 8px;
-  padding: 6px 16px 10px;
-}
-
-.filter-chip {
-  height: 28px;
-  padding: 0 13px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.filter-chip:hover {
-  color: var(--foreground);
-  border-color: var(--input);
-}
-
-.filter-chip.on {
-  background: var(--accent);
-  border-color: var(--accent-bright);
-  color: var(--on-accent);
-}
-
-.btn-label {
-  white-space: nowrap;
-}
-
-/* ---------- output panel extras ---------- */
-
-.optimised-note {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 14px 16px;
-  border: 1px solid var(--border-success-soft);
-  border-radius: 12px;
-  background: var(--surface-success-tint);
-  color: var(--text-soft);
-  font-size: 0.78125rem;
-  line-height: 1.45;
-}
-
-.drag-out {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 18px;
-  border: 1px dashed var(--input);
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--elevated) 60%, transparent);
-  color: var(--text-soft);
-  cursor: grab;
-}
-
-.drag-out:hover {
-  border-color: var(--accent-bright);
-  color: var(--foreground);
-}
-
-.drag-out:active {
-  cursor: grabbing;
-}
-
-.drag-out svg {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 auto;
-}
-
-.drag-out-name {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.drag-out em {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: 0.71875rem;
-  font-style: normal;
-  white-space: nowrap;
-}
-
-/* ---------- media tools list (Settings → Media tools) ---------- */
-
-.tool-list {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  /* Hairlines instead of a box per row: four tools read as one compact block. */
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-}
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 48px;
-  padding: 0 16px;
-  background: color-mix(in oklab, var(--elevated) 45%, transparent);
-}
-
-/*
- * The saved link session, in the shape of a tool row: one status dot, one sentence,
- * and the buttons at the far end. The dot follows the same rule as a tool's - filled
- * when the thing it describes is in place - so "signed in" reads at a glance.
- */
-.link-session {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 48px;
-  margin-bottom: 12px;
-  padding: 0 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--elevated) 45%, transparent);
-}
-
-.link-session-state {
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.link-session.ok .tool-dot {
-  background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 14%, transparent);
-}
-
-.tool-row + .tool-row {
-  border-top: 1px solid var(--border);
-}
-
-.tool-dot {
-  flex: 0 0 auto;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--dot-idle);
-}
-
-.tool-row.ok .tool-dot {
-  background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 14%, transparent);
-}
-
-.tool-row.missing .tool-dot {
-  background: var(--warning);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warning) 14%, transparent);
-}
-
-.tool-name {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.84375rem;
-  font-weight: 600;
-}
-
-.tool-version {
-  margin-right: auto;
-  color: var(--text-dim);
-  font-size: 0.78125rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tool-folder {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  margin-top: 16px;
-  font-size: 0.78125rem;
-}
-
-.tool-folder-path {
-  flex: 1;
-  min-width: 0;
-  color: var(--text-soft);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  /* Long Windows paths keep their meaningful tail visible when they do not fit. */
-  text-align: left;
-}
-
 /* ---------- responsive ---------- */
 
-@media (max-width: 1400px) {
-  :root {
-    /* The narrower centre column wraps the timeline's trim row onto a second line,
-       so the preview gives a little more of itself back before the workspace has to
-       start scrolling. */
-    --preview-min: 168px;
-  }
+/* Width-based behaviour is per component now - the shell, the rail, the panel column and
+   the transport row each carry their own `max-[…]` variants - so what is left here is the
+   one thing a component cannot know on its own: how tall the window is, which decides how
+   much of the centre column the preview and the timeline may claim. */
 
-  .main {
-    grid-template-columns: minmax(0, 1fr) 356px;
-  }
-
-  /* The transport row runs out of room before the preview does. The volume
-     slider is the one control there that duplicates another: the mute toggle
-     beside it stays, so the bar never spills past the pane's edge. */
-  .volume {
-    display: none;
-  }
-}
-
-/* Once the inspector takes its share of a smaller window, the trim row has no room
-   for the two-line hint beside the buttons: the hint would wrap onto a line of its
-   own and make the whole centre column taller than the window. The buttons matter
-   more, so the hint only appears where the row genuinely has space for it. */
-@media (max-width: 1560px) {
-  .trim-hint {
-    display: none;
-  }
-}
-
-/* Narrower time codes keep the trim row on one line here, which is what holds the
-   timeline to the height the main grid reserved for it. */
-@media (max-width: 1360px) {
-  .time-input {
-    width: 96px;
-  }
-}
-
-/* The sidebar never disappears: on a narrow window it becomes a permanent icon
-   rail so Home and Settings stay reachable while the workspace keeps its width.
-   The labels stay out of the way at every pointer position — the rail is the
-   sidebar at this size, not a collapsed state that expands under the cursor —
-   and the nav tooltips are what name each row. */
-@media (max-width: 1180px) {
-  .app {
-    grid-template-columns: 76px minmax(0, 1fr);
-  }
-
-  .sidebar .nav-text,
-  .sidebar .nav-label,
-  .sidebar .brand-text,
-  .sidebar .sidebar-footer {
-    display: none;
-  }
-
-  .sidebar .brand {
-    justify-content: center;
-    padding: 4px 0 14px;
-  }
-
-  .sidebar .nav-item {
-    justify-content: center;
-    padding: 0;
-    position: relative;
-  }
-
-  /* In the rail there is no room for the count badge beside the icon, so it
-     becomes a small corner pip instead of squeezing the row. */
-  .sidebar .nav-item .ml-auto {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    margin-left: 0;
-    min-width: 15px;
-    height: 15px;
-    padding: 0 3px;
-    font-size: 0.5625rem;
-  }
-}
-
-@media (max-width: 1080px) {
-  /* Stacked, the two panes are rows of one column. `max-content` keeps each row at
-     the height its content actually needs: an `auto` row is allowed to shrink to
-     the items' minimum, and both items carry `min-height: 0` for the side-by-side
-     case, so the timeline used to paint over the top of the panel. */
-  .main {
-    grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: max-content;
-    /* Stacked, the workspace scrolls, so nothing here may shrink to fit it: a flex
-       item that shrinks drops below its own content and the panes then paint over
-       the log underneath. Content sizing is the honest answer — the panel's height
-       varies with the window, so a fixed floor cannot stand in for it. */
-    flex: 0 0 auto;
-    min-height: 0;
-  }
-
-  .center-column {
-    grid-template-rows: minmax(var(--preview-min), 40vh) auto;
-    min-height: 0;
-  }
-
-  /* The inspector keeps its own bounded scroll box with its pinned action rather
-     than stretching into one long page: on a small screen the thing worth pinning
-     is still the thing you press to export. */
-  .right-panel {
-    height: min(620px, 70vh);
-  }
-
-  /* Stacked, the inspector is as wide as the window, so the pinned action row can
-     sit on one line. That hands roughly 30px back to the scrolling body, which on a
-     short window is the difference between seeing one field and two. */
-  .export-footer {
-    flex-direction: row;
-    align-items: center;
-    gap: 14px;
-  }
-
-  .export-footer .field-hint {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .export-footer > button {
-    flex: 0 0 auto;
-    min-width: 190px;
-  }
-
-  /* Stacked, width is the scarce dimension. The top bar's labels go first: every
-     one of those buttons already carries a tooltip and an aria-label, and the URL
-     field is what actually needs the room. */
-  .workspace {
-    padding: 0 14px 12px;
-    gap: 12px;
-  }
-
-  /* Keeps the same visual inset as the old workspace padding-top, but as a drag
-     handle. */
-  .topbar {
-    padding-top: 14px;
-  }
-
-  .topbar .btn-label {
-    display: none;
-  }
-
-  .window-btn {
-    width: 30px;
-    height: 30px;
-  }
-
-  .preview-controls {
-    padding: 8px 12px;
-    gap: 7px;
-  }
-}
-
-/* A 1080p laptop at 125% scaling leaves a 1536x816 work area, so the inspector is
-   ~50px shorter than the 900px most numbers are measured at. Without this the crop
-   control — the one control worth reaching without scrolling — sat just below the
-   fold. The log is the pane that can give the space back. */
+/* A 1080p laptop at 125% scaling leaves a 1536x816 work area, so the inspector is ~50px
+   shorter than the 900px most numbers are measured at. Without this the crop control - the
+   one control worth reaching without scrolling - sat just below the fold. */
 @media (max-height: 880px) {
   :root {
     --timeline-max: 190px;
-  }
-
-  .activity {
-    height: 68px;
-  }
-
-  .workspace {
-    padding: 0 18px 12px;
-    gap: 12px;
-  }
-
-  .topbar {
-    padding-top: 16px;
-  }
-
-  .timeline {
-    gap: 8px;
   }
 }
 
@@ -3110,67 +959,23 @@
     --preview-min: 148px;
     --timeline-max: 186px;
   }
-
-  .activity {
-    height: 60px;
-  }
-
-  /* A short pane has to drop the least useful line of the empty state rather than
-     clip it. */
-  .preview-empty {
-    padding: 18px 20px;
-  }
-
-  .preview-empty strong {
-    font-size: 0.9375rem;
-    margin-bottom: 6px;
-  }
-
-  .preview-shortcuts {
-    display: none;
-  }
 }
 
-/* At the app's minimum height the roomy rhythm above would leave the timeline and
-   the inspector fighting over nothing, so the few blocks that can give space back
-   do: the log, the timeline and the inspector's own padding. */
+/* At the app's minimum height the roomy rhythm above would leave the timeline and the
+   inspector fighting over nothing, so the few blocks that can give space back do: the log,
+   the timeline and the inspector's own padding. Each of those now carries the height
+   variant itself, in its own component - this only has the floor the layout grid is drawn
+   against, and the type scale. */
 @media (max-height: 720px) {
   :root {
     --preview-min: 138px;
     --timeline-max: 176px;
   }
 
-  .activity {
-    height: 48px;
-  }
-
-  .timeline {
-    padding: 10px 12px 8px;
-    gap: 7px;
-  }
-
-  .track {
-    height: 42px;
-  }
-
-  .export-scroll {
-    padding: 10px 14px 10px;
-  }
-
-  .panel-section {
-    gap: 10px;
-    padding-bottom: 12px;
-  }
-
-  .export-footer {
-    gap: 8px;
-    padding: 10px 14px 12px;
-  }
-
-  /* Height is the scarce dimension here, so cap the fluid scale a little lower
-     than the width rule would have it — but never *above* it, or a narrow, short
-     window would grow its type as it shrinks. */
+  /* Height is the scarce dimension here, so cap the fluid scale a little lower than the
+     width rule would have it - but never *above* it, or a narrow, short window would grow
+     its type as it shrinks. */
   html {
-    font-size: min(14px, clamp(13px, 0.5vw + 7px, 15px));
+    font-size: min(15px, clamp(14px, 0.25vw + 11px, 16px));
   }
 }

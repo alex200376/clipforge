@@ -11,7 +11,7 @@ export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrim
   return (
     <TabsPrimitive.List
       data-slot="tabs-list"
-      className={cn('inline-flex h-10 w-full items-center gap-1 rounded-lg bg-secondary p-1 text-dim', className)}
+      className={cn('inline-flex h-9 w-full items-center gap-1 rounded-lg bg-secondary p-1 text-dim', className)}
       {...props}
     />
   )
@@ -22,8 +22,8 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"
       className={cn(
-        'inline-flex h-8 flex-1 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 text-[0.8125rem] font-semibold whitespace-nowrap transition-colors',
-        'hover:text-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm',
+        'inline-flex h-7 flex-1 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium whitespace-nowrap transition-colors',
+        'hover:text-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground',
         className
       )}
       {...props}
@@ -33,10 +33,6 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
 
 export function TabsContent({ className, ...props }: ComponentProps<typeof TabsPrimitive.Content>): JSX.Element {
   return (
-    <TabsPrimitive.Content
-      data-slot="tabs-content"
-      className={cn('min-h-0 flex-1 outline-none', className)}
-      {...props}
-    />
+    <TabsPrimitive.Content data-slot="tabs-content" className={cn('min-h-0 flex-1 outline-none', className)} {...props} />
   )
 }

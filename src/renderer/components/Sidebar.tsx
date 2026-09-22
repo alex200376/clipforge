@@ -3,6 +3,7 @@ import { Home, Settings } from 'lucide-react'
 // Generated from assets/icon-source.png by `npm run make:icon`, so the app mark and the
 // Windows shell icon are always the same artwork.
 import brandMark from '../assets/brand.png'
+import { cn } from '../lib/utils'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
@@ -13,62 +14,80 @@ interface Props {
   page: Page
   onNavigate: (page: Page) => void
   missingDependencies: number
+  /** False in fullscreen, where the rail stops grabbing the mouse. */
+  drag?: boolean
 }
 
-export function Sidebar({ page, onNavigate, missingDependencies }: Props): JSX.Element {
+/**
+ * The rail never disappears: on a narrow window it becomes icons only, so Home and
+ * Settings stay reachable while the workspace keeps its width. The labels stay out of
+ * the way at every pointer position - the rail *is* the sidebar at that size, not a
+ * collapsed state that expands under the cursor - and the nav tooltips name each row.
+ */
+export function Sidebar({ page, onNavigate, missingDependencies, drag = true }: Props): JSX.Element {
   const { t } = useI18n()
 
+  /** One navigation row, in both the full and the icon-rail form. */
+  const navItem = (target: Page, icon: JSX.Element, label: string, badge?: number): JSX.Element => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant={page === target ? 'default' : 'ghost'}
+          className={cn(
+            'relative h-10 w-full justify-start gap-2.5 rounded-lg px-3 text-sm font-semibold',
+            page !== target && 'text-soft hover:bg-surface-hover hover:text-strong',
+            'max-[1180px]:justify-center max-[1180px]:px-0'
+          )}
+          onClick={() => onNavigate(target)}
+        >
+          {icon}
+          <span className="min-w-0 truncate max-[1180px]:hidden">{label}</span>
+          {/* In the rail there is no room beside the icon, so the count becomes a corner
+              pip instead of squeezing the row. */}
+          {badge !== undefined && badge > 0 && (
+            <Badge
+              variant="destructive"
+              className="ml-auto max-[1180px]:absolute max-[1180px]:top-0.5 max-[1180px]:right-0.5 max-[1180px]:ml-0 max-[1180px]:h-[15px] max-[1180px]:min-w-[15px] max-[1180px]:justify-center max-[1180px]:px-1 max-[1180px]:py-0"
+            >
+              {badge}
+            </Badge>
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
+  )
+
   return (
-    <nav className="sidebar">
-      <div className="brand">
-        <img className="brand-mark" src={brandMark} alt="" aria-hidden="true" />
-        <div className="brand-text">
-          <div className="brand-name">{t('app.name')}</div>
-          <div className="brand-sub">{t('app.tagline')}</div>
+    <nav
+      className={cn(
+        'flex min-h-0 flex-col gap-1.5 border-r border-border bg-panel-deep px-3 pt-4 pb-3.5',
+        drag && 'drag'
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2.5 px-2 pt-0.5 pb-4 max-[1180px]:justify-center max-[1180px]:px-0">
+        <img className="block size-[34px] shrink-0 object-contain" src={brandMark} alt="" aria-hidden="true" />
+        <div className="min-w-0 max-[1180px]:hidden">
+          <div className="text-[1.0625rem] leading-tight font-bold tracking-[-0.3px]">{t('app.name')}</div>
+          {/* Wraps rather than truncates: the tagline is the only place the app explains
+              itself up here, and "The All-in-One GIF & Video Stu…" explains nothing. */}
+          <div className="text-[0.71875rem] leading-[1.35] text-meta">{t('app.tagline')}</div>
         </div>
       </div>
 
-      <div className="nav-label">{t('nav.workspace')}</div>
+      <div className="px-2.5 pt-1 pb-2 text-[0.6875rem] font-bold tracking-[1.3px] text-dim max-[1180px]:hidden">
+        {t('nav.workspace')}
+      </div>
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant={page === 'home' ? 'default' : 'ghost'}
-            className={`nav-item ${page === 'home' ? 'active' : ''}`}
-            onClick={() => onNavigate('home')}
-          >
-            <Home className="size-[18px]" />
-            <span className="nav-text">{t('nav.home')}</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="right">{t('nav.home')}</TooltipContent>
-      </Tooltip>
+      {navItem('home', <Home className="size-[18px]" />, t('nav.home'))}
+      {navItem('settings', <Settings className="size-[18px]" />, t('nav.settings'), missingDependencies)}
 
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant={page === 'settings' ? 'default' : 'ghost'}
-            className={`nav-item ${page === 'settings' ? 'active' : ''}`}
-            onClick={() => onNavigate('settings')}
-          >
-            <Settings className="size-[18px]" />
-            <span className="nav-text">{t('nav.settings')}</span>
-            {missingDependencies > 0 && (
-              <Badge variant="destructive" className="ml-auto">
-                {missingDependencies}
-              </Badge>
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="right">{t('nav.settings')}</TooltipContent>
-      </Tooltip>
-
-      <div className="sidebar-footer">
-        <div className="version-card">
-          <strong>{t('app.name')}</strong>
-          <span className="tagline">{t('app.version')}</span>
+      <div className="mt-auto flex flex-col gap-3 max-[1180px]:hidden">
+        <div className="rounded-xl border border-border-soft bg-elevated px-4 py-3.5">
+          <strong className="text-sm font-semibold">{t('app.name')}</strong>
+          <div className="text-[0.71875rem] leading-[1.35] text-meta">{t('app.version')}</div>
         </div>
-        <div className="tagline">{t('app.pitch')}</div>
+        <div className="text-[0.71875rem] leading-[1.35] text-meta">{t('app.pitch')}</div>
       </div>
     </nav>
   )

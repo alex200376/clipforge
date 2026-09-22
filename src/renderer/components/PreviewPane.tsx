@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 
 import { Button } from './ui/button'
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import type { CropSpec, PreviewSource } from '../../shared/types'
 import { formatTime } from '../format'
@@ -234,7 +235,10 @@ export function PreviewPane({
   const showWatermarks = picture !== null && source !== null
 
   return (
-    <div className="preview-panel" ref={panelRef}>
+    <div
+      className="relative flex min-h-[var(--preview-min)] items-center justify-center overflow-hidden rounded-xl border border-border bg-stage"
+      ref={panelRef}
+    >
       {preview ? (
         <>
           <video
@@ -249,13 +253,17 @@ export function PreviewPane({
           />
 
           {!playing && (
-            <Button className="preview-center" onClick={onTogglePlay}>
+            <Button className="absolute top-1/2 left-1/2 h-12 -translate-x-1/2 -translate-y-1/2 gap-2.5 rounded-full border border-[color-mix(in_oklab,var(--accent-soft)_50%,transparent)] bg-[color-mix(in_oklab,var(--panel)_82%,transparent)] px-5" onClick={onTogglePlay}>
               <Play className="size-4" />
               {t('preview.play')}
             </Button>
           )}
 
-          {loop && <div className="preview-note loop">{t('preview.loopOn')}</div>}
+          {loop && (
+            <div className="absolute top-3 right-3 rounded-full border border-[var(--border-note)] bg-[color-mix(in_oklab,var(--panel)_90%,transparent)] px-3 py-1 text-xs text-bright">
+              {t('preview.loopOn')}
+            </div>
+          )}
 
           {showCrop && picture && (
             <div
@@ -305,7 +313,7 @@ export function PreviewPane({
           )}
 
           {/* Always visible: hover-only controls are invisible on a desktop app. */}
-          <div className="preview-controls">
+          <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-[linear-gradient(to_top,color-mix(in_oklab,var(--scrim)_95%,transparent),color-mix(in_oklab,var(--scrim)_55%,transparent)_60%,transparent)] px-3.5 py-2.5">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button size="icon" variant="secondary" onClick={() => onStep(-1)} aria-label={t('preview.stepBack')}>
@@ -333,7 +341,7 @@ export function PreviewPane({
               <TooltipContent>{t('preview.stepForward')}</TooltipContent>
             </Tooltip>
 
-            <span className="preview-time">
+            <span className="tabular-nums whitespace-nowrap text-bright">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
 
@@ -373,7 +381,7 @@ export function PreviewPane({
             </Tooltip>
 
             <input
-              className="volume"
+              className="w-[68px] shrink-0 cursor-pointer accent-[var(--accent-bright)] max-[1400px]:hidden"
               type="range"
               aria-label={t('preview.volume')}
               min={0}
@@ -399,19 +407,30 @@ export function PreviewPane({
           </div>
         </>
       ) : preparing ? (
-        <div className="preview-skeleton" aria-busy="true">
+        <div className="relative flex size-full min-h-[200px] items-center justify-center overflow-hidden bg-track" aria-busy="true">
           <span className="skeleton-shimmer" />
-          <span className="preview-skeleton-text">{t('preview.loading')}</span>
+          <span className="relative text-sm text-dim">{t('preview.loading')}</span>
         </div>
       ) : (
-        <div className="preview-empty">
-          <Crop className="size-6 text-[var(--text-ghost)]" />
-          <strong>{t('preview.empty.title')}</strong>
-          {t('preview.empty.body')}
-          <br />
-          {t('preview.empty.drop')}
-          <span className="preview-shortcuts">{t('preview.shortcuts')}</span>
-        </div>
+        // The registry's empty state, with a shorter rhythm on a short window: a 1080p
+        // laptop at 125% scaling leaves about 720px of height, and the default `md:p-12`
+        // would push the drop hint out of the box.
+        <Empty className="[@media(max-height:780px)]:gap-3 [@media(max-height:780px)]:p-4">
+          <EmptyHeader>
+            <EmptyMedia variant="icon" className="text-ghost">
+              <Crop />
+            </EmptyMedia>
+            <EmptyTitle>{t('preview.empty.title')}</EmptyTitle>
+            <EmptyDescription>
+              {t('preview.empty.body')}
+              <br />
+              {t('preview.empty.drop')}
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent className="text-xs text-ghost [@media(max-height:780px)]:hidden">
+            {t('preview.shortcuts')}
+          </EmptyContent>
+        </Empty>
       )}
     </div>
   )

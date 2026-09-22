@@ -1,6 +1,7 @@
 import { AlertTriangle, ChevronDown, ChevronUp, CircleCheck, Dot } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { cn } from '../lib/utils'
 import { Button } from './ui/button'
 import { useI18n } from '../i18n'
 import type { LogEntry } from '../types'
@@ -35,10 +36,7 @@ export function ActivityLog({ lines, onClear, onCopy }: Props): JSX.Element {
 
   const steps = useMemo(() => lines.filter((line) => line.kind !== 'raw'), [lines])
   const raw = useMemo(() => lines.filter((line) => line.kind === 'raw'), [lines])
-  const flagged = useMemo(
-    () => raw.filter((line) => rawSeverity(line.text) !== 'info'),
-    [raw]
-  )
+  const flagged = useMemo(() => raw.filter((line) => rawSeverity(line.text) !== 'info'), [raw])
 
   const visibleRaw = useMemo(() => {
     if (!rawOpen) return []
@@ -55,57 +53,66 @@ export function ActivityLog({ lines, onClear, onCopy }: Props): JSX.Element {
   const visible = rawOpen ? [...steps, ...visibleRaw] : steps
 
   return (
-    <section className={`activity-panel ${collapsed ? 'collapsed' : ''}`}>
-      <div className="activity-head">
-        <span className="eyebrow">{t('log.title')}</span>
-        <span className="activity-count">{steps.length}</span>
+    <section
+      data-slot="activity-panel"
+      className="flex min-h-0 shrink-0 flex-col rounded-xl border border-border bg-input-bg"
+    >
+      <div className="flex items-center gap-2.5 px-3.5 py-2.5">
+        <span className="text-xs font-bold tracking-wide text-dim uppercase">{t('log.title')}</span>
+        <span className="text-xs tabular-nums text-ghost">{steps.length}</span>
         {flagged.length > 0 && (
           <button
             type="button"
-            className="activity-flag"
+            data-slot="activity-flag"
+            className="inline-flex h-6 cursor-pointer items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--warning)_40%,transparent)] bg-[var(--surface-warning-tint)] px-2.5 text-xs tabular-nums text-warning"
+            title={t('log.filter.warn')}
             onClick={() => {
               setRawOpen(true)
               setFilter('all')
             }}
           >
-            <AlertTriangle />
+            <AlertTriangle className="size-3.5" />
             {flagged.length}
           </button>
         )}
-        <Button
-          variant={rawOpen ? 'secondary' : 'link'}
-          size="sm"
-          className="link-btn ml-auto"
-          onClick={() => setRawOpen((value) => !value)}
-          title={rawOpen ? t('log.raw.hide') : t('log.raw.show')}
-        >
-          {t('log.raw')}
-        </Button>
-        <Button
-          variant="link"
-          size="sm"
-          className="link-btn"
-          onClick={() => setCollapsed((value) => !value)}
-          title={collapsed ? t('log.expand') : t('log.collapse')}
-        >
-          {collapsed ? <ChevronUp /> : <ChevronDown />}
-          {collapsed ? t('log.expand') : t('log.collapse')}
-        </Button>
-        <Button variant="link" size="sm" className="link-btn" onClick={onCopy} disabled={lines.length === 0}>
-          {t('log.copy')}
-        </Button>
-        <Button variant="link" size="sm" className="link-btn" onClick={onClear} disabled={lines.length === 0}>
-          {t('log.clear')}
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            variant={rawOpen ? 'secondary' : 'link'}
+            size="sm"
+            onClick={() => setRawOpen((value) => !value)}
+            title={rawOpen ? t('log.raw.hide') : t('log.raw.show')}
+          >
+            {t('log.raw')}
+          </Button>
+          <Button
+            variant="link"
+            size="sm"
+            onClick={() => setCollapsed((value) => !value)}
+            title={collapsed ? t('log.expand') : t('log.collapse')}
+          >
+            {collapsed ? <ChevronUp /> : <ChevronDown />}
+            {collapsed ? t('log.expand') : t('log.collapse')}
+          </Button>
+          <Button variant="link" size="sm" onClick={onCopy} disabled={lines.length === 0}>
+            {t('log.copy')}
+          </Button>
+          <Button variant="link" size="sm" onClick={onClear} disabled={lines.length === 0}>
+            {t('log.clear')}
+          </Button>
+        </div>
       </div>
 
       {rawOpen && (
-        <div className="activity-filters">
+        <div className="flex gap-2 px-4 pt-1.5 pb-2.5">
           {(['all', 'warn', 'error'] as Filter[]).map((value) => (
             <button
               key={value}
               type="button"
-              className={`filter-chip ${filter === value ? 'on' : ''}`}
+              data-on={filter === value}
+              className={cn(
+                'h-7 cursor-pointer rounded-full border border-border px-3 text-xs text-dim transition-colors hover:text-foreground',
+                'data-[on=true]:border-brand data-[on=true]:bg-primary/15 data-[on=true]:text-brand-soft'
+              )}
               onClick={() => setFilter(value)}
             >
               {value === 'all' ? t('log.filter.all') : value === 'warn' ? t('log.filter.warn') : t('log.filter.error')}
@@ -115,26 +122,35 @@ export function ActivityLog({ lines, onClear, onCopy }: Props): JSX.Element {
       )}
 
       {!collapsed && (
-        <div className="activity" ref={containerRef}>
+        <div
+          ref={containerRef}
+          className={cn(
+            'flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto px-3.5 pb-3 font-mono text-xs leading-relaxed',
+            // Height, not width, is the scarce dimension in a short window: the log gives
+            // space back to the preview and the timeline rather than pushing them out of
+            // the workspace.
+            '[@media(max-height:880px)]:max-h-[68px] [@media(max-height:780px)]:max-h-[60px] [@media(max-height:720px)]:max-h-[48px]'
+          )}
+        >
           {visible.length === 0 ? (
-            <div className="activity-empty">{rawOpen && raw.length === 0 ? t('log.noWarnings') : t('log.empty')}</div>
+            <div className="text-ghost">{rawOpen && raw.length === 0 ? t('log.noWarnings') : t('log.empty')}</div>
           ) : (
             visible.map((line) => (
               <div
                 key={line.id}
-                className={`activity-line ${line.kind === 'raw' ? rawSeverity(line.text) : line.kind}`}
+                data-kind={line.kind === 'raw' ? rawSeverity(line.text) : line.kind}
+                className={cn(
+                  'flex gap-2.5 overflow-hidden whitespace-nowrap',
+                  'data-[kind=error]:text-[var(--text-danger)]',
+                  'data-[kind=warn]:text-[var(--text-warning)]',
+                  'data-[kind=done]:text-[var(--text-success)]'
+                )}
               >
-                <span className="activity-icon" aria-hidden="true">
-                  {line.kind === 'done' ? (
-                    <CircleCheck />
-                  ) : line.kind === 'error' ? (
-                    <AlertTriangle />
-                  ) : (
-                    <Dot />
-                  )}
+                <span className="grid size-4 shrink-0 place-items-center text-ghost [&_svg]:size-3.5" aria-hidden="true">
+                  {line.kind === 'done' ? <CircleCheck /> : line.kind === 'error' ? <AlertTriangle /> : <Dot />}
                 </span>
-                <span className="activity-time">{line.time}</span>
-                <span className="activity-text" title={line.text}>
+                <span className="shrink-0 text-ghost">{line.time}</span>
+                <span className="truncate" title={line.text}>
                   {line.text}
                 </span>
               </div>

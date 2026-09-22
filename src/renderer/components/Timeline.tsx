@@ -391,19 +391,21 @@ export function Timeline({
   const selectedStep = secondsPerPixel(max, trackWidth)
 
   return (
-    <section className="timeline">
-      <div className="timeline-head">
-        <span className="eyebrow">{t('timeline.eyebrow')}</span>
-        <span className="duration-chip">
+    <section className="flex flex-col gap-2.5 rounded-xl border border-border bg-panel px-3.5 pt-3 pb-2.5 [@media(max-height:880px)]:gap-2 [@media(max-height:720px)]:gap-1.5 [@media(max-height:720px)]:px-3 [@media(max-height:720px)]:pt-2.5 [@media(max-height:720px)]:pb-2">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[0.6875rem] font-bold tracking-[1.2px] text-[var(--text-eyebrow)] uppercase">
+          {t('timeline.eyebrow')}
+        </span>
+        <span className="tabular-nums text-soft">
           {mediaName
             ? t('timeline.selectedNamed', { name: mediaName, time: formatTime(clipLength) })
             : t('timeline.selected', { time: formatTime(clipLength) })}
         </span>
-        <span className="timeline-meta">{clipMeta}</span>
+        <span className="ml-auto text-xs tabular-nums whitespace-nowrap text-dim">{clipMeta}</span>
       </div>
 
       <div
-        className={`track ${building ? 'building' : ''} ${disabled ? 'disabled' : ''} ${drag ? 'dragging' : ''}`}
+        className={`track [@media(max-height:720px)]:h-[42px] ${building ? 'building' : ''} ${disabled ? 'disabled' : ''} ${drag ? 'dragging' : ''}`}
         ref={trackRef}
         style={filmstrip ? { backgroundImage: `url("${filmstrip.url}")` } : undefined}
         onPointerDown={onPointerDownTrack}
@@ -513,11 +515,11 @@ export function Timeline({
         )}
       </div>
 
-      <div className="trim-row">
-        <span className="field-label">{t('timeline.start')}</span>
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="text-dim">{t('timeline.start')}</span>
         <input
           key={`start-${range.start.toFixed(3)}-${revision}`}
-          className="time-input"
+          className="h-8 w-[108px] rounded-lg border border-input bg-input-bg px-2 text-center text-sm text-foreground outline-none focus:border-brand"
           defaultValue={formatTime(range.start)}
           disabled={disabled}
           aria-label={t('timeline.start')}
@@ -547,10 +549,10 @@ export function Timeline({
           <TooltipContent>{t('timeline.usePlayhead')}</TooltipContent>
         </Tooltip>
 
-        <span className="field-label">{t('timeline.end')}</span>
+        <span className="text-dim">{t('timeline.end')}</span>
         <input
           key={`end-${range.end.toFixed(3)}-${revision}`}
-          className="time-input"
+          className="h-8 w-[108px] rounded-lg border border-input bg-input-bg px-2 text-center text-sm text-foreground outline-none focus:border-brand"
           defaultValue={formatTime(range.end)}
           disabled={disabled}
           aria-label={t('timeline.end')}
@@ -580,11 +582,11 @@ export function Timeline({
           <TooltipContent>{t('timeline.usePlayhead')}</TooltipContent>
         </Tooltip>
 
-        <span className="trim-spacer" />
-        {clipLength > 15 && <span className="duration-chip warn">{t('timeline.tooLong')}</span>}
-        <span className="trim-hint">
+        <span className="flex-1" />
+        {clipLength > 15 && <span className="tabular-nums text-warning">{t('timeline.tooLong')}</span>}
+        <span className="flex min-w-0 flex-col gap-0.5 text-xs leading-[1.4] text-dim">
           {selectedStep > 0 ? t('timeline.zoomHint') : t('timeline.dragHint')}
-          <span className="trim-hint-alt">{t('timeline.freeHint', { px: MAGNET_PX })}</span>
+          <span className="text-[0.71875rem] text-meta">{t('timeline.freeHint', { px: MAGNET_PX })}</span>
         </span>
       </div>
     </section>

@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 
 import { isAiPowerMode } from '../shared/aiPower'
 import { DEFAULT_GIF_TUNING, normalizeGifTuning } from '../shared/gifTuning'
+import { isGifLimit } from '../shared/gifLimit'
 import { isNotifyWhen } from '../shared/notifications'
 import { DEFAULT_OUTPUT_TEMPLATE } from '../shared/outputName'
 import { RESOLUTION_PRESETS } from '../shared/resolutions'
@@ -26,6 +27,9 @@ const DEFAULTS: AppSettings = {
   defaultFps: 24,
   defaultWidth: 480,
   defaultVideoSize: 'original',
+  // Off, like `defaultVideoSize`: a limit is a deliberate choice about where a file is going,
+  // not a default anybody should be given without asking.
+  defaultGifLimit: 'off',
   defaultFormat: 'gif',
   defaultEncoder: 'auto',
   gifColors: DEFAULT_GIF_TUNING.colors,
@@ -87,6 +91,7 @@ export function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     defaultFps: Number.isFinite(fps) ? Math.max(10, Math.min(30, Math.round(fps))) : DEFAULTS.defaultFps,
     defaultWidth: pick(raw.defaultWidth, WIDTHS, DEFAULTS.defaultWidth),
     defaultVideoSize: pick(raw.defaultVideoSize, SIZES, DEFAULTS.defaultVideoSize),
+    defaultGifLimit: isGifLimit(raw.defaultGifLimit) ? raw.defaultGifLimit : DEFAULTS.defaultGifLimit,
     defaultFormat: pick(raw.defaultFormat, FORMATS, DEFAULTS.defaultFormat),
     defaultEncoder: pick(raw.defaultEncoder, ENCODERS, DEFAULTS.defaultEncoder),
     gifColors: gif.colors,

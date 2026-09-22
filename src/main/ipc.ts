@@ -674,7 +674,7 @@ export function registerIpc(getWindow: WindowGetter): void {
 
   ipcMain.handle('clipforge:update:state', () => updateState())
 
-  ipcMain.handle('clipforge:update:check', () => checkForUpdates())
+  ipcMain.handle('clipforge:update:check', () => checkForUpdates('the check button was pressed'))
 
   ipcMain.handle('clipforge:update:install', () => installUpdate())
 

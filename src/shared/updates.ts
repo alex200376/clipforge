@@ -139,6 +139,131 @@ export function postUpdateReclaim(options: {
   return options.keepInstaller ? 'applied' : 'everything'
 }
 
+/**
+ * How old a finished check may be before a return to the window earns a fresh one.
+ *
+ * The case this exists for is not exotic: a release is published while the app is open, the
+ * app answered "up to date" seconds before that release existed, and it goes on saying it.
+ * Nothing on screen is wrong - the answer is simply older than the release - but the person
+ * reading it concludes the updater cannot find updates at all.
+ *
+ * `undefined` means no check has finished yet, which is stale by definition.
+ */
+export function checkIsStale(checkedAt: number | undefined, now: number, maxAgeMs: number): boolean {
+  if (checkedAt === undefined) return true
+  const age = now - checkedAt
+  // A clock that went backwards - a timezone change, a laptop resumed from sleep - must not
+  // read as infinitely fresh for the rest of the session.
+  return !Number.isFinite(age) || age < 0 || age >= maxAgeMs
+}
+
+/** The units `Intl.RelativeTimeFormat` is asked for, narrowed to the four this ever needs. */
+export type CheckAgeUnit = 'second' | 'minute' | 'hour' | 'day'
+
+/**
+ * How long ago a check finished, in the largest unit that still says something true.
+ *
+ * Returns null when there is nothing to say, so the caller decides between silence and a
+ * sentence: an app that has never checked has its own status line for that.
+ */
+export function checkAge(
+  checkedAt: number | undefined,
+  now: number
+): { unit: CheckAgeUnit; value: number } | null {
+  if (checkedAt === undefined || !Number.isFinite(checkedAt)) return null
+  const seconds = Math.max(0, Math.round((now - checkedAt) / 1000))
+  if (seconds < 60) return { unit: 'second', value: seconds }
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return { unit: 'minute', value: minutes }
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return { unit: 'hour', value: hours }
+  return { unit: 'day', value: Math.round(hours / 24) }
+}
+
+/** One line of a release body, honestly readable as plain text. */
+const NOTES_MAX_LINES = 12
+const NOTES_MAX_LINE = 160
+
+/**
+ * The release body as plain lines, ready to be rendered as text.
+ *
+ * Two things make this necessary rather than "just print the string".
+ *
+ * The body is *markdown*: `release.bat` writes `## What changed since X` followed by commit
+ * subjects, and electron-builder's feed hands that over verbatim. Printed as-is, the window
+ * would show `##` and `**Build**` to the user. So headings lose their hashes, list items
+ * become bullets, emphasis markers go, and `` `code` `` keeps its text. Links keep their label
+ * and drop the URL, because a URL inside a sentence is noise in a card this size.
+ *
+ * And the body is not only "what changed": the same script appends a generated build section
+ * (version, installer, SHA512, signer) under a `---` rule. That is metadata about the artifact,
+ * not a change anyone made, so the notes stop at the rule.
+ *
+ * Everything here is text in, text out. The caller must still render it as text - this only
+ * makes it readable, it is not an escape hatch for markup.
+ */
+export function releaseNoteLines(raw: unknown): string[] {
+  // Only the two shapes electron-updater actually sends: a body, or the feed's per-version
+  // array. A number or an object reaching here means the feed changed, and inventing a line out
+  // of it would put something untrue in a card.
+  const joined =
+    typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((entry) => noteText(entry)).join('\n') : ''
+  if (joined.trim().length === 0) return []
+
+  const lines: string[] = []
+  for (const rawLine of joined.split(/\r?\n/)) {
+    // The generated footer, and everything after it, is build metadata rather than a change.
+    if (/^-{3,}\s*$/.test(rawLine.trim()) || rawLine.includes('<!-- clipforge-build-info -->')) break
+    const line = plainLine(rawLine)
+    if (line.length > 0) lines.push(line)
+    if (lines.length >= NOTES_MAX_LINES) break
+  }
+  return lines
+}
+
+/** The text of one entry of the feed's `releaseNotes`, whichever shape it arrived in. */
+function noteText(entry: unknown): string {
+  if (typeof entry === 'string') return entry
+  if (entry && typeof entry === 'object' && 'note' in entry) {
+    const note = (entry as { note?: unknown }).note
+    return typeof note === 'string' ? note : ''
+  }
+  return ''
+}
+
+/** One markdown-ish line, reduced to what it says. */
+function plainLine(raw: string): string {
+  const trimmed = raw
+    .trim()
+    // A heading is a heading by position, not by the hashes in front of it.
+    .replace(/^#{1,6}\s*/, '')
+    // `- item`, `* item` and `+ item` are the same list in three dialects.
+    .replace(/^[-*+]\s+/, '• ')
+    // A label is what the reader needs; the URL behind it is not.
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    // `**bold**` and `` `code` `` only. The underscore and single-asterisk spellings of
+    // emphasis are deliberately left alone: a release body is built from commit subjects, and
+    // those contain identifiers (`window.__proto__`), globs (`*.mp4`) and arithmetic (`2 * 3`).
+    // A rule that turns any of them into emphasis destroys the sentence to tidy it.
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return trimmed.length > NOTES_MAX_LINE ? `${trimmed.slice(0, NOTES_MAX_LINE - 1).trimEnd()}…` : trimmed
+}
+
+/**
+ * A release date the window can print, or null when the feed gave nothing usable.
+ *
+ * The feed sends ISO 8601 and the renderer formats it, because the app's locale is decided
+ * there. Anything that is not a real date is dropped rather than shown as `Invalid Date`.
+ */
+export function isoReleaseDate(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null
+  const at = new Date(raw)
+  return Number.isFinite(at.getTime()) ? at.toISOString() : null
+}
+
 export function condenseUpdaterError(error: unknown): string {
   const raw =
     error instanceof Error

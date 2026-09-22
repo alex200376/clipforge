@@ -18,7 +18,10 @@ export function RightPanel({ tab, onTab, hasResult, exportPanel, outputPanel }: 
   const { t } = useI18n()
 
   return (
-    <aside className="right-panel">
+    <aside
+      data-slot="right-panel"
+      className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-panel"
+    >
       {/* A full-height flex column so the export tab can keep its action row pinned
           without overlaying the scrolling controls. */}
       <Tabs value={tab} onValueChange={(value) => onTab(value as PanelTab)} className="flex h-full flex-col">

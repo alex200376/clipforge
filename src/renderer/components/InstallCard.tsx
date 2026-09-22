@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { cn } from '../lib/utils'
 import { Button } from './ui/button'
 import { Progress } from './ui/progress'
 import { errorMessage } from '../../shared/errors'
@@ -134,19 +135,24 @@ export function InstallCard({
 
   return (
     <section
-      className={`install-card ${variant} ${active ? 'active' : ''} ${failed > 0 ? 'has-error' : ''} ${
-        missing.length === 0 && !active && failed === 0 ? 'is-ready' : ''
-      }`}
+      data-slot="install-card"
+      data-variant={variant}
+      data-state={active ? 'active' : failed > 0 ? 'error' : missing.length === 0 ? 'ready' : 'missing'}
+      className={cn(
+        'flex flex-col gap-3 rounded-xl border border-border bg-card p-4',
+        'data-[state=error]:border-[var(--border-danger)] data-[state=error]:bg-[var(--surface-danger-tint)]',
+        'data-[variant=inline]:border-[var(--border-warning)] data-[variant=inline]:bg-[var(--surface-warning-tint)]'
+      )}
     >
-      <header className="install-head">
-        <div className="install-heading">
-          <strong>{title}</strong>
-          {subtitle.length > 0 && <span className="install-sub">{subtitle}</span>}
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-0.5">
+          <strong className="text-sm font-semibold">{title}</strong>
+          {subtitle.length > 0 && <span className="text-xs text-dim">{subtitle}</span>}
         </div>
-        <div className="install-actions">
+        <div className="flex flex-wrap items-center gap-2">
           {active ? (
             <>
-              {cancelling && <span className="install-sub">{t('install.cancelling')}</span>}
+              {cancelling && <span className="text-xs text-dim">{t('install.cancelling')}</span>}
               <Button
                 variant="secondary"
                 size="sm"
@@ -185,7 +191,7 @@ export function InstallCard({
             value={progress.overallPercent}
             indicatorClassName="bg-gradient-to-r from-[var(--primary)] to-[var(--brand-top)]"
           />
-          <div className="flex justify-between gap-2 text-[0.71875rem] text-dim">
+          <div className="flex justify-between gap-2 text-xs text-dim">
             <span className="tabular-nums">{progress.overallPercent}%</span>
             <span className="tabular-nums">
               {progress.totalBytes > 0 &&
@@ -197,27 +203,34 @@ export function InstallCard({
         </div>
       )}
 
-      <ul className="install-list">
+      <ul className="flex flex-col gap-2">
         {tools.map((tool) => (
-          <li key={tool.name} className={`install-row ${tool.phase}`}>
-            <span className="install-name">{toolLabel(tool.name)}</span>
-            <span className="install-phase">{phaseText(tool, t)}</span>
-            <span className="install-bytes">
+          <li
+            key={tool.name}
+            data-phase={tool.phase}
+            className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs data-[phase=failed]:text-destructive"
+          >
+            <span className="font-medium text-foreground">{toolLabel(tool.name)}</span>
+            <span className="text-dim">{phaseText(tool, t)}</span>
+            <span className="ml-auto tabular-nums text-faint">
               {tool.sharesArchiveWith ? '' : byteLabel(tool)}
               {tool.phase === 'downloading' && tool.percent > 0 ? ` · ${Math.round(tool.percent)}%` : ''}
             </span>
             {!tool.sharesArchiveWith && (
-              <span className="install-bar" aria-hidden="true">
-                <span style={{ width: `${tool.phase === 'done' ? 100 : tool.percent}%` }} />
+              <span className="h-1 w-full basis-full overflow-hidden rounded-full bg-edge" aria-hidden="true">
+                <span
+                  className="block h-full rounded-full bg-primary transition-[width] duration-200"
+                  style={{ width: `${tool.phase === 'done' ? 100 : tool.percent}%` }}
+                />
               </span>
             )}
-            {tool.error && <span className="install-error">{tool.error}</span>}
+            {tool.error && <span className="w-full basis-full text-destructive">{tool.error}</span>}
           </li>
         ))}
       </ul>
 
       {!active && summary?.error && failed === 0 && (
-        <p className="install-sub error-text">{errorMessage(summary.error)}</p>
+        <p className="text-xs text-destructive">{errorMessage(summary.error)}</p>
       )}
     </section>
   )

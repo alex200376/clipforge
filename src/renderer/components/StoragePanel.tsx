@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
-import { Checkbox } from './ui/checkbox'
+import { ToggleRow } from './ui/toggle-row'
 import type { StorageReport, StorageTarget, UpdateState } from '../../shared/types'
 import { formatBytes } from '../format'
 import { useI18n } from '../i18n'
@@ -91,7 +91,7 @@ export function StoragePanel({ update, keepInstaller, onKeepInstaller, onNotice 
         <CardDescription>{t('settings.storage.description')}</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="kv">
+        <div className="flex justify-between gap-4 text-sm text-soft [&>span:last-child]:text-right [&>span:last-child]:font-medium [&>span:last-child]:text-foreground">
           <span>{t('settings.storage.temp')}</span>
           <span>
             {formatBytes(tempBytes)}
@@ -104,29 +104,26 @@ export function StoragePanel({ update, keepInstaller, onKeepInstaller, onNotice 
               : ''}
           </span>
         </div>
-        <div className="kv">
+        <div className="flex justify-between gap-4 text-sm text-soft [&>span:last-child]:text-right [&>span:last-child]:font-medium [&>span:last-child]:text-foreground">
           <span>{t('settings.storage.updates')}</span>
           <span>{formatBytes(report?.updateBytes ?? 0)}</span>
         </div>
 
-        <p className="muted">{t('settings.storage.updateNote')}</p>
+        <p className="text-sm text-dim">{t('settings.storage.updateNote')}</p>
 
-        <label className="check-row">
-          <Checkbox
-            id="keep-update-installer"
-            checked={keepInstaller}
-            onCheckedChange={(checked) => onKeepInstaller(checked === true)}
-          />
-          <span>
-            <strong>{t('settings.storage.keepInstaller')}</strong>
-            <em>{t('settings.storage.keepInstallerHint')}</em>
-          </span>
-        </label>
+        <ToggleRow
+          title={t('settings.storage.keepInstaller')}
+          hint={t('settings.storage.keepInstallerHint')}
+          checked={keepInstaller}
+          onCheckedChange={onKeepInstaller}
+          control="checkbox"
+          aria-label={t('settings.storage.keepInstaller')}
+        />
 
-        {report?.updateReady && <p className="muted">{t('settings.storage.readyNote')}</p>}
-        {report?.busy && <p className="muted">{t('settings.storage.busyNote')}</p>}
+        {report?.updateReady && <p className="text-sm text-dim">{t('settings.storage.readyNote')}</p>}
+        {report?.busy && <p className="text-sm text-dim">{t('settings.storage.busyNote')}</p>}
 
-        <div className="card-actions">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="secondary"
             disabled={!hasTemp || clearing !== null || report?.busy === true}

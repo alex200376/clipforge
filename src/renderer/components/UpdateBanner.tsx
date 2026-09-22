@@ -1,5 +1,6 @@
 import { AlertTriangle, DownloadCloud, Rocket, X } from 'lucide-react'
 
+import { Alert, AlertDescription, AlertTitle } from './ui/alert'
 import { Button } from './ui/button'
 import { Progress } from './ui/progress'
 import { useI18n } from '../i18n'
@@ -26,45 +27,65 @@ export function UpdateBanner({ state, onCheck, onInstall, onDismiss }: Props): J
 
   const ready = state.status === 'ready'
   const failed = state.status === 'error'
+  /** A download that did not finish is not the same complaint as a check that did not run. */
+  const failedToFetch = failed && state.phase === 'download'
   const version = state.version ?? ''
 
   return (
-    <section className={`guide-card ${failed ? 'error' : ''} ${ready ? 'ready' : ''}`} aria-live="polite">
-      <div className="guide-head">
-        {failed ? <AlertTriangle /> : ready ? <Rocket /> : <DownloadCloud />}
-        <strong>
+    <Alert
+      variant={failed ? 'destructive' : ready ? 'success' : 'info'}
+      className="flex-col gap-2.5"
+      aria-live="polite"
+    >
+      <div className="flex w-full items-center gap-2.5">
+        {failed ? (
+          <AlertTriangle className="size-4 shrink-0 text-destructive" />
+        ) : ready ? (
+          <Rocket className="size-4 shrink-0 text-[var(--text-success)]" />
+        ) : (
+          <DownloadCloud className="size-4 shrink-0 text-brand" />
+        )}
+        <AlertTitle className="flex-1">
           {failed
-            ? t('update.error')
+            ? failedToFetch
+              ? t('update.downloadFailed')
+              : t('update.error')
             : ready
               ? t('update.ready', { version })
               : state.status === 'downloading'
                 ? t('update.downloading', { version, percent: state.percent ?? 0 })
                 : t('update.available', { version })}
-        </strong>
-        <Button variant="ghost" size="icon" className="btn-quiet" onClick={onDismiss} aria-label={t('update.hide')}>
+        </AlertTitle>
+        <Button variant="ghost" size="icon-sm" onClick={onDismiss} aria-label={t('update.hide')}>
           <X />
         </Button>
       </div>
 
-      <div className="guide-body">
+      <AlertDescription className="w-full text-xs text-soft">
         {failed
-          ? state.error ?? t('update.checkFailed')
+          ? (failedToFetch ? t('update.downloadFailedHint') + ' ' : '') + (state.error ?? t('update.checkFailed'))
           : ready
             ? t('update.readyHint')
             : state.status === 'downloading'
               ? t('update.downloadingHint')
               : t('update.availableHint')}
-      </div>
+      </AlertDescription>
 
-      {state.status === 'downloading' && <Progress value={state.percent ?? 0} aria-label={t('update.downloadingLabel')} />}
+      {state.status === 'downloading' && (
+        <Progress value={state.percent ?? 0} aria-label={t('update.downloadingLabel')} className="w-full" />
+      )}
 
-      <div className="guide-actions">
+      <div className="flex flex-wrap gap-2">
         {ready && <Button onClick={onInstall}>{t('update.restart')}</Button>}
-        {!ready && <Button variant="secondary" onClick={onCheck}>{failed ? t('update.tryAgain') : t('update.checkNow')}</Button>}
-        <Button variant="ghost" className="btn-quiet" onClick={onDismiss}>
+        {!ready && (
+          <Button variant="secondary" onClick={onCheck}>
+            {failed ? t('update.tryAgain') : t('update.checkNow')}
+          </Button>
+        )}
+        <Button variant="ghost" onClick={onDismiss}>
           {t('update.later')}
         </Button>
       </div>
-    </section>
+    </Alert>
   )
 }

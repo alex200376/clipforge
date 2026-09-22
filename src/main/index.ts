@@ -2,6 +2,7 @@ import { BrowserWindow, app, crashReporter, session, shell } from 'electron'
 
 import { formatBytes } from '../shared/bytes'
 import { cancelActiveWork, registerIpc, releaseDownloads, trackPowerState, trackWindowState } from './ipc'
+import { checkForUpdatesWhenStale } from './updates'
 import { handleMediaProtocol, registerMediaScheme, setAppRoot } from './mediaProtocol'
 import { appUrl, iconPath, isDev, preloadEntry, rendererDir, rendererEntry } from './paths'
 import { sweepStaleWorkDirs } from './scratch'
@@ -139,6 +140,10 @@ function createWindow(): void {
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
+  // The app can be open across a release, and then its last answer - "up to date" - is older
+  // than the release itself. Coming back to the window is the moment that answer is read, so
+  // it is the moment to replace a stale one.
+  mainWindow.on('focus', () => checkForUpdatesWhenStale())
   trackWindowState(mainWindow)
   // Relayed for the same reason the frame state is: what `auto` means for AI removal depends
   // on the charger, and that can change while the app is open.

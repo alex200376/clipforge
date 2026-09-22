@@ -111,8 +111,18 @@ export function gifskiLossyQuality(strength: number): number | null {
 /** The slider's default position: the value every size constant here is measured at. */
 export const DEFAULT_QUALITY = 90
 
-/** Bits per pixel per frame for a dithered 256-colour GIF, unchanged by this work. */
-export const GIF_BYTES_PER_PIXEL = 0.22
+/**
+ * Bytes per pixel per frame for a dithered 256-colour GIF.
+ *
+ * Re-measured, and raised from 0.22 to 0.48. Everything else in this file is a *factor*
+ * relative to this one number, so a wrong baseline made every estimate wrong by the same
+ * multiple: encoding this app's own clip fixture (768x1152, real filmed video) through the
+ * bundled ffmpeg measured 2.13x and 2.31x more bytes than 0.22 predicted, and the reference
+ * export quoted at the top of this file - 4 seconds of 480p at 15 fps, 60 frames, 9373 KB -
+ * implies 0.93-1.23. 0.48 is what the clip fixture measures; the spread between the two
+ * clips is content, which `estimate.ts` quotes a range for.
+ */
+export const GIF_BYTES_PER_PIXEL = 0.48
 
 /** Measured against 256 colours; the palette is where the information actually goes. */
 const PALETTE_FACTORS: Record<number, number> = { 256: 1, 128: 0.84, 64: 0.72, 32: 0.57 }

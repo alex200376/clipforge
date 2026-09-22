@@ -5,21 +5,59 @@
  * to warn before a 40 MB GIF is written, not to predict the exact byte count.
  * `calibration` lets the caller tighten the guess with a real measurement from
  * the last export of the same source.
+ *
+ * The two bytes-per-pixel constants were re-measured against this app's own clip fixture
+ * (768x1152, 24 fps, real filmed content - the kind of thing this app is pointed at) and
+ * against the synthetic clip the golden tests build, by encoding each with the bundled
+ * ffmpeg and dividing the file that was written by the model's prediction:
+ *
+ *   palette GIF, real clip, 480x720@15 for 3s   predicted 3381 KB  actual 7198 KB  (2.13x)
+ *   palette GIF, real clip, 320x480@12 for 3s   predicted 1220 KB  actual 2812 KB  (2.31x)
+ *   palette GIF, synthetic, 240x180@15 for 4s   predicted  610 KB  actual  549 KB  (0.90x)
+ *   WebP,        real clip, 480x720@15 for 3s   predicted  875 KB  actual 1026 KB  (1.17x)
+ *   WebP,        real clip, 320x480@12 for 3s   predicted  215 KB  actual  297 KB  (1.38x)
+ *   WebP,        synthetic, 240x180@12 for 1.5s predicted   38 KB  actual   68 KB  (1.82x)
+ *
+ * The old GIF constant was 0.22, which these measurements put 2.1-2.3x too low for real
+ * video - and `gifTuning.ts`'s own documented reference export (4 seconds of 480p at 15 fps,
+ * 60 frames, 9373 KB) implies 0.93-1.23, so the two disagree by more than the model's whole
+ * resolution. It is now 0.48, the value the app's own clip measures. WebP was 0.055 and
+ * measured 1.17-1.38x low, so it is 0.069.
+ *
+ * What is left is content: the same settings span 0.41x (a noise-heavy test pattern, which
+ * GIF compresses badly) to about 2x (the original reference clip) on clips that are not this
+ * fixture. That is what `estimateAnimatedRange` is for, and it is why a size limit is
+ * enforced by re-encoding rather than by this model alone.
  */
 
 import {
+  DEFAULT_GIF_TUNING,
   DEFAULT_QUALITY,
+  GIF_COLOR_STEPS,
   gifSizeFactor,
   GIF_BYTES_PER_PIXEL,
+  normalizeGifTuning,
   webpQualityFactor,
-  type GifSizeContext
+  type GifSizeContext,
+  type GifTuning
 } from './gifTuning'
 import type { CropSpec, OutputFormat } from './types'
 
 /** Lossy animated WebP lands far lower, which is the whole reason to offer it. */
-const WEBP_BYTES_PER_PIXEL = 0.055
+const WEBP_BYTES_PER_PIXEL = 0.069
 /** Container, palette and frame-table overhead. */
 const FRAME_OVERHEAD = 900
+
+/**
+ * How far a prediction can be out, as a fraction either side, before anything has been
+ * measured. Asymmetric on purpose: the model under-predicts detailed pictures far more than
+ * it over-predicts flat ones, and being caught out by a file that is bigger than promised is
+ * the direction that matters.
+ */
+const UNCALIBRATED_LOW = 0.7
+const UNCALIBRATED_HIGH = 1.6
+/** What a real export of the same source leaves: the settings changed, the content did not. */
+const CALIBRATED_SPREAD = 0.15
 
 export interface FrameSize {
   width: number
@@ -53,6 +91,13 @@ export interface EstimateInput {
   /** 1 = trust the model as-is; a measured ratio makes it sharper. */
   calibration?: number
   /**
+   * Whether that ratio came from a real export of this source.
+   *
+   * Only affects how wide a range is quoted: a measurement replaces what the content was
+   * doing to the model, so what is left is the change the user is making to the settings.
+   */
+  calibrated?: boolean
+  /**
    * The quality slider, 0-100.
    *
    * It is not a detail: measured across the slider's travel, WebP's output spans 0.27x to
@@ -70,6 +115,28 @@ export interface EstimateInput {
    * has its own quality knob and no palette stage.
    */
   gif?: GifSizeContext
+}
+
+export interface AnimatedRange {
+  /** The model's own answer, which is what every other caller uses. */
+  bytes: number
+  low: number
+  high: number
+}
+
+/**
+ * The same prediction with the range it is worth.
+ *
+ * A single number is a promise this model cannot keep: the constants are measured, but the
+ * content is not known until something is encoded. So the panel gets a low/high pair to say
+ * "about this much" with, and the range collapses the moment a real export of the same source
+ * replaces the model's guess about what the picture costs.
+ */
+export function estimateAnimatedRange(input: EstimateInput): AnimatedRange {
+  const bytes = estimateAnimatedBytes(input)
+  const low = input.calibrated ? 1 - CALIBRATED_SPREAD : UNCALIBRATED_LOW
+  const high = input.calibrated ? 1 + CALIBRATED_SPREAD : UNCALIBRATED_HIGH
+  return { bytes, low: Math.round(bytes * low), high: Math.round(bytes * high) }
 }
 
 export function estimateAnimatedBytes({
@@ -152,7 +219,8 @@ export function estimateVideoBytes({
 }
 
 export interface BudgetStep {
-  label: 'keep' | 'fps' | 'width'
+  /** What this candidate gave up, which is also what the winner's `changed` reports. */
+  label: 'keep' | 'quality' | 'fps' | 'width'
   width: number
   height: number
   fps: number
@@ -162,39 +230,99 @@ export interface BudgetStep {
 
 export interface BudgetResult {
   width: number
+  height: number
   fps: number
   bytes: number
   fits: boolean
-  /** Every candidate that was tried, with the winner last. */
+  /** Every candidate that was tried, in the order they were. */
   steps: BudgetStep[]
   /** True when nothing had to change. */
   unchanged: boolean
+  /**
+   * The quality settings the winner needs.
+   *
+   * Returned rather than left to the caller because the ladder can meet a limit by lowering
+   * the picture quality instead of the frame size - and then the encoder has to be given the
+   * lowered numbers, or the file that comes out is the one that did not fit.
+   */
+  quality: number
+  tuning: GifTuning
+  /** Which knob the winner moved, so the panel can say what the limit cost. */
+  changed: 'nothing' | 'quality' | 'frameRate' | 'resolution'
 }
 
 /**
- * Finds the largest quality that still fits. Frame rate is sacrificed first —
- * dropping 24 to 15 fps is far less noticeable than dropping 480p to 320p.
+ * The picture-quality settings worth trying before any geometry is touched.
+ *
+ * Dropping 24 to 15 fps is visible; asking for a little more loss is not, and on the palette
+ * engine with the optimiser on it is by far the strongest lever (measured, `--lossy 40` takes
+ * a 9158 KB GIF to 4487 KB). So it is tried first, and only the knobs the chosen encoder
+ * actually reads are offered: gifski has no colour count of its own, the palette engine has no
+ * quality slider, and the lossy strength does nothing there unless the gifsicle pass will run.
+ *
+ * `dither` is deliberately never moved: it changes the character of the picture rather than
+ * how much of it is kept, and sierra2_4a is *larger* than the default anyway.
+ */
+function qualityCandidates(input: EstimateInput): Array<{ quality: number; tuning: GifTuning }> {
+  const baseQuality = input.quality ?? DEFAULT_QUALITY
+  const tuning = input.gif?.tuning ?? DEFAULT_GIF_TUNING
+  const engine = input.gif?.engine
+  // Only gifski and WebP read the slider; ffmpeg's palette pipeline has no such knob, and a
+  // candidate that cannot change the file would only make the ladder slower and its answer
+  // less honest.
+  const qualities =
+    input.format === 'webp'
+      ? [90, 75, 60, 40]
+      : engine === 'gifski'
+        ? [90, 75, 60, 45]
+        : [baseQuality]
+  const colors =
+    input.format === 'gif' && engine !== 'gifski' ? GIF_COLOR_STEPS.filter((count) => count <= tuning.colors) : [tuning.colors]
+  // gifsicle's lossy runs the other way in the model (a higher strength is smaller), and it
+  // is only reachable through the optimiser on the palette engine.
+  const lossyReachable = input.format !== 'gif' || engine === 'gifski' || (input.gif?.optimize ?? false)
+  const lossy = lossyReachable
+    ? [tuning.lossy, 60, 80, 100].filter((value, index, all) => value >= tuning.lossy && all.indexOf(value) === index)
+    : [tuning.lossy]
+
+  const out: Array<{ quality: number; tuning: GifTuning }> = []
+  for (const quality of qualities.filter((value) => value <= baseQuality)) {
+    for (const count of colors) {
+      for (const strength of lossy) {
+        out.push({ quality, tuning: normalizeGifTuning({ ...tuning, colors: count, lossy: strength }) })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Finds the settings that fit, keeping as much of the picture as the limit allows.
+ *
+ * Every combination of the knobs that can move is measured, and the largest result that fits
+ * wins: the limit is a budget, so it gets spent rather than saved, and for a fixed number of
+ * bytes the encoder keeps more of the picture than a rule of thumb about which knob to turn
+ * first would. `changed` names the most visible thing that was given up, so the panel can say
+ * what the limit cost rather than what the search happened to do.
+ *
+ * Nothing here is reached without a limit: the caller only asks when one is set, so an
+ * unlimited export is byte-for-byte what it was before this ladder existed.
  */
 export function fitToBudget(
   input: EstimateInput & { budgetBytes: number; floorWidth?: number }
 ): BudgetResult {
   const floorWidth = even(input.floorWidth ?? 160)
-  const candidates: Array<{ label: BudgetStep['label']; width: number; fps: number }> = []
-  const widths: number[] = []
-  for (let width = input.frame.width; width >= floorWidth; width = Math.round(width * 0.85)) {
-    widths.push(even(width))
-  }
-  if (widths[widths.length - 1] !== floorWidth) widths.push(floorWidth)
+  const base = input.gif?.tuning ?? DEFAULT_GIF_TUNING
 
-  const fpsLadder = [input.fps, 20, 15, 12].filter((value, index, all) => all.indexOf(value) === index && value <= input.fps)
-
-  for (const width of widths) {
-    for (const fps of fpsLadder) {
-      candidates.push({ label: width === input.frame.width ? (fps === input.fps ? 'keep' : 'fps') : 'width', width, fps })
-    }
+  interface Candidate {
+    label: BudgetStep['label']
+    width: number
+    fps: number
+    quality: number
+    tuning: GifTuning
   }
 
-  const steps: BudgetStep[] = candidates.map((candidate) => {
+  const measure = (candidate: Candidate): BudgetStep => {
     // Halving the width halves the height too, so the aspect ratio survives.
     const frame = {
       width: candidate.width,
@@ -206,8 +334,8 @@ export function fitToBudget(
       fps: candidate.fps,
       seconds: input.seconds,
       calibration: input.calibration,
-      quality: input.quality,
-      gif: input.gif
+      quality: candidate.quality,
+      gif: input.gif ? { ...input.gif, tuning: candidate.tuning } : undefined
     })
     return {
       label: candidate.label,
@@ -217,15 +345,89 @@ export function fitToBudget(
       bytes,
       fits: bytes <= input.budgetBytes
     }
-  })
+  }
 
-  const winner = steps.find((step) => step.fits) ?? steps[steps.length - 1]!
+  // What the sliders say right now, which is the candidate that changes nothing.
+  const asIs: Candidate = {
+    label: 'keep',
+    width: input.frame.width,
+    fps: input.fps,
+    quality: input.quality ?? DEFAULT_QUALITY,
+    tuning: base
+  }
+
+  const widths: number[] = []
+  for (let width = input.frame.width; width >= floorWidth; width = Math.round(width * 0.85)) {
+    widths.push(even(width))
+  }
+  if (widths[widths.length - 1] !== floorWidth) widths.push(floorWidth)
+
+  const fpsLadder = [input.fps, 20, 15, 12].filter((value, index, all) => all.indexOf(value) === index && value <= input.fps)
+
+  /**
+   * Every combination of the knobs that can move, not one dimension at a time.
+   *
+   * Alternating between them was the first shape of this and it was wrong in a way that
+   * mattered: with the picture resized and the palette left alone, the tightest candidate was
+   * the frame size at the user's full palette, so a limit that a smaller palette *and* a
+   * smaller frame could both reach was reported as impossible. The combinations are a few
+   * hundred multiplications, and the answer they give is the one this is for.
+   *
+   * `dither` stays out of it: it changes the look rather than the amount kept.
+   */
+  const candidates: Candidate[] = []
+  for (const knobs of qualityCandidates(input)) {
+    for (const width of widths) {
+      for (const fps of fpsLadder) {
+        const same =
+          width === asIs.width &&
+          fps === asIs.fps &&
+          knobs.quality === asIs.quality &&
+          knobs.tuning.colors === base.colors &&
+          knobs.tuning.lossy === base.lossy
+        if (same) continue
+        candidates.push({
+          label:
+            width !== asIs.width ? 'width' : fps !== asIs.fps ? 'fps' : 'quality',
+          width,
+          fps,
+          quality: knobs.quality,
+          tuning: knobs.tuning
+        })
+      }
+    }
+  }
+
+  const tried = candidates
+    .map((candidate) => ({ candidate, step: measure(candidate) }))
+    // Largest first: the settings that fit and keep the most of the picture are the answer, so
+    // this is also the preference order rather than a side effect of how they were built.
+    .sort((left, right) => right.step.bytes - left.step.bytes)
+
+  const steps: BudgetStep[] = [measure(asIs), ...tried.map((entry) => entry.step)]
+  const fitsAsIs = steps[0]!.fits
+  const winnerEntry = fitsAsIs ? null : (tried.find((entry) => entry.step.fits) ?? tried[tried.length - 1] ?? null)
+  const winner = winnerEntry ? winnerEntry.step : steps[0]!
+  const won = winnerEntry ? winnerEntry.candidate : asIs
+
   return {
     width: winner.width,
+    height: winner.height,
     fps: winner.fps,
     bytes: winner.bytes,
     fits: winner.fits,
     steps,
-    unchanged: winner.width === input.frame.width && winner.fps === input.fps
+    unchanged: fitsAsIs,
+    quality: won.quality,
+    tuning: won.tuning,
+    // The most visible thing given up, which is what the panel should name rather than the
+    // last knob that happened to move.
+    changed: fitsAsIs
+      ? 'nothing'
+      : winner.width !== asIs.width
+        ? 'resolution'
+        : winner.fps !== asIs.fps
+          ? 'frameRate'
+          : 'quality'
   }
 }

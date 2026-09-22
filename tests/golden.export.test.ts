@@ -18,6 +18,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { fitToBudget } from '../src/shared/estimate'
+import { DEFAULT_GIF_TUNING } from '../src/shared/gifTuning'
 import {
   FILMSTRIP_FRAMES,
   cropdetectArgs,
@@ -30,6 +32,7 @@ import {
   webpArgs,
   y4mArgs
 } from '../src/shared/mediaArgs'
+import { replacementPath } from '../src/shared/outputName'
 
 const EXT = process.platform === 'win32' ? '.exe' : ''
 const binDir = join(__dirname, '..', 'resources', 'bin')
@@ -222,6 +225,72 @@ describe.skipIf(!haveTools)('golden exports', () => {
     expect(size).toBeLessThanOrEqual(budget * 1.06)
     expect(info.hasAudio).toBe(true)
     expect(info.duration).toBeGreaterThan(1.8)
+  }, TIMEOUT)
+
+  it('meets a size limit by re-encoding once when the first pass overshoots', () => {
+    // The two passes the renderer runs, against the real encoders: fit, encode, and if the file
+    // that came out is over the limit, re-fit with the size that was actually produced and
+    // encode again - over the same path, because leaving the file that missed the limit beside
+    // the one that meets it is two files where the user asked for one.
+    const output = join(scratch, 'limited.gif')
+    const frame = { width: 240, height: 180 }
+    const tuning = DEFAULT_GIF_TUNING
+    const gif = { tuning, engine: 'palette' as const, optimize: false, quality: 90 }
+    // Between what the encoder really produces for the untouched settings (450 KB) and what
+    // the model, once corrected by the measurement, can promise (about 400 KB): narrower than
+    // that band and the second pass could not reach the limit either, wider and nothing
+    // would have needed it.
+    const budget = 425 * 1024
+    const options = { start: 0, end: 4, fps: 12, width: frame.width, quality: 90, tuning }
+
+    // Deliberately miscalibrated, standing in for a clip whose content costs more than the
+    // model expects. This synthetic pattern is one the model *over*-predicts (it encodes to
+    // about 0.43x the guess), so a calibration of 0.3 is what makes the fit believe the file
+    // will be 300 KB when it will really be about 450 - which is exactly the case the second
+    // pass exists for.
+    const first = fitToBudget({ format: 'gif', frame, fps: 12, seconds: 4, budgetBytes: budget, calibration: 0.3, quality: 90, gif })
+    // Nothing given up, and still over: the limit was met by the plan and missed by the
+    // encoder, which is the case a model alone cannot cover.
+    expect(first.changed).toBe('nothing')
+    // The encode uses the knobs the fit chose, not the sliders' - that is the contract the
+    // renderer keeps by handing `fitted.tuning` to the export, and without it here the ratio
+    // below would be measured against a file made with a different palette.
+    const encoded = run(
+      ffmpeg,
+      paletteArgs(source, output, { ...options, width: first.width, fps: first.fps, quality: first.quality, tuning: first.tuning })
+    )
+    expect(encoded.ok, encoded.output.slice(-800)).toBe(true)
+    const firstSize = statSync(output).size
+    expect(firstSize).toBeGreaterThan(budget)
+
+    // The second plan starts from the encode that just ran - same geometry, same palette - so
+    // the ratio is a correction measured against those very settings rather than against the
+    // sliders the fit moved off.
+    const ratio = firstSize / first.bytes
+    const second = fitToBudget({
+      format: 'gif',
+      frame: { width: first.width, height: first.height },
+      fps: first.fps,
+      seconds: 4,
+      budgetBytes: budget,
+      calibration: ratio,
+      calibrated: true,
+      quality: 90,
+      gif: { ...gif, tuning: first.tuning, quality: 90 }
+    })
+    expect(second.fits).toBe(true)
+    expect(second.bytes).toBeLessThanOrEqual(budget)
+    const replaced = replacementPath(output, '.gif')
+    expect(replaced).toBe(output)
+    const again = run(
+      ffmpeg,
+      paletteArgs(source, replaced!, { ...options, width: second.width, fps: second.fps, quality: second.quality, tuning: second.tuning })
+    )
+    expect(again.ok, again.output.slice(-800)).toBe(true)
+
+    // The limit is a promise about the file, not about the model: this is the assertion that
+    // makes it one, and it is why the retry exists rather than a tighter estimate.
+    expect(statSync(output).size).toBeLessThanOrEqual(budget)
   }, TIMEOUT)
 
   it('detects letterboxing with cropdetect', () => {

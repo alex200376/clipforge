@@ -17,7 +17,7 @@ import {
   y4mArgs
 } from '../shared/mediaArgs'
 import type { FilterOptions } from '../shared/mediaArgs'
-import { outputBaseName, safeBaseName, type OutputNaming } from '../shared/outputName'
+import { outputBaseName, replacementPath, safeBaseName, type OutputNaming } from '../shared/outputName'
 import { sourceNameFor } from '../shared/sources'
 import type {
   ExportResult,
@@ -116,6 +116,21 @@ function failure(error: unknown): ExportResult {
 function outputBase(name: string, naming: OutputNaming | undefined): string {
   if (!naming) return safeBaseName(name)
   return outputBaseName(naming, name)
+}
+
+/**
+ * Where this export writes.
+ *
+ * Normally a fresh name, since an export must never silently overwrite an earlier one. The
+ * exception is the second encode of a size-limited export: the renderer hands back the path
+ * this process just wrote, and the point is to replace it rather than to leave the file that
+ * missed the limit sitting beside the one that meets it. Honoured only when the extension is
+ * the one being produced, so a stale value cannot turn a GIF export into something else.
+ */
+function outputPath(request: { outputDir: string; replace?: string; naming?: OutputNaming }, name: string, extension: string): string {
+  const replacing = replacementPath(request.replace, extension)
+  if (replacing) return replacing
+  return uniqueOutput(request.outputDir, outputBase(name, request.naming), extension)
 }
 
 /** Never silently overwrite a previous export. */
@@ -254,7 +269,7 @@ export async function exportGif(request: GifRequest, deps: ExportDeps): Promise<
   const window = Math.max(0.05, range.end - range.start)
   const rendered = Math.max(0.05, outputDuration(range, filters))
   const extension = format === 'webp' ? '.webp' : '.gif'
-  const output = uniqueOutput(request.outputDir, outputBase(prepared.name, request.naming), extension)
+  const output = outputPath(request, prepared.name, extension)
   // Animated WebP has its own encoder, so the GIF engine choice does not apply.
   const wantsGifski = format === 'gif' && request.engine !== 'palette'
 

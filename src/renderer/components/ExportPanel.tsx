@@ -1,14 +1,18 @@
-import { ChevronDown, ChevronUp, Crop as CropIcon, Eraser, Eye, Gauge, Image, Layers, Plus, Scan, Trash2, Video } from 'lucide-react'
+import { ChevronDown, ChevronUp, Crop as CropIcon, Eraser, Eye, Gauge, Image as ImageIcon, Layers, Plus, Scan, Trash2, Video } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { ProgressBlock } from './ProgressBlock'
 import { Button } from './ui/button'
-import { Checkbox } from './ui/checkbox'
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { Field, Hint } from './ui/field'
 import { Label } from './ui/label'
 import { NumberField } from './ui/number-field'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Slider } from './ui/slider'
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
+import { ToggleRow } from './ui/toggle-row'
 import type {
   CropSpec,
   EncoderChoice,
@@ -33,7 +37,9 @@ import { sizeFitsClip, smallestSizeForClip, VIDEO_SIZE_OPTIONS, videoSizeBytes }
 import { formatBytes, formatLength } from '../format'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
-import type { BudgetChoice, EstimateView, ExportMode, PresetId, WatermarkCorner } from '../types'
+import { GIF_LIMIT_OPTIONS } from '../../shared/gifLimit'
+import type { GifLimit } from '../../shared/types'
+import type { EstimateView, ExportMode, PresetId, WatermarkCorner } from '../types'
 import type { AiPace, AiPowerMode } from '../../shared/aiPower'
 import { AI_POWER_MODES } from '../../shared/aiPower'
 import type { ExportProgressView } from '../useProgress'
@@ -57,8 +63,9 @@ interface Props {
   optimize: boolean
   onOptimize: (value: boolean) => void
   gifsicleReady: boolean
-  budget: BudgetChoice
-  onBudget: (value: BudgetChoice) => void
+  /** The byte limit an animated export is held to; `off` when there is none. */
+  limit: GifLimit
+  onLimit: (value: GifLimit) => void
   estimate: EstimateView
   speed: number
   onSpeed: (value: number) => void
@@ -159,19 +166,23 @@ const PRESETS: Array<{ id: PresetId; key: TranslationKey }> = [
 ]
 
 /**
- * One titled group of controls. The heading and the hairline under the group are
- * what let a long panel be read as a handful of decisions rather than as one
- * undifferentiated column of fields.
+ * One titled group of controls.
+ *
+ * A card rather than a heading and a hairline: the boundary between two groups has to be
+ * unmistakable in a panel that is mostly controls, and a bordered surface says "these
+ * belong together" without relying on the reader noticing a 1px rule.
  */
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }): JSX.Element {
   return (
-    <section className="panel-section">
-      <header className="panel-section-head">
-        {icon}
-        <h4>{title}</h4>
-      </header>
-      {children}
-    </section>
+    <Card className="gap-3 py-4">
+      <CardHeader className="flex-row items-center gap-2.5 px-4">
+        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-secondary text-brand [&_svg]:size-4">
+          {icon}
+        </span>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="gap-3 px-4">{children}</CardContent>
+    </Card>
   )
 }
 
@@ -194,8 +205,8 @@ export function ExportPanel(props: Props): JSX.Element {
     optimize,
     onOptimize,
     gifsicleReady,
-    budget,
-    onBudget,
+    limit,
+    onLimit,
     estimate,
     speed,
     onSpeed,
@@ -274,6 +285,36 @@ export function ExportPanel(props: Props): JSX.Element {
         )
       : t(capped ? 'export.estimate.upTo' : 'export.estimate', { size: formatBytes(estimate.bytes) })
 
+  /**
+   * What that number is worth, said under it.
+   *
+   * Only when there is no limit: with one, the headline is the fit's own answer and the
+   * sentence below it is about what the fit gave up. A range on every readout would be noise;
+   * a range where it decides whether the file is allowed is the whole point.
+   */
+  const estimateNote = ((): string | undefined => {
+    if (estimate.bytes === null) return undefined
+    if (estimate.fitted) return undefined
+    if (!estimate.range) return estimate.calibrated ? t('export.estimate.calibrated') : undefined
+    return t('export.estimate.range', {
+      low: formatBytes(estimate.range.low),
+      high: formatBytes(estimate.range.high)
+    })
+  })()
+
+  /** What the size limit cost, in the one line there is room for. */
+  const limitHint = ((): string | undefined => {
+    if (limit === 'off') return undefined
+    const fitted = estimate.fitted
+    if (!fitted) return undefined
+    if (!fitted.fits) return t('export.limit.none', { size: formatBytes(fitted.bytes) })
+    if (fitted.changed === 'quality')
+      return t('export.limit.gaveQuality', { colors: fitted.tuning.colors, lossy: fitted.tuning.lossy })
+    if (fitted.changed === 'frameRate') return t('export.limit.gaveRate', { width: fitted.width, fps: fitted.fps })
+    if (fitted.changed === 'resolution') return t('export.limit.gaveSize', { width: fitted.width, fps: fitted.fps })
+    return t('export.limit.fits', { size: formatBytes(fitted.bytes) })
+  })()
+
   // The target is a bitrate in disguise, so a long clip aimed at a small preset cannot be
   // encoded at all. Warn here, where the menu is, rather than when Export is pressed.
   const targetTooSmall = capped && clipSeconds !== null && sizeFitsClip(size, clipSeconds, { mute }) === false
@@ -305,42 +346,51 @@ export function ExportPanel(props: Props): JSX.Element {
   const defaultShare = gifSizeFactor({ tuning: DEFAULT_GIF_TUNING, engine, optimize: optimizeNow })
   const savedPercent = tunedShare < defaultShare ? Math.round((1 - tunedShare / defaultShare) * 100) : 0
 
+  // What the speed control says under itself: the range while there is no clip to measure,
+  // and the length the choice produces once there is one.
+  const speedHint =
+    clipSeconds === null || clipSeconds <= 0
+      ? t('export.speed.hint', { min: String(MIN_SPEED), max: String(MAX_SPEED) })
+      : t('export.speed.length', { length: formatLength(clipSeconds) ?? '' })
+
   return (
     <>
       {/* The controls scroll; the footer below does not, so the primary action is
           always on screen and nothing slides underneath it. */}
-      <div className="export-scroll flex flex-col gap-5">
-        <div className="grid grid-cols-2 gap-2">
-          <Button variant={isGif ? 'default' : 'secondary'} onClick={() => onMode('gif')} aria-pressed={isGif}>
-            <Image />
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto px-5 pt-1 pb-4 [overscroll-behavior:contain] [@media(max-height:720px)]:px-3.5 [@media(max-height:720px)]:pb-2.5">
+        {/* Which of the two outputs this is: one decision, so one control. */}
+        <ToggleGroup
+          type="single"
+          value={mode}
+          onValueChange={(value) => value && onMode(value as ExportMode)}
+          className="grid grid-cols-2 gap-1"
+        >
+          <ToggleGroupItem value="gif">
+            <ImageIcon />
             {t('export.gif')}
-          </Button>
-          <Button variant={!isGif ? 'default' : 'secondary'} onClick={() => onMode('video')} aria-pressed={!isGif}>
+          </ToggleGroupItem>
+          <ToggleGroupItem value="video">
             <Video />
             {t('export.video')}
-          </Button>
-        </div>
+          </ToggleGroupItem>
+        </ToggleGroup>
 
         {/* Framing comes first, ahead of the encoding numbers. It decides the output
             shape, it is the one control worth reaching without scrolling, and the
             format below only makes sense once the canvas is right. */}
         <Section icon={<CropIcon />} title={t('crop.title')}>
-          <label className="check-row">
-            <Checkbox
-              checked={cropEnabled}
-              onCheckedChange={(value) => onCropEnabled(value === true)}
-              aria-label={t('crop.enable')}
-            />
-            <span>
-              <strong>{t('crop.enable')}</strong>
-              {cropEnabled && <em>{t('crop.dragHint')}</em>}
-            </span>
-          </label>
+          <ToggleRow
+            title={t('crop.enable')}
+            hint={cropEnabled ? t('crop.dragHint') : undefined}
+            checked={cropEnabled}
+            onCheckedChange={onCropEnabled}
+            control="checkbox"
+            aria-label={t('crop.enable')}
+          />
 
           {cropEnabled && (
             <>
-              <div className="field">
-                <Label>{t('crop.aspect')}</Label>
+              <Field label={t('crop.aspect')}>
                 <Select
                   value={String(aspect ?? 'original')}
                   onValueChange={(value) => onAspect(value === 'original' ? null : Number(value))}
@@ -356,9 +406,9 @@ export function ExportPanel(props: Props): JSX.Element {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </Field>
 
-              <div className="crop-actions">
+              <div className="flex gap-2.5">
                 <Button size="sm" variant="secondary" onClick={onDetectCrop} disabled={cropBusy || !cropKnown}>
                   <Scan />
                   {cropBusy ? t('crop.detecting') : t('crop.detect')}
@@ -368,11 +418,7 @@ export function ExportPanel(props: Props): JSX.Element {
                 </Button>
               </div>
 
-              {crop && (
-                <em className="field-hint">
-                  {t('crop.size', { width: crop.width, height: crop.height })}
-                </em>
-              )}
+              {crop && <Hint>{t('crop.size', { width: crop.width, height: crop.height })}</Hint>}
             </>
           )}
         </Section>
@@ -380,43 +426,45 @@ export function ExportPanel(props: Props): JSX.Element {
         {/* Painting a logo out is a correction to the picture, so it belongs
             beside Framing rather than among the quality knobs. */}
         <Section icon={<Eraser />} title={t('watermark.title')}>
-          <label className="check-row">
-            <Checkbox
-              checked={watermarkOn}
-              disabled={!cropKnown}
-              onCheckedChange={(value) => onWatermarkOn(value === true)}
-              aria-label={t('watermark.enable')}
-            />
-            <span>
-              <strong>{t('watermark.enable')}</strong>
-              <em>{cropKnown ? t('watermark.hint') : t('watermark.unknownSize')}</em>
-            </span>
-          </label>
+          <ToggleRow
+            title={t('watermark.enable')}
+            hint={cropKnown ? t('watermark.hint') : t('watermark.unknownSize')}
+            checked={watermarkOn}
+            disabled={!cropKnown}
+            onCheckedChange={onWatermarkOn}
+            aria-label={t('watermark.enable')}
+          />
 
           {/* Offered whether or not the feature is already on: finding the mark is
               what turns it on, so hiding the button behind the switch would be
               backwards. */}
-          <div className="field">
-            <Button size="sm" variant="secondary" onClick={onDetectWatermark} disabled={!cropKnown || detectBusy}>
+          <div className="flex flex-col gap-1.5">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="w-fit"
+              onClick={onDetectWatermark}
+              disabled={!cropKnown || detectBusy}
+            >
               <Scan />
               {detectBusy ? t('watermark.detecting') : t('watermark.detect')}
             </Button>
-            <em className="field-hint">{t('watermark.detectHint')}</em>
+            <Hint>{t('watermark.detectHint')}</Hint>
           </div>
 
           {watermarkOn && (
             <>
               {/* What is marked comes first: the box is the decision, the corner
                   buttons are only a shortcut to placing it. */}
-              <div className="field">
-                <div className="field-row">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
                   <Label>{t('watermark.regions')}</Label>
-                  <span className="region-tools">
-                    <Button size="icon" variant="ghost" onClick={onAddWatermark} aria-label={t('watermark.add')}>
+                  <span className="flex items-center gap-1">
+                    <Button size="icon-sm" variant="ghost" onClick={onAddWatermark} aria-label={t('watermark.add')}>
                       <Plus />
                     </Button>
                     <Button
-                      size="icon"
+                      size="icon-sm"
                       variant="ghost"
                       onClick={() => onRemoveWatermark(activeRegion)}
                       aria-label={t('watermark.remove')}
@@ -427,36 +475,34 @@ export function ExportPanel(props: Props): JSX.Element {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <ToggleGroup
+                  type="single"
+                  value={String(activeRegion)}
+                  onValueChange={(value) => value && onActiveRegion(Number(value))}
+                  className="grid grid-cols-2 gap-1"
+                >
                   {watermarks.map((_region, index) => (
-                    <Button
-                      key={index}
-                      size="sm"
-                      variant={index === activeRegion ? 'default' : 'secondary'}
-                      aria-pressed={index === activeRegion}
-                      onClick={() => onActiveRegion(index)}
-                    >
+                    <ToggleGroupItem key={index} value={String(index)} size="sm">
                       {t('watermark.region', { index: index + 1 })}
-                    </Button>
+                    </ToggleGroupItem>
                   ))}
-                </div>
+                </ToggleGroup>
 
                 {watermarks[activeRegion] ? (
-                  <em className="field-hint">
+                  <Hint>
                     {t('watermark.size', {
                       width: watermarks[activeRegion].width,
                       height: watermarks[activeRegion].height,
                       x: watermarks[activeRegion].x,
                       y: watermarks[activeRegion].y
                     })}
-                  </em>
+                  </Hint>
                 ) : (
-                  <em className="field-hint warn">{t('watermark.none')}</em>
+                  <Hint warn>{t('watermark.none')}</Hint>
                 )}
               </div>
 
-              <div className="field">
-                <Label>{t('watermark.place')}</Label>
+              <Field label={t('watermark.place')} hint={t('watermark.marginHint')}>
                 <div className="grid grid-cols-2 gap-2">
                   {CORNERS.map((corner) => (
                     <Button
@@ -469,11 +515,18 @@ export function ExportPanel(props: Props): JSX.Element {
                     </Button>
                   ))}
                 </div>
-                <em className="field-hint">{t('watermark.marginHint')}</em>
-              </div>
+              </Field>
 
-              <div className="field">
-                <Label>{t('watermark.engine')}</Label>
+              <Field
+                label={t('watermark.engine')}
+                hint={
+                  watermarkEngine === 'ai'
+                    ? t('watermark.engine.aiHint')
+                    : aiAvailable
+                      ? t('watermark.engine.fastHint')
+                      : t('watermark.engine.missing')
+                }
+              >
                 <Select
                   value={watermarkEngine}
                   onValueChange={(value) => onWatermarkEngine(value as WatermarkEngine)}
@@ -488,14 +541,7 @@ export function ExportPanel(props: Props): JSX.Element {
                     </SelectItem>
                   </SelectContent>
                 </Select>
-                <em className="field-hint">
-                  {watermarkEngine === 'ai'
-                    ? t('watermark.engine.aiHint')
-                    : aiAvailable
-                      ? t('watermark.engine.fastHint')
-                      : t('watermark.engine.missing')}
-                </em>
-              </div>
+              </Field>
 
               {/*
                * Only for the AI engine: "the fill is rebuilt from the surrounding picture"
@@ -510,8 +556,23 @@ export function ExportPanel(props: Props): JSX.Element {
                * relationship legible without a paragraph explaining it.
                */}
               {watermarkEngine === 'ai' && (
-                <div className="field">
-                  <Label>{t('watermark.power')}</Label>
+                <Field
+                  label={t('watermark.power')}
+                  hint={
+                    /* `auto` is the only mode whose meaning is not in its own name, so it is
+                       the only one that has to say what it currently resolves to. */
+                    powerMode === 'auto'
+                      ? t('watermark.power.autoHint', {
+                          pace: t(`watermark.power.${aiPace.mode}`),
+                          source: t(onBattery ? 'watermark.power.onBattery' : 'watermark.power.plugged')
+                        })
+                      : // Read off the resolved pace rather than restated here, so the number the
+                        // hint promises and the duty the loop honours cannot drift apart.
+                        aiPace.duty >= 1
+                        ? t('watermark.power.fastHint')
+                        : t('watermark.power.pacedHint', { factor: (1 / aiPace.duty).toFixed(1) })
+                  }
+                >
                   <Select value={powerMode} onValueChange={(value) => onPowerMode(value as AiPowerMode)}>
                     <SelectTrigger aria-label={t('watermark.power')}>
                       <SelectValue />
@@ -524,30 +585,21 @@ export function ExportPanel(props: Props): JSX.Element {
                       ))}
                     </SelectContent>
                   </Select>
-                  <em className="field-hint">
-                    {/* `auto` is the only mode whose meaning is not in its own name, so it is
-                        the only one that has to say what it currently resolves to. */}
-                    {powerMode === 'auto'
-                      ? t('watermark.power.autoHint', {
-                          pace: t(`watermark.power.${aiPace.mode}`),
-                          source: t(onBattery ? 'watermark.power.onBattery' : 'watermark.power.plugged')
-                        })
-                      : // Read off the resolved pace rather than restated here, so the number the
-                        // hint promises and the duty the loop honours cannot drift apart.
-                        aiPace.duty >= 1
-                        ? t('watermark.power.fastHint')
-                        : t('watermark.power.pacedHint', { factor: (1 / aiPace.duty).toFixed(1) })}
-                  </em>
-                </div>
+                </Field>
               )}
 
               {watermarkEngine === 'ai' && (
-                <div className="field">
-                  <Button variant="secondary" onClick={onPreviewFrame} disabled={previewBusy || watermarks.length === 0}>
+                <div className="flex flex-col gap-1.5">
+                  <Button
+                    variant="secondary"
+                    className="w-fit"
+                    onClick={onPreviewFrame}
+                    disabled={previewBusy || watermarks.length === 0}
+                  >
                     <Eye />
                     {previewBusy ? t('watermark.preview.busy') : t('watermark.preview.action')}
                   </Button>
-                  <em className="field-hint">{t('watermark.preview.hint')}</em>
+                  <Hint>{t('watermark.preview.hint')}</Hint>
                 </div>
               )}
             </>
@@ -570,8 +622,7 @@ export function ExportPanel(props: Props): JSX.Element {
           )}
 
           {isGif && !isWebp && (
-            <div className="field">
-              <Label>{t('export.engine')}</Label>
+            <Field label={t('export.engine')}>
               <Select value={engine} onValueChange={(value) => onEngine(value as GifEngine)}>
                 <SelectTrigger aria-label={t('export.engine')}>
                   <SelectValue />
@@ -581,13 +632,12 @@ export function ExportPanel(props: Props): JSX.Element {
                   <SelectItem value="palette">{t('export.engine.palette')}</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </Field>
           )}
 
           {!isGif && (
             <>
-              <div className="field">
-                <Label>{t('export.encoder')}</Label>
+              <Field label={t('export.encoder')} hint={t('export.encoderHint')}>
                 <Select value={encoder} onValueChange={(value) => onEncoder(value as EncoderChoice)}>
                   <SelectTrigger aria-label={t('export.encoder')}>
                     <SelectValue />
@@ -600,11 +650,25 @@ export function ExportPanel(props: Props): JSX.Element {
                     <SelectItem value="gpu">{t('export.encoder.gpu')}</SelectItem>
                   </SelectContent>
                 </Select>
-                <em className="field-hint">{t('export.encoderHint')}</em>
-              </div>
+              </Field>
 
-              <div className="field">
-                <Label>{t('export.targetSize')}</Label>
+              {/* A target is a bitrate in disguise and the encoder has a floor, so a long
+                  clip aimed at 5 MB can only fail. Saying which preset would work is more
+                  use than letting the export refuse later. */}
+              <Field
+                label={t('export.targetSize')}
+                warn={targetTooSmall}
+                hint={
+                  targetTooSmall
+                    ? smallestFitting
+                      ? t('export.size.tooSmall', {
+                          size: formatBytes(videoSizeBytes(size) ?? 0),
+                          smallest: t(`export.size.${smallestFitting}` as TranslationKey)
+                        })
+                      : t('export.size.noneFit')
+                    : undefined
+                }
+              >
                 <Select value={size} onValueChange={(value) => onSize(value as VideoSize)}>
                   <SelectTrigger aria-label={t('export.targetSize')}>
                     <SelectValue />
@@ -617,39 +681,22 @@ export function ExportPanel(props: Props): JSX.Element {
                     ))}
                   </SelectContent>
                 </Select>
-                {/* A target is a bitrate in disguise and the encoder has a floor, so a
-                    long clip aimed at 5 MB can only fail. Saying which preset would work
-                    is more use than letting the export refuse later. */}
-                {targetTooSmall && (
-                  <em className="field-hint warn">
-                    {smallestFitting
-                      ? t('export.size.tooSmall', {
-                          size: formatBytes(videoSizeBytes(size) ?? 0),
-                          smallest: t(`export.size.${smallestFitting}` as TranslationKey)
-                        })
-                      : t('export.size.noneFit')}
-                  </em>
-                )}
-              </div>
+              </Field>
 
-              <label className="check-row">
-                <Checkbox checked={mute} onCheckedChange={(value) => onMute(value === true)} aria-label={t('export.mute')} />
-                <span>
-                  <strong>{t('export.mute')}</strong>
-                </span>
-              </label>
+              <ToggleRow
+                title={t('export.mute')}
+                checked={mute}
+                onCheckedChange={onMute}
+                aria-label={t('export.mute')}
+              />
 
               {!mute && (
-                <label className="check-row">
-                  <Checkbox
-                    checked={loudnorm}
-                    onCheckedChange={(value) => onLoudnorm(value === true)}
-                    aria-label={t('export.loudnorm')}
-                  />
-                  <span>
-                    <strong>{t('export.loudnorm')}</strong>
-                  </span>
-                </label>
+                <ToggleRow
+                  title={t('export.loudnorm')}
+                  checked={loudnorm}
+                  onCheckedChange={onLoudnorm}
+                  aria-label={t('export.loudnorm')}
+                />
               )}
             </>
           )}
@@ -657,17 +704,13 @@ export function ExportPanel(props: Props): JSX.Element {
 
         {isGif && (
           <Section icon={<Gauge />} title={t('export.section.quality')}>
-            <div className="field">
-              <div className="field-row">
-                <Label>{t('export.fps')}</Label>
-                <NumberField
-                  value={fps}
-                  min={5}
-                  max={50}
-                  aria-label={t('export.fps')}
-                  onCommit={onFps}
-                />
-              </div>
+            <Field
+              label={t('export.fps')}
+              layout="row"
+              trailing={
+                <NumberField value={fps} min={5} max={50} aria-label={t('export.fps')} onCommit={onFps} />
+              }
+            >
               <Slider
                 value={[fps]}
                 min={5}
@@ -676,20 +719,17 @@ export function ExportPanel(props: Props): JSX.Element {
                 aria-label={t('export.fps')}
                 onValueChange={(value) => onFps(value[0] ?? fps)}
               />
-            </div>
+            </Field>
 
             {qualityApplies ? (
-              <div className="field">
-                <div className="field-row">
-                  <Label>{t('export.quality')}</Label>
-                  <NumberField
-                    value={quality}
-                    min={1}
-                    max={100}
-                    aria-label={t('export.quality')}
-                    onCommit={onQuality}
-                  />
-                </div>
+              <Field
+                label={t('export.quality')}
+                hint={t('export.quality.hint')}
+                layout="row"
+                trailing={
+                  <NumberField value={quality} min={1} max={100} aria-label={t('export.quality')} onCommit={onQuality} />
+                }
+              >
                 <Slider
                   value={[quality]}
                   min={10}
@@ -698,17 +738,14 @@ export function ExportPanel(props: Props): JSX.Element {
                   aria-label={t('export.quality')}
                   onValueChange={(value) => onQuality(value[0] ?? quality)}
                 />
-                <em className="field-hint">{t('export.quality.hint')}</em>
-              </div>
+              </Field>
             ) : (
-              <div className="field">
-                <Label>{t('export.quality')}</Label>
-                <em className="field-hint">{t('export.quality.fixed')}</em>
-              </div>
+              <Field label={t('export.quality')} hint={t('export.quality.fixed')}>
+                <span />
+              </Field>
             )}
 
-            <div className="field">
-              <Label>{t('export.resolution')}</Label>
+            <Field label={t('export.resolution')}>
               <Select
                 value={width === null ? NATIVE : String(width)}
                 onValueChange={(value) => onWidth(value === NATIVE ? null : Number(value))}
@@ -724,13 +761,12 @@ export function ExportPanel(props: Props): JSX.Element {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            </Field>
 
             {!isWebp && (
               <>
-                <div className="field-row">
-                  <div className="field">
-                    <Label>{t('export.colors')}</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label={t('export.colors')}>
                     <Select
                       value={String(tuning.colors)}
                       onValueChange={(value) => onTuning({ ...tuning, colors: Number(value) })}
@@ -746,11 +782,10 @@ export function ExportPanel(props: Props): JSX.Element {
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
-                  <div className="field">
-                    <Label>{t('export.dither')}</Label>
-                    {/* gifski and gifsicle run their own quantiser, so the dither is
-                        only meaningful for the ffmpeg palette engine. */}
+                  </Field>
+                  {/* gifski and gifsicle run their own quantiser, so the dither is only
+                      meaningful for the ffmpeg palette engine. */}
+                  <Field label={t('export.dither')}>
                     <Select
                       value={tuning.dither}
                       disabled={engine !== 'palette'}
@@ -767,14 +802,15 @@ export function ExportPanel(props: Props): JSX.Element {
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
+                  </Field>
                 </div>
 
-                <div className="field">
-                  <div className="field-row">
-                    <Label>{t('export.lossy')}</Label>
-                    <span className="muted tabular-nums">{lossyPercent}%</span>
-                  </div>
+                <Field
+                  label={t('export.lossy')}
+                  hint={lossyHint}
+                  layout="row"
+                  trailing={<span className="text-sm tabular-nums text-dim">{lossyPercent}%</span>}
+                >
                   <Slider
                     value={[tuning.lossy]}
                     min={0}
@@ -783,123 +819,104 @@ export function ExportPanel(props: Props): JSX.Element {
                     aria-label={t('export.lossy')}
                     onValueChange={(value) => onTuning({ ...tuning, lossy: value[0] ?? tuning.lossy })}
                   />
-                  <em className="field-hint">{lossyHint}</em>
-                </div>
+                </Field>
 
                 {/* The estimate already follows the knobs; this says by how much, so a
                     choice that looks free is visibly not one. */}
                 {savedPercent > 0 && (
-                  <em className="field-hint">{t('export.tuning.saving', { percent: savedPercent })}</em>
+                  <Hint>{t('export.tuning.saving', { percent: savedPercent })}</Hint>
                 )}
               </>
             )}
 
             {!isWebp && (
-              <label className="check-row">
-                <Checkbox
-                  checked={optimize}
-                  onCheckedChange={(value) => onOptimize(value === true)}
-                  aria-label={t('export.optimize')}
-                />
-                <span>
-                  <strong>{t('export.optimize')}</strong>
-                  <em>{gifsicleReady ? t('export.optimizeHint') : t('export.optimizeMissing')}</em>
-                </span>
-              </label>
+              <ToggleRow
+                title={t('export.optimize')}
+                hint={gifsicleReady ? t('export.optimizeHint') : t('export.optimizeMissing')}
+                checked={optimize}
+                onCheckedChange={onOptimize}
+                aria-label={t('export.optimize')}
+              />
             )}
           </Section>
         )}
 
-        <Button variant="ghost" size="sm" className="section-toggle" onClick={() => setAdvanced((value) => !value)}>
-          {advanced ? <ChevronUp /> : <ChevronDown />}
-          {advanced ? t('export.advanced.hide') : t('export.advanced.show')}
-        </Button>
+        <Collapsible open={advanced} onOpenChange={setAdvanced}>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="justify-start pl-1 text-soft">
+              {advanced ? <ChevronUp /> : <ChevronDown />}
+              {advanced ? t('export.advanced.hide') : t('export.advanced.show')}
+            </Button>
+          </CollapsibleTrigger>
 
-        {advanced && (
-          <div className="advanced-block">
-            <div className="field">
-              <Label>{t('export.speed')}</Label>
-              <div className="speed-row">
-                {SPEEDS.map((option) => (
-                  <Button
-                    key={option}
-                    size="sm"
-                    variant={speed === option ? 'default' : 'secondary'}
-                    aria-pressed={speed === option}
-                    onClick={() => onSpeed(option)}
-                  >
-                    {option}×
-                  </Button>
-                ))}
+        <CollapsibleContent className="gap-4 rounded-lg border border-border bg-elevated/40 p-4">
+            <Field label={t('export.speed')} hint={speedHint}>
+              <div className="flex flex-wrap items-center gap-2">
                 {/* The presets are a shortcut, not the menu: any speed in range is a
-                    legitimate choice, and the field is the same control the quick
-                    picks write into. */}
-                <span className="speed-custom">
+                    legitimate choice, and the field is the same control the quick picks
+                    write into. */}
+                <ToggleGroup
+                  type="single"
+                  value={String(speed)}
+                  onValueChange={(value) => value && onSpeed(clampSpeed(Number(value)))}
+                  className="w-auto"
+                >
+                  {SPEEDS.map((option) => (
+                    <ToggleGroupItem key={option} value={String(option)} size="sm">
+                      {option}×
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+                <span className="ml-auto flex items-center gap-1">
                   <NumberField
                     value={speed}
                     min={MIN_SPEED}
                     max={MAX_SPEED}
                     decimals={2}
+                    className="w-[68px]"
                     aria-label={t('export.speed.custom')}
                     onCommit={(value) => onSpeed(clampSpeed(value))}
                   />
-                  <span className="speed-unit">×</span>
+                  <span className="text-sm text-dim">×</span>
                 </span>
               </div>
-              <em className="field-hint">
-                {clipSeconds === null || clipSeconds <= 0
-                  ? t('export.speed.hint', { min: String(MIN_SPEED), max: String(MAX_SPEED) })
-                  : t('export.speed.length', { length: formatLength(clipSeconds) ?? '' })}
-              </em>
-            </div>
+            </Field>
 
             {isGif && (
-              <label className="check-row">
-                <Checkbox
-                  checked={boomerang}
-                  onCheckedChange={(value) => onBoomerang(value === true)}
-                  aria-label={t('export.boomerang')}
-                />
-                <span>
-                  <strong>{t('export.boomerang')}</strong>
-                </span>
-              </label>
+              <ToggleRow
+                title={t('export.boomerang')}
+                checked={boomerang}
+                onCheckedChange={onBoomerang}
+                aria-label={t('export.boomerang')}
+              />
             )}
 
             {isGif && (
-              <div className="field">
-                <Label>{t('export.budget')}</Label>
-                <Select value={budget} onValueChange={(value) => onBudget(value as BudgetChoice)}>
-                  <SelectTrigger aria-label={t('export.budget')}>
+              <Field
+                label={t('export.limit')}
+                warn={Boolean(estimate.fitted && !estimate.fitted.fits)}
+                hint={limitHint}
+              >
+                <Select value={limit} onValueChange={(value) => onLimit(value as GifLimit)}>
+                  <SelectTrigger aria-label={t('export.limit')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="off">{t('export.budget.off')}</SelectItem>
-                    <SelectItem value="8mb">{t('export.budget.8mb')}</SelectItem>
+                    {GIF_LIMIT_OPTIONS.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {t(`export.limit.${option.id}` as TranslationKey)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                {estimate.fitted && !estimate.fitted.fits && (
-                  <em className="field-hint warn">
-                    {t('export.budget.none', { size: formatBytes(estimate.fitted.bytes) })}
-                  </em>
-                )}
-                {estimate.fitted && estimate.fitted.fits && (
-                  <em className="field-hint">
-                    {t('export.budget.fit', {
-                      width: estimate.fitted.width,
-                      fps: estimate.fitted.fps,
-                      size: formatBytes(estimate.fitted.bytes)
-                    })}
-                  </em>
-                )}
-              </div>
+              </Field>
             )}
-          </div>
-        )}
+        </CollapsibleContent>
+        </Collapsible>
 
-        <div className="preset-row">
-          <span className="field-label">{t('preset.title')}</span>
-          <div className="preset-buttons">
+        <div className="flex flex-col gap-2">
+          <Label className="text-dim">{t('preset.title')}</Label>
+          <div className="flex flex-wrap gap-2">
             {PRESETS.map((preset) => (
               <Button key={preset.id} size="sm" variant="secondary" onClick={() => onPreset(preset.id)}>
                 {t(preset.key)}
@@ -915,23 +932,36 @@ export function ExportPanel(props: Props): JSX.Element {
           of the list of controls that decide it. Nearly every knob above changes this number,
           and a readout you have to scroll away from the knob to read is one you cannot use
           to choose the knob. */}
-      <div className="export-footer">
-        <div className="estimate-card">
-          <span className="estimate-row">
-            <span className="eyebrow">{t('export.summary')}</span>
-            <span className="estimate-value">{estimateLabel}</span>
-          </span>
+      <div className="flex shrink-0 flex-col gap-2.5 border-t border-border bg-panel px-5 pt-3 pb-4 [@media(max-height:720px)]:gap-2 [@media(max-height:720px)]:px-3.5 [@media(max-height:720px)]:pb-3">
+        <div
+          data-slot="estimate"
+          className="flex flex-col gap-0.5 rounded-lg border border-border bg-secondary/40 px-3 py-2"
+        >
+          <div className="flex items-baseline justify-between gap-2.5">
+            <span className="text-xs font-bold tracking-wider text-dim uppercase">{t('export.summary')}</span>
+            <span data-slot="estimate-size" data-fitted={estimate.fitted ? 'yes' : 'no'} className="text-base font-semibold tabular-nums text-foreground">
+              {estimateLabel}
+            </span>
+          </div>
           {estimate.measured && (
-            <span className="estimate-measure">
+            <span className="text-xs text-dim">
               {t('export.estimate.measure', {
                 est: formatBytes(estimate.measured.estimated),
                 actual: formatBytes(estimate.measured.actual)
               })}
             </span>
           )}
+          {/* What the number is worth. A range rather than a bare figure, because the model
+              cannot know the content until something has been encoded and being caught out by
+              a file bigger than promised is the failure that matters. */}
+          {estimateNote && (
+            <span data-slot="estimate-note" className="text-xs text-dim">
+              {estimateNote}
+            </span>
+          )}
         </div>
 
-        <em className="field-hint">{hint}</em>
+        <Hint>{hint}</Hint>
 
         <Button size="lg" disabled={!hasSource || busy} title={!hasSource ? t('export.disabledHint') : undefined} onClick={onExport}>
           {busy ? t('export.working') : isGif ? t('export.primary.gif') : t('export.primary.video')}

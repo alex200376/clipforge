@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty'
 import { Separator } from './ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 import { formatBytes } from '../format'
@@ -83,24 +84,29 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
 
   if (!result) {
     return (
-      <div className="output-box">
-        <div className="output-stage">
-          <div className="output-empty">
-            <ImageOff className="mx-auto mb-3 size-7 text-[var(--text-ghost)]" aria-hidden="true" />
-            <strong>{t('output.empty.title')}</strong>
-            {t('output.empty.body')}
-          </div>
-        </div>
+      <div className="flex flex-col gap-3">
+        {/* The outline form of the empty state: the stage box below is the border the
+            registry's docs draw with a utility class, and it was already here. */}
+        <Empty className="min-h-[180px] overflow-hidden rounded-xl border border-border bg-stage p-5 md:p-6">
+          <EmptyHeader>
+            <EmptyMedia variant="icon" className="text-ghost">
+              <ImageOff aria-hidden="true" />
+            </EmptyMedia>
+            <EmptyTitle className="text-sm font-semibold text-soft">{t('output.empty.title')}</EmptyTitle>
+            <EmptyDescription className="text-sm">{t('output.empty.body')}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       </div>
     )
   }
 
   return (
-    <div className="output-box">
-      <div className="output-stage">
+    <div className="flex flex-col gap-3">
+      <div className="grid min-h-[180px] place-items-center overflow-hidden rounded-xl border border-border bg-stage">
         {isVideo ? (
           <video
             ref={videoRef}
+            className="max-h-[280px] w-full object-contain"
             src={result.url}
             autoPlay
             loop
@@ -111,7 +117,7 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
           />
         ) : (
           // Chromium animates a GIF inside <img>, so it loops without a player.
-          <img src={result.url} alt={baseName(result.path)} />
+          <img className="max-h-[280px] w-full object-contain" src={result.url} alt={baseName(result.path)} />
         )}
       </div>
 
@@ -131,37 +137,37 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
 
       <Separator />
 
-      <div className="flex flex-col gap-1.5 text-[0.8125rem]">
-        <div className="kv">
+      <div className="flex flex-col gap-1.5 text-sm">
+        <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
           <span>{t('output.file')}</span>
           <span className="truncate" title={result.path}>
             {baseName(result.path)}
           </span>
         </div>
-        <div className="kv">
+        <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
           <span>{t('export.summary.duration')}</span>
           <span className="tabular-nums">{summary.duration}</span>
         </div>
-        <div className="kv">
+        <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
           <span>{t('export.summary.engine')}</span>
           <span>{summary.engine}</span>
         </div>
-        <div className="kv">
+        <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
           <span>{t('export.summary.fps')}</span>
           <span className="tabular-nums">{summary.fps}</span>
         </div>
-        <div className="kv">
+        <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
           <span>{t('export.summary.resolution')}</span>
           <span>{summary.resolution}</span>
         </div>
-        <div className="kv">
+        <div className="flex justify-between gap-4 [&>span:last-child]:truncate [&>span:first-child]:text-dim">
           <span>{t('output.size')}</span>
           <span className="tabular-nums">{formatBytes(result.sizeBytes)}</span>
         </div>
       </div>
 
       {optimised && (
-        <div className="optimised-note">
+        <div className="flex items-center gap-3 rounded-xl border border-[var(--border-success-soft)] bg-[var(--surface-success-tint)] px-4 py-3.5 text-xs leading-relaxed text-soft">
           <Badge variant="success">{t('output.optimised')}</Badge>
           <span>
             {t('output.savedReport', {
@@ -175,7 +181,7 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
 
       {/* Dragging the file out of the window is how it reaches Discord or Slack. */}
       <div
-        className="drag-out"
+        className="flex cursor-grab items-center gap-2.5 rounded-lg border border-dashed border-border-strong bg-secondary/40 px-3.5 py-3 text-xs text-dim [&_svg]:size-4 [&_svg]:shrink-0"
         draggable
         title={t('output.dragHint')}
         onDragStart={(event) => {
@@ -185,8 +191,8 @@ export function OutputPanel({ result, summary, optimised, onOpenFolder, onDragOu
         }}
       >
         <FileDown />
-        <span className="drag-out-name">{baseName(result.path)}</span>
-        <em>{t('output.dragHint')}</em>
+        <span className="min-w-0 flex-1 truncate font-medium text-soft">{baseName(result.path)}</span>
+        <em className="not-italic">{t('output.dragHint')}</em>
       </div>
 
       <div className="flex flex-wrap gap-2">

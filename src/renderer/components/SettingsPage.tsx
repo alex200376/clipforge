@@ -5,6 +5,9 @@ import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 import { Checkbox } from './ui/checkbox'
+import { Hint } from './ui/field'
+import { cn } from '../lib/utils'
+import { Input } from './ui/input'
 import { InstallCard } from './InstallCard'
 import { StoragePanel } from './StoragePanel'
 import type { InstallSummary } from './InstallCard'
@@ -12,11 +15,13 @@ import { Label } from './ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 import { Slider } from './ui/slider'
+import { ToggleRow } from './ui/toggle-row'
 import { UpdatePanel } from './UpdatePanel'
 import { WindowControls } from './WindowControls'
 import { DITHER_MODES, GIF_COLOR_STEPS, type GifDither } from '../../shared/gifTuning'
 import { RESOLUTION_PRESETS } from '../../shared/resolutions'
 import { THEMES } from '../../shared/types'
+import { GIF_LIMIT_OPTIONS } from '../../shared/gifLimit'
 import { VIDEO_SIZE_OPTIONS } from '../../shared/videoSize'
 import { NOTIFY_WHEN, type NotifyWhen } from '../../shared/notifications'
 import {
@@ -33,6 +38,7 @@ import type {
   DependencyState,
   EncoderChoice,
   GifEngine,
+  GifLimit,
   HardwareProfile,
   InstallProgressEvent,
   Language,
@@ -58,7 +64,7 @@ function formatBuildTime(iso: string): string {
 /** A card heading with an icon, so the page can be scanned rather than read. */
 function CardHeading({ icon: Icon, children }: { icon: typeof Cpu; children: string }): JSX.Element {
   return (
-    <span className="card-title">
+    <span className="flex items-center gap-2 [&_svg]:size-4 [&_svg]:text-brand">
       <Icon />
       {children}
     </span>
@@ -72,10 +78,14 @@ function CardHeading({ icon: Icon, children }: { icon: typeof Cpu; children: str
  */
 function ThemeSwatch({ theme }: { theme: Theme }): JSX.Element {
   return (
-    <span className="theme-chip" data-theme={theme} aria-hidden="true">
-      <i />
-      <i />
-      <i />
+    <span
+      className="inline-flex h-5 w-[34px] shrink-0 overflow-hidden rounded-md border border-[var(--border-strong)]"
+      data-theme={theme}
+      aria-hidden="true"
+    >
+      <i className="block h-full w-[42%] bg-background" />
+      <i className="block h-full w-[26%] bg-panel" />
+      <i className="block h-full w-[32%] bg-brand" />
     </span>
   )
 }
@@ -129,6 +139,8 @@ interface Props {
   session: LinkSessionState
   onSignIn: () => void
   onSignOut: () => void
+  /** False in fullscreen, where there is no window to move. */
+  drag?: boolean
 }
 
 export function SettingsPage({
@@ -161,7 +173,8 @@ export function SettingsPage({
   onInstallUpdate,
   session,
   onSignIn,
-  onSignOut
+  onSignOut,
+  drag = true
 }: Props): JSX.Element {
   const { t, setLanguage } = useI18n()
   const [draft, setDraft] = useState<AppSettings>(settings)
@@ -171,9 +184,12 @@ export function SettingsPage({
   useEffect(() => setDraft(settings), [settings])
 
   // Esc mirrors the sidebar behaviour of a normal page, so the takeover is not a dead end.
+  // A popup that handled the key first means the Esc was aimed at it - Radix's layers run in
+  // the capture phase and call `preventDefault`, so the theme dropdown can be dismissed
+  // without the page underneath disappearing along with it.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onBack()
+      if (event.key === 'Escape' && !event.defaultPrevented) onBack()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -187,6 +203,7 @@ export function SettingsPage({
       draft.defaultFps !== settings.defaultFps ||
       draft.defaultWidth !== settings.defaultWidth ||
       draft.defaultVideoSize !== settings.defaultVideoSize ||
+      draft.defaultGifLimit !== settings.defaultGifLimit ||
       draft.gifColors !== settings.gifColors ||
       draft.gifDither !== settings.gifDither ||
       draft.gifLossy !== settings.gifLossy ||
@@ -265,21 +282,25 @@ export function SettingsPage({
   }, [dependencies])
 
   return (
-    <div className="settings">
-      <div className="settings-head">
+    <div className="flex h-full flex-col px-8">
+      <div className={cn('flex shrink-0 items-center gap-3 border-b border-border py-3', drag && 'drag')}>
         <div>
-          <h2 className="text-lg font-bold">{t('settings.title')}</h2>
-          <p className="text-[0.8125rem] text-dim">{t('settings.subtitle')}</p>
+          <h2 className="text-lg font-semibold">{t('settings.title')}</h2>
+          <p className="text-sm text-dim">{t('settings.subtitle')}</p>
         </div>
-        {notice && <span className="notice">{notice}</span>}
+        {notice && <Badge variant="secondary">{notice}</Badge>}
         <Button variant="secondary" className="ml-auto" onClick={onBack}>
           ← {t('settings.back')}
         </Button>
-        <WindowControls maximized={maximized} />
+        <WindowControls maximized={maximized} visible={drag} />
       </div>
 
-      <Tabs value={tab} onValueChange={(value) => setTab(value as SettingsTab)} className="settings-body">
-        <TabsList className="grid w-full max-w-[560px] grid-cols-4">
+      <Tabs
+        value={tab}
+        onValueChange={(value) => setTab(value as SettingsTab)}
+        className="flex min-h-0 w-full max-w-[940px] flex-1 flex-col gap-5 overflow-x-hidden overflow-y-auto pb-6 [overscroll-behavior:contain]"
+      >
+        <TabsList className="grid h-10 w-full max-w-[620px] grid-cols-4">
           <TabsTrigger value="output">{t('settings.tab.output')}</TabsTrigger>
           <TabsTrigger value="defaults">{t('settings.defaults.title')}</TabsTrigger>
           <TabsTrigger value="tools">{t('settings.tools.title')}</TabsTrigger>
@@ -296,8 +317,8 @@ export function SettingsPage({
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-center gap-2">
-                <input
-                  className="url-input"
+                <Input
+                  className="min-w-[240px] flex-1 font-mono text-xs"
                   value={draft.outputDir}
                   spellCheck={false}
                   title={draft.outputDir}
@@ -316,7 +337,7 @@ export function SettingsPage({
               </div>
               {/* The field already shows a custom path; only the fallback needs explaining. */}
               {draft.outputDir.trim().length === 0 && (
-                <p className="text-[0.8125rem] text-dim">
+                <p className="text-sm text-dim">
                   {t('settings.output.usingDefault', { dir: defaultDir })}
                 </p>
               )}
@@ -332,8 +353,8 @@ export function SettingsPage({
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-center gap-2">
-                <input
-                  className="url-input"
+                <Input
+                  className="min-w-[240px] flex-1 font-mono text-xs"
                   value={draft.outputTemplate}
                   spellCheck={false}
                   aria-label={t('settings.naming.label')}
@@ -347,18 +368,16 @@ export function SettingsPage({
                   {t('settings.naming.reset')}
                 </Button>
               </div>
-              <p className="text-[0.8125rem] text-dim">
+              <p className="text-sm text-dim">
                 {t('settings.naming.tokens', { tokens: OUTPUT_TOKENS.join('  ') })}
               </p>
               {/* A typo here would silently drop out of the name, so it is worth saying. */}
               {unknown.length > 0 && (
-                <p className="naming-warning">
-                  {t('settings.naming.unknown', { tokens: unknown.join('  ') })}
-                </p>
+                <Hint warn>{t('settings.naming.unknown', { tokens: unknown.join('  ') })}</Hint>
               )}
               {/* The name itself, not a description of it: the point of a template is seeing
                   what it produces, and it updates as the box is typed in. */}
-              <p className="naming-preview">
+              <p className="flex items-center gap-2 rounded-md border border-border bg-secondary/50 px-2.5 py-2 font-mono text-xs break-all text-dim [&_svg]:size-3.5 [&_svg]:shrink-0">
                 <FileText aria-hidden />
                 {namePreview
                   ? t('settings.naming.preview', { name: namePreview })
@@ -374,18 +393,15 @@ export function SettingsPage({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <label className="check-row">
-                <Checkbox
-                  id="auto-cleanup"
-                  checked={draft.autoCleanup}
-                  onCheckedChange={(checked) => setDraft({ ...draft, autoCleanup: checked === true })}
-                />
-                <span>
-                  <strong>{t('settings.behavior.cleanup')}</strong>
-                  <em>{t('settings.behavior.cleanupHint')}</em>
-                </span>
-              </label>
-              <div className="setting-field">
+              <ToggleRow
+                title={t('settings.behavior.cleanup')}
+                hint={t('settings.behavior.cleanupHint')}
+                checked={draft.autoCleanup}
+                onCheckedChange={(checked) => setDraft({ ...draft, autoCleanup: checked })}
+                control="checkbox"
+                aria-label={t('settings.behavior.cleanup')}
+              />
+              <div className="flex min-w-0 flex-col gap-2">
                 <Label>{t('settings.behavior.notify')}</Label>
                 <Select
                   value={draft.notifyWhen}
@@ -402,7 +418,7 @@ export function SettingsPage({
                     ))}
                   </SelectContent>
                 </Select>
-                <em className="text-[0.8125rem] text-dim">{t('settings.behavior.notifyHint')}</em>
+                <em className="text-sm text-dim">{t('settings.behavior.notifyHint')}</em>
                 <div className="flex items-center gap-2.5">
                   <Checkbox
                     id="notify-sound"
@@ -438,8 +454,8 @@ export function SettingsPage({
             <CardContent>
               {/* Both fields are display preferences, so they sit together and both
                   apply on choice rather than on Save. */}
-              <div className="settings-grid">
-                <div className="setting-field">
+              <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.appearance.theme')}</Label>
                   <Select value={draft.theme} onValueChange={(value) => changeTheme(value as Theme)}>
                     <SelectTrigger aria-label={t('settings.appearance.theme')}>
@@ -448,7 +464,7 @@ export function SettingsPage({
                     <SelectContent>
                       {THEMES.map((theme) => (
                         <SelectItem key={theme} value={theme}>
-                          <span className="theme-option">
+                          <span className="flex min-w-0 items-center gap-2.5">
                             <ThemeSwatch theme={theme} />
                             {t(`settings.theme.${theme}`)}
                           </span>
@@ -458,7 +474,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.appearance.language')}</Label>
                   <Select value={draft.language} onValueChange={(value) => changeLanguage(value as Language)}>
                     <SelectTrigger aria-label={t('settings.appearance.language')}>
@@ -484,8 +500,8 @@ export function SettingsPage({
               <CardDescription>{t('settings.defaults.description')}</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="settings-grid">
-                <div className="setting-field">
+              <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.defaults.engine')}</Label>
                   <Select
                     value={draft.defaultEngine}
@@ -501,7 +517,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.defaults.fps')}</Label>
                   <Select
                     value={String(draft.defaultFps)}
@@ -520,7 +536,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.defaults.width')}</Label>
                   <Select
                     value={draft.defaultWidth === null ? NATIVE : String(draft.defaultWidth)}
@@ -540,7 +556,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.defaults.format')}</Label>
                   <Select
                     value={draft.defaultFormat}
@@ -556,7 +572,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.defaults.encoder')}</Label>
                   <Select
                     value={draft.defaultEncoder}
@@ -575,7 +591,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('settings.defaults.videoSize')}</Label>
                   <Select
                     value={draft.defaultVideoSize}
@@ -594,7 +610,26 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
+                  <Label>{t('settings.defaults.gifLimit')}</Label>
+                  <Select
+                    value={draft.defaultGifLimit}
+                    onValueChange={(value) => setDraft({ ...draft, defaultGifLimit: value as GifLimit })}
+                  >
+                    <SelectTrigger aria-label={t('settings.defaults.gifLimit')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GIF_LIMIT_OPTIONS.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {t(`export.limit.${option.id}` as TranslationKey)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('export.colors')}</Label>
                   <Select
                     value={String(draft.gifColors)}
@@ -613,7 +648,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>{t('export.dither')}</Label>
                   <Select
                     value={draft.gifDither}
@@ -632,7 +667,7 @@ export function SettingsPage({
                   </Select>
                 </div>
 
-                <div className="setting-field">
+                <div className="flex min-w-0 flex-col gap-2">
                   <Label>
                     {t('export.lossy')} · {draft.gifLossy}%
                   </Label>
@@ -668,16 +703,24 @@ export function SettingsPage({
             <CardContent>
               {/* One line per tool. The four absolute install paths used to be printed
                   in full here, which is what made this page long enough to scroll. */}
-              <ul className="tool-list">
+              <ul className="flex flex-col overflow-hidden rounded-lg border border-border">
                 {dependencies.map((entry) => (
                   <li
                     key={entry.name}
-                    className={`tool-row ${entry.available ? 'ok' : entry.required ? 'missing' : 'optional'}`}
+                    data-state={entry.available ? 'ok' : entry.required ? 'missing' : 'optional'}
+                    className="group flex items-center gap-3 border-b border-border px-3.5 py-2.5 text-sm last:border-b-0"
                     title={entry.path ?? t('settings.tools.missing')}
                   >
-                    <span className="tool-dot" aria-hidden="true" />
-                    <span className="tool-name">{entry.name}</span>
-                    <span className="tool-version">{versionOf(entry.name) ?? '—'}</span>
+                    {/* One dot per tool, coloured by the row's own state, so "which of these
+                        is missing" is answered before a word is read. */}
+                    <span
+                      aria-hidden="true"
+                      className="size-[7px] shrink-0 rounded-full bg-[var(--dot-idle)] group-data-[state=ok]:bg-[var(--success)] group-data-[state=missing]:bg-[var(--warning)]"
+                    />
+                    <span className="min-w-0 font-mono text-sm font-semibold text-foreground">{entry.name}</span>
+                    <span className="mr-auto truncate text-xs tabular-nums text-dim">
+                      {versionOf(entry.name) ?? '—'}
+                    </span>
                     {!entry.available && entry.required && (
                       <Badge variant="warning">{t('settings.tools.missing')}</Badge>
                     )}
@@ -704,9 +747,9 @@ export function SettingsPage({
                 onRecheck={onRecheck}
               />
 
-              <div className="tool-folder">
-                <span className="muted">{t('settings.tools.folder')}</span>
-                <span className="tool-folder-path" title={toolsFolder ?? ''}>
+              <div className="mt-4 flex flex-wrap items-center gap-2.5 text-xs">
+                <span className="text-dim">{t('settings.tools.folder')}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-soft" title={toolsFolder ?? ''}>
                   {toolsFolder ?? '—'}
                 </span>
                 {/* These replace the install card's buttons while nothing is running. */}
@@ -715,10 +758,10 @@ export function SettingsPage({
                     {t('install.installNow')}
                   </Button>
                 )}
-                <Button size="sm" variant="ghost" className="btn-quiet" disabled={busy} onClick={onRecheck}>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={onRecheck}>
                   {t('install.recheck')}
                 </Button>
-                <Button size="sm" variant="ghost" className="btn-quiet" onClick={onRevealTools}>
+                <Button size="sm" variant="ghost" onClick={onRevealTools}>
                   {t('settings.tools.reveal')}
                 </Button>
               </div>
@@ -738,30 +781,30 @@ export function SettingsPage({
               <CardDescription>{t('settings.links.description')}</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className={`link-session ${session.signedIn ? 'ok' : ''}`}>
-                <span className="tool-dot" aria-hidden="true" />
-                <span className="link-session-state">
+              <div
+                data-state={session.signedIn ? 'ok' : 'off'}
+                className="group flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-3.5 py-3"
+              >
+                <span
+                  aria-hidden="true"
+                  className="size-[7px] shrink-0 rounded-full bg-[var(--dot-idle)] group-data-[state=ok]:bg-[var(--success)]"
+                />
+                <span className="text-sm font-medium text-soft group-data-[state=ok]:text-[var(--text-success)]">
                   {session.signedIn ? t('settings.links.signedIn') : t('settings.links.signedOut')}
                 </span>
                 {session.signedIn && session.savedAt !== null && (
-                  <span className="muted">{new Date(session.savedAt).toLocaleString()}</span>
+                  <span className="text-sm text-dim">{new Date(session.savedAt).toLocaleString()}</span>
                 )}
                 <div className="ml-auto flex items-center gap-2">
                   <Button size="sm" variant="secondary" onClick={onSignIn}>
                     {t('settings.links.signIn')}
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="btn-quiet"
-                    disabled={!session.signedIn}
-                    onClick={onSignOut}
-                  >
+                  <Button size="sm" variant="ghost" disabled={!session.signedIn} onClick={onSignOut}>
                     {t('settings.links.signOut')}
                   </Button>
                 </div>
               </div>
-              <p className="text-[0.8125rem] text-dim">{t('settings.links.hint')}</p>
+              <p className="text-sm text-dim">{t('settings.links.hint')}</p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -774,23 +817,23 @@ export function SettingsPage({
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="kv">
+              <div className="flex justify-between gap-4 text-sm text-soft [&>span:last-child]:text-right [&>span:last-child]:font-medium [&>span:last-child]:text-foreground">
                 <span>{t('settings.hardware.platform')}</span>
                 <span>{hardware?.platform ?? '—'}</span>
               </div>
-              <div className="kv">
+              <div className="flex justify-between gap-4 text-sm text-soft [&>span:last-child]:text-right [&>span:last-child]:font-medium [&>span:last-child]:text-foreground">
                 <span>{t('settings.hardware.cpu')}</span>
                 <span>{hardware ? t('settings.hardware.cores', { count: hardware.cores }) : '—'}</span>
               </div>
-              <div className="kv">
+              <div className="flex justify-between gap-4 text-sm text-soft [&>span:last-child]:text-right [&>span:last-child]:font-medium [&>span:last-child]:text-foreground">
                 <span>{t('settings.hardware.memory')}</span>
                 <span>{hardware ? `${hardware.memoryGb.toFixed(1)} GB` : '—'}</span>
               </div>
-              <div className="kv">
+              <div className="flex justify-between gap-4 text-sm text-soft [&>span:last-child]:text-right [&>span:last-child]:font-medium [&>span:last-child]:text-foreground">
                 <span>{t('settings.hardware.encoder')}</span>
                 <span>{hardware?.bestEncoder ?? '—'}</span>
               </div>
-              <div className="kv">
+              <div className="flex justify-between gap-4 text-sm text-soft [&>span:last-child]:text-right [&>span:last-child]:font-medium [&>span:last-child]:text-foreground">
                 <span>{t('settings.hardware.detected')}</span>
                 <span>
                   {hardware && hardware.encoders.length > 0 ? hardware.encoders.join(', ') : t('settings.hardware.none')}
@@ -826,8 +869,8 @@ export function SettingsPage({
               {/* Which build this is, to the minute. The question came up because an
                   installed older build was behaving like code that had already been
                   fixed: the fix was in the source and never in the binary. */}
-              <p className="muted">{t('settings.about.built', { time: buildTime ? formatBuildTime(buildTime) : '—' })}</p>
-              <p className="text-[0.8125rem] text-dim">{t('settings.about.licenses')}</p>
+              <p className="text-sm text-dim">{t('settings.about.built', { time: buildTime ? formatBuildTime(buildTime) : '—' })}</p>
+              <p className="text-sm text-dim">{t('settings.about.licenses')}</p>
               <div>
                 <Button variant="secondary" onClick={copyDiagnostics}>
                   {t('settings.about.diagnostics')}
@@ -838,10 +881,16 @@ export function SettingsPage({
         </TabsContent>
       </Tabs>
 
-      <div className="settings-foot">
-        <div className={`settings-bar ${dirty ? 'dirty' : ''}`}>
-          <span className="muted">{dirty ? t('settings.unsaved') : t('settings.saved')}</span>
-          <Button variant="secondary" className="primary-action" disabled={!dirty} onClick={() => setDraft(settings)}>
+      {/* A real footer row, not an overlay: the primary action is always on screen and the
+          last field never slides under it. */}
+      <div className="-mx-8 flex shrink-0 border-t border-border bg-background px-8 py-3.5">
+        <div
+          data-slot="settings-bar"
+          data-dirty={dirty}
+          className="flex w-full max-w-[940px] items-center gap-3 rounded-lg border border-border bg-panel px-5 py-3.5 data-[dirty=true]:border-brand"
+        >
+          <span className="text-sm text-dim">{dirty ? t('settings.unsaved') : t('settings.saved')}</span>
+          <Button variant="secondary" className="ml-auto" disabled={!dirty} onClick={() => setDraft(settings)}>
             {t('settings.revert')}
           </Button>
           <Button disabled={!dirty} onClick={() => onSave(draft)}>

@@ -90,6 +90,23 @@ export function safeBaseName(raw: string): string {
   return sanitizeName(raw.replace(/\.[^.]+$/, ''))
 }
 
+/**
+ * The file a second encode is allowed to overwrite, or null to write a fresh name.
+ *
+ * An export never silently overwrites an earlier one, with a single exception: the second
+ * pass that enforces a size limit is re-encoding the very file that missed the limit, and a
+ * fresh name there would leave two files where the user asked for one. That path is checked
+ * against the extension being produced, so a stale or mistyped value falls back to a new name
+ * rather than writing a GIF into something else's place.
+ *
+ * Shared and pure because both halves of the decision matter: the main process asks it before
+ * choosing the path, and the test that covers it does not need a running app to do so.
+ */
+export function replacementPath(candidate: string | undefined | null, extension: string): string | null {
+  if (typeof candidate !== 'string' || candidate.trim().length === 0) return null
+  return candidate.toLowerCase().endsWith(extension.toLowerCase()) ? candidate : null
+}
+
 const pad = (value: number, width = 2): string => String(value).padStart(width, '0')
 
 /** `YYYY-MM-DD`, in local time, because that is the day the user thinks it is. */

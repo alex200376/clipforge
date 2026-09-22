@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { errorPayload, errorMessage } from '../shared/errors'
-import { estimateAnimatedBytes, estimateVideoBytes, fitToBudget, outputDimensions } from '../shared/estimate'
+import { estimateAnimatedRange, estimateVideoBytes, fitToBudget, outputDimensions } from '../shared/estimate'
+import { gifLimitBytes } from '../shared/gifLimit'
 import { resolvePace } from '../shared/aiPower'
 import { AI_FEATHER } from '../shared/aiWindow'
 import {
@@ -28,6 +29,7 @@ import type {
   EncoderChoice,
   ExportResult,
   GifEngine,
+  GifLimit,
   HardwareProfile,
   LinkSessionState,
   InstallProgressEvent,
@@ -70,11 +72,11 @@ import type { Filmstrip } from './components/Timeline'
 import { TopBar } from './components/TopBar'
 import { UpdateBanner } from './components/UpdateBanner'
 import { TooltipProvider } from './components/ui/tooltip'
+import { cn } from './lib/utils'
 import { clockTime, formatBytes, formatTime } from './format'
 import { codedFailureMessage, localizedError, stageLabel, useI18n } from './i18n'
 import { adoptProbe } from './sourceAdoption'
 import type {
-  BudgetChoice,
   ErrorNotice,
   EstimateView,
   ExportMode,
@@ -100,6 +102,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultFps: 24,
   defaultWidth: 480,
   defaultVideoSize: 'original',
+  defaultGifLimit: 'off',
   defaultFormat: 'gif',
   defaultEncoder: 'auto',
   gifColors: DEFAULT_GIF_TUNING.colors,
@@ -114,7 +117,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   aiPowerMode: 'auto'
 }
 
-const BUDGET_BYTES = 8 * 1024 * 1024
 const baseName = (filePath: string): string => filePath.split(/[\\/]/).pop() ?? filePath
 
 interface Props {
@@ -225,7 +227,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     lossy: seed.gifLossy
   })
   const [optimize, setOptimize] = useState(false)
-  const [budget, setBudget] = useState<BudgetChoice>('off')
+  const [limit, setLimit] = useState<GifLimit>(seed.defaultGifLimit)
   const [speed, setSpeed] = useState(1)
   const [boomerang, setBoomerang] = useState(false)
 
@@ -429,6 +431,7 @@ export function App({ initialSettings }: Props): JSX.Element {
           setFps(loaded.defaultFps)
           setWidth(loaded.defaultWidth)
           setSize(loaded.defaultVideoSize)
+          setLimit(loaded.defaultGifLimit)
           setFormat(loaded.defaultFormat)
           setEncoder(loaded.defaultEncoder)
           setTuning({ colors: loaded.gifColors, dither: loaded.gifDither, lossy: loaded.gifLossy })
@@ -1050,21 +1053,26 @@ export function App({ initialSettings }: Props): JSX.Element {
     return Math.max(0.3, Math.min(3, measured.actual / measured.estimated))
   }, [measured, mode])
 
+  /** Whether the model has been replaced by something that was actually written. */
+  const calibrated = measured !== null && measured.mode === mode
+  const budget = gifLimitBytes(limit)
+
   /**
-   * The size estimate drives both the readout and the budget fitting, so the
+   * The size estimate drives both the readout and the limit fitting, so the
    * numbers the panel promises are the ones the export uses.
    */
   const estimate: EstimateView = useMemo(() => {
-    if (!source) return { bytes: null, fitted: null, measured, unknown: 'noClip' }
-    if (clipSeconds <= 0) return { bytes: null, fitted: null, measured, unknown: 'noLength' }
+    const nothing = { range: null, calibrated, enforcing: false }
+    if (!source) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'noClip' }
+    if (clipSeconds <= 0) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'noLength' }
     // No frame size yet: the clip is known but its dimensions are not, which is "still
     // reading" rather than "no clip" - and the panel says which.
-    if (!outputFrame) return { bytes: null, fitted: null, measured, unknown: 'reading' }
+    if (!outputFrame) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'reading' }
     if (!isGif) {
       // A video export keeps the source's frame rate, so a clip whose rate is still unknown
       // - a link that has not been read yet - cannot be counted. Saying so beats a number
       // invented from a default.
-      if (!(source.fps > 0)) return { bytes: null, fitted: null, measured, unknown: 'reading' }
+      if (!(source.fps > 0)) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'reading' }
       return {
         bytes: estimateVideoBytes({
           frame: outputFrame,
@@ -1076,7 +1084,12 @@ export function App({ initialSettings }: Props): JSX.Element {
         }        ),
         fitted: null,
         measured,
-        unknown: null
+        unknown: null,
+        // A video target is a bitrate the encoder is handed, so it lands where it was aimed
+        // rather than being re-encoded to fit afterwards.
+        range: null,
+        calibrated,
+        enforcing: false
       }
     }
     // The knobs change the file size directly - measured, 64 colours with the optimiser
@@ -1085,29 +1098,43 @@ export function App({ initialSettings }: Props): JSX.Element {
     // `quality` belongs here for the same reason: it is worth up to 3x either way, and the
     // engines disagree about whether they read it, so the context carries it and decides.
     const gif = { tuning, engine, optimize: optimize && gifsicleReady, quality }
-    const base = estimateAnimatedBytes({ format, frame: outputFrame, fps, seconds: clipSeconds, calibration, quality, gif })
-    if (budget === 'off') return { bytes: base, fitted: null, measured, unknown: null }
-    const fitted = fitToBudget({
-      format,
-      frame: outputFrame,
-      fps,
-      seconds: clipSeconds,
-      budgetBytes: BUDGET_BYTES,
-      calibration,
-      quality,
-      gif
-    })
-    return {
-      bytes: fitted.bytes,
-      fitted: { width: fitted.width, fps: fitted.fps, bytes: fitted.bytes, fits: fitted.fits },
-      measured,
-      unknown: null
+    const input = { format, frame: outputFrame, fps, seconds: clipSeconds, calibration, calibrated, quality, gif }
+    const plain = estimateAnimatedRange(input)
+    if (budget === null) {
+      return { bytes: plain.bytes, range: { low: plain.low, high: plain.high }, fitted: null, measured, unknown: null, calibrated, enforcing: false }
     }
-  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, budget, measured, tuning, engine, optimize, gifsicleReady, quality])
+    const fitted = fitToBudget({ ...input, budgetBytes: budget })
+    return {
+      // With a limit on, the number shown is the one the fit produced - a promise about the
+      // file, not about the sliders that are no longer deciding it.
+      bytes: fitted.bytes,
+      range: null,
+      fitted: {
+        width: fitted.width,
+        height: fitted.height,
+        fps: fitted.fps,
+        bytes: fitted.bytes,
+        fits: fitted.fits,
+        changed: fitted.changed,
+        quality: fitted.quality,
+        tuning: fitted.tuning
+      },
+      measured,
+      unknown: null,
+      calibrated,
+      // The fit is a prediction too, so the limit is only a promise once the file has been
+      // re-encoded to meet it - which is what happens if the first pass overshoots.
+      enforcing: true
+    }
+  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, calibrated, budget, measured, tuning, engine, optimize, gifsicleReady, quality])
 
-  // With a budget active the export follows the fitted numbers, not the sliders.
-  const effectiveFps = budget !== 'off' && estimate.fitted ? estimate.fitted.fps : fps
-  const effectiveWidth = budget !== 'off' && estimate.fitted ? estimate.fitted.width : width
+  // With a limit active the export follows the fitted numbers, not the sliders - including the
+  // picture quality, which the fit is allowed to spend before it touches the frame size.
+  const fitted = estimate.fitted
+  const effectiveFps = fitted ? fitted.fps : fps
+  const effectiveWidth = fitted ? fitted.width : width
+  const effectiveQuality = fitted ? fitted.quality : quality
+  const effectiveTuning = fitted ? fitted.tuning : tuning
 
   /**
    * What the next export would be called.
@@ -1261,29 +1288,51 @@ export function App({ initialSettings }: Props): JSX.Element {
         pushLog(t('watermark.aiReady'), 'done')
       }
 
-      const result: ExportResult = isGif
-        ? await window.clipforge.exportGif({
-            source: source.path,
-            isUrl: source.kind === 'url',
-            start: range.start,
-            end: range.end,
-            engine,
+      /**
+       * One encode of the current settings.
+       *
+       * A function rather than a single call because the size limit may need a second one: see
+       * below. `replace` is what makes that second one land on the same file name instead of
+       * leaving the overshooting file beside it as `name-2.gif`.
+       */
+      const encodeGif = async (settingsForRun: {
+        fps: number
+        width: number | null
+        quality: number
+        tuning: GifTuning
+        replace?: string
+      }): Promise<ExportResult> =>
+        await window.clipforge.exportGif({
+          source: source.path,
+          isUrl: source.kind === 'url',
+          start: range.start,
+          end: range.end,
+          engine,
+          fps: settingsForRun.fps,
+          width: settingsForRun.width,
+          quality: settingsForRun.quality,
+          tuning: settingsForRun.tuning,
+          outputDir: settings.outputDir,
+          format,
+          crop: normalizeCrop(activeCrop, source.width, source.height),
+          watermarks: activeWatermarks,
+          watermarkEngine,
+          aiToken,
+          speed,
+          boomerang,
+          optimize: optimize && format === 'gif',
+          replace: settingsForRun.replace,
+          // The date and the time are pinned at the moment of the export rather than when
+          // the context was last rebuilt, so `{date}` means the day the file was written.
+          naming: naming ? { ...naming, now: Date.now() } : undefined
+        })
+
+      let result: ExportResult = isGif
+        ? await encodeGif({
             fps: effectiveFps,
             width: effectiveWidth,
-            quality,
-            tuning,
-            outputDir: settings.outputDir,
-            format,
-            crop: normalizeCrop(activeCrop, source.width, source.height),
-            watermarks: activeWatermarks,
-            watermarkEngine,
-            aiToken,
-            speed,
-            boomerang,
-            optimize: optimize && format === 'gif',
-            // The date and the time are pinned at the moment of the export rather than when
-            // the context was last rebuilt, so `{date}` means the day the file was written.
-            naming: naming ? { ...naming, now: Date.now() } : undefined
+            quality: effectiveQuality,
+            tuning: effectiveTuning
           })
         : await window.clipforge.exportVideo({
             source: source.path,
@@ -1303,6 +1352,72 @@ export function App({ initialSettings }: Props): JSX.Element {
             encoder,
             naming: naming ? { ...naming, now: Date.now() } : undefined
           })
+
+      /**
+       * The second pass that turns the limit into a promise.
+       *
+       * The fit above is a prediction, and the model is not the file: on content unlike its
+       * reference clips it can be 2x low, which is exactly when a limited export would come
+       * out over its limit. So if the file that was written is over, the fit is re-run with
+       * the size that was actually produced and the encode is repeated once - with the same
+       * `aiToken`, so a watermark pass is never repeated for it. One retry, not a loop: a
+       * clip that cannot reach the limit under its smallest settings is a thing to say, not
+       * something to keep encoding.
+       */
+      if (result.ok && isGif && budget !== null && outputFrame && (result.sizeBytes ?? 0) > budget) {
+        const actual = result.sizeBytes ?? 0
+        const ratio = expected && expected > 0 ? actual / expected : 1
+        // Planned *from the encode that just ran*, not from the sliders: the ratio is the
+        // difference between that byte count and the prediction for those very settings, so
+        // a ladder restarting at a different quality would be applying a correction measured
+        // against something else - and the palette and quality factors are large enough for
+        // that to be the difference between fitting and not.
+        const replan = fitToBudget({
+          format,
+          frame: { width: effectiveWidth ?? outputFrame.width, height: estimate.fitted?.height ?? outputFrame.height },
+          fps: effectiveFps,
+          seconds: clipSeconds,
+          budgetBytes: budget,
+          calibration: Math.max(0.1, Math.min(10, ratio)),
+          calibrated: true,
+          quality: effectiveQuality,
+          gif: { tuning: effectiveTuning, engine, optimize: optimize && gifsicleReady, quality: effectiveQuality }
+        })
+        const changed =
+          replan.fps !== effectiveFps ||
+          replan.width !== (effectiveWidth ?? outputFrame.width) ||
+          replan.quality !== effectiveQuality ||
+          replan.tuning.lossy !== effectiveTuning.lossy ||
+          replan.tuning.colors !== effectiveTuning.colors
+        if (changed || !replan.fits) {
+          if (replan.fits) {
+            pushLog(
+              t('export.budget.retry', {
+                actual: formatBytes(actual),
+                limit: formatBytes(budget)
+              }),
+              'raw'
+            )
+            result = await encodeGif({
+              fps: replan.fps,
+              width: replan.width,
+              quality: replan.quality,
+              tuning: replan.tuning,
+              replace: result.output
+            })
+          }
+          // Reported after the retry, so the line describes the file that was kept.
+          if (replan.fits && result.ok && (result.sizeBytes ?? 0) > budget) {
+            const over = t('export.budget.over', { size: formatBytes(result.sizeBytes ?? 0) })
+            pushLog(over, 'raw')
+            showNotice(over)
+          } else if (!replan.fits) {
+            const over = t('export.budget.over', { size: formatBytes(actual) })
+            pushLog(over, 'raw')
+            showNotice(over)
+          }
+        }
+      }
 
       if (result.ok && result.output) {
         setLastOutput(result.output)
@@ -1359,7 +1474,14 @@ export function App({ initialSettings }: Props): JSX.Element {
     engine,
     effectiveFps,
     effectiveWidth,
+    effectiveQuality,
+    effectiveTuning,
     quality,
+    tuning,
+    budget,
+    outputFrame,
+    clipSeconds,
+    gifsicleReady,
     format,
     activeCrop,
     activeWatermarks,
@@ -1380,6 +1502,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     failExport,
     failWith,
     pushLog,
+    showNotice,
     t
   ])
 
@@ -1740,7 +1863,19 @@ export function App({ initialSettings }: Props): JSX.Element {
   return (
     <TooltipProvider>
       <div
-        className={`app ${page === 'settings' ? 'no-sidebar' : ''} ${chrome.fullscreen ? 'fullscreen' : ''}`}
+        data-fullscreen={chrome.fullscreen}
+        className={cn(
+          // The single row is `minmax(0, 1fr)`, not the default `auto`. An auto row is
+          // sized by its content, so a tall page grew the row past the window and every
+          // `flex-1 min-h-0` scroller inside it measured as tall as its own content -
+          // which means no scrollbar and, with `body { overflow: hidden }`, content that
+          // could not be reached at all. A definite row hands the columns the window
+          // height, and the inner scrollers do the scrolling.
+          'grid h-screen min-h-0 grid-rows-[minmax(0,1fr)] text-sm shadow-[inset_0_0_0_1px_var(--edge)]',
+          page === 'settings'
+            ? 'grid-cols-1'
+            : 'grid-cols-[var(--sidebar-width)_minmax(0,1fr)] max-[1180px]:grid-cols-[76px_minmax(0,1fr)]'
+        )}
         onDragEnter={onDragEnter}
         onDragOver={(event) => event.preventDefault()}
         onDragLeave={onDragLeave}
@@ -1781,11 +1916,17 @@ export function App({ initialSettings }: Props): JSX.Element {
             session={linkSession}
             onSignIn={() => void signInForLinks()}
             onSignOut={() => void signOutOfLinks()}
+            drag={!chrome.fullscreen}
           />
         ) : (
           <>
-            <Sidebar page={page} onNavigate={setPage} missingDependencies={missingTools.length} />
-            <div className="workspace">
+            <Sidebar
+              page={page}
+              onNavigate={setPage}
+              missingDependencies={missingTools.length}
+              drag={!chrome.fullscreen}
+            />
+            <div className="flex min-h-0 min-w-0 flex-col gap-3.5 overflow-x-hidden overflow-y-auto px-5 pb-4">
               <TopBar
                 url={url}
                 onUrlChange={setUrl}
@@ -1810,9 +1951,10 @@ export function App({ initialSettings }: Props): JSX.Element {
                 notice={notice}
                 busy={busy}
                 maximized={chrome.maximized}
+                drag={!chrome.fullscreen}
               />
 
-              <div className="media-line">
+              <div className={cn('flex items-center gap-2.5 py-1 text-sm text-soft', !chrome.fullscreen && 'drag')}>
                 {source ? t('media.loaded', { name: source.name, time: formatTime(source.duration) }) : t('media.none')}
               </div>
 
@@ -1873,8 +2015,8 @@ export function App({ initialSettings }: Props): JSX.Element {
 
               {installCard}
 
-              <div className="main">
-                <div className="center-column">
+              <div className="grid min-h-[calc(var(--preview-min)+14px+var(--timeline-max))] flex-1 grid-cols-[minmax(0,1fr)_25rem] gap-3.5 max-[1400px]:grid-cols-[minmax(0,1fr)_356px]">
+                <div className="grid min-h-0 min-w-0 grid-rows-[minmax(var(--preview-min),1fr)_auto] gap-3.5">
                   <PreviewPane
                     preview={preview}
                     source={source ? { width: source.width, height: source.height } : null}
@@ -1940,8 +2082,8 @@ export function App({ initialSettings }: Props): JSX.Element {
                       optimize={optimize}
                       onOptimize={setOptimize}
                       gifsicleReady={gifsicleReady}
-                      budget={budget}
-                      onBudget={setBudget}
+                      limit={limit}
+                      onLimit={setLimit}
                       estimate={estimate}
                       speed={speed}
                       onSpeed={setSpeed}

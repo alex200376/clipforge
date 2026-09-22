@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { estimateAnimatedBytes, estimateVideoBytes, fitToBudget, outputDimensions } from '../src/shared/estimate'
+import {
+  estimateAnimatedBytes,
+  estimateAnimatedRange,
+  estimateVideoBytes,
+  fitToBudget,
+  outputDimensions
+} from '../src/shared/estimate'
+import { DEFAULT_GIF_TUNING } from '../src/shared/gifTuning'
 
 const frame = { width: 480, height: 270 }
 
@@ -71,6 +78,33 @@ describe('size estimation', () => {
 
   it('never predicts zero for an empty clip', () => {
     expect(estimateAnimatedBytes({ format: 'gif', frame, fps: 24, seconds: 0 })).toBeGreaterThan(0)
+  })
+
+  it('quotes a range around that number, wider above than below', () => {
+    // The model can be caught out in both directions, but a file bigger than promised is the
+    // one that costs the user something, so the band leans upwards.
+    const range = estimateAnimatedRange({ format: 'gif', frame, fps: 15, seconds: 2 })
+    expect(range.low).toBeLessThan(range.bytes)
+    expect(range.high).toBeGreaterThan(range.bytes)
+    expect(range.high / range.bytes).toBeGreaterThan(range.bytes / range.low)
+  })
+
+  it('narrows the range once a real export of the same clip exists', () => {
+    const plain = estimateAnimatedRange({ format: 'gif', frame, fps: 15, seconds: 2 })
+    const measured = estimateAnimatedRange({ format: 'gif', frame, fps: 15, seconds: 2, calibrated: true })
+    const spread = (one: { bytes: number; low: number; high: number }) => (one.high - one.low) / one.bytes
+    expect(spread(measured)).toBeLessThan(spread(plain) / 2)
+    // Still a band, not a promise: the knobs can have moved since the measurement.
+    expect(measured.low).toBeLessThan(measured.bytes)
+    expect(measured.high).toBeGreaterThan(measured.bytes)
+  })
+
+  it('does not mistake a calibration of 1 for a measurement', () => {
+    // `calibration` defaults to 1 and a genuine measurement can be 1 too, which is why the
+    // flag is separate: reading it from the ratio would call every unmeasured clip measured.
+    const plain = estimateAnimatedRange({ format: 'gif', frame, fps: 15, seconds: 2, calibration: 1 })
+    const measured = estimateAnimatedRange({ format: 'gif', frame, fps: 15, seconds: 2, calibration: 1, calibrated: true })
+    expect(measured.high).toBeLessThan(plain.high)
   })
 })
 
@@ -147,17 +181,18 @@ describe('budget fitting', () => {
     expect(result.fps).toBe(24)
   })
 
-  it('sacrifices frame rate before resolution', () => {
-    const result = fitToBudget({
-      format: 'gif',
-      frame,
-      fps: 24,
-      seconds: 6,
-      budgetBytes: 2.5 * 1024 * 1024
-    })
+  it('spends the whole budget: the largest settings that fit are the answer', () => {
+    // 4 seconds of 480x270 at 24 fps is 5.8 MB on this model (0.48 bytes per pixel per frame,
+    // measured on the app's own clip), so 3.5 MB forces a choice between frame rate, frame
+    // size and palette. The rule is not which knob to turn first but which combination keeps
+    // the most of the picture inside the budget, so this asserts exactly that.
+    const budget = 3.5 * 1024 * 1024
+    const result = fitToBudget({ format: 'gif', frame, fps: 24, seconds: 4, budgetBytes: budget })
     expect(result.fits).toBe(true)
-    expect(result.width).toBe(480)
-    expect(result.fps).toBeLessThan(24)
+    expect(result.bytes).toBeLessThanOrEqual(budget)
+    const fitting = result.steps.filter((step) => step.fits)
+    expect(result.bytes).toBe(Math.max(...fitting.map((step) => step.bytes)))
+    expect(result.unchanged).toBe(false)
   })
 
   it('drops the resolution once frame rate alone cannot help', () => {
@@ -189,5 +224,93 @@ describe('budget fitting', () => {
     for (const step of fitToBudget({ format: 'gif', frame, fps: 24, seconds: 30, budgetBytes: 1024 }).steps) {
       expect(step.height / step.width).toBeCloseTo(frame.height / frame.width, 1)
     }
+  })
+
+  it('may meet a limit by picture quality alone, and says so', () => {
+    // 480p @ 15fps for 4 seconds is 576 KB at WebP's quality 90 and 277 KB at 75, while the
+    // next frame size down (346p) is 324 KB at quality 90. So 288 KB is met at the full frame
+    // size by asking for a little more loss, and the winner is named `quality` with the
+    // geometry untouched - the shape of answer this rule is meant to produce.
+    const result = fitToBudget({
+      format: 'webp',
+      frame,
+      fps: 15,
+      seconds: 4,
+      quality: 90,
+      budgetBytes: 288 * 1024
+    })
+    expect(result.fits).toBe(true)
+    expect(result.changed).toBe('quality')
+    expect(result.quality).toBe(75)
+    expect(result.width).toBe(frame.width)
+    expect(result.fps).toBe(15)
+  })
+
+  it('returns the quality the encoder must be given, not the sliders\' value', () => {
+    // The export is handed these numbers. Sending the slider's value instead would write the
+    // file that did not fit, which is the bug this whole path exists to avoid.
+    const budget = 288 * 1024
+    const result = fitToBudget({ format: 'webp', frame, fps: 15, seconds: 4, quality: 90, budgetBytes: budget })
+    expect(result.quality).not.toBe(90)
+    const withFittedQuality = estimateAnimatedBytes({ format: 'webp', frame, fps: 15, seconds: 4, quality: result.quality })
+    expect(withFittedQuality).toBeLessThanOrEqual(budget)
+    expect(result.bytes).toBe(withFittedQuality)
+  })
+
+  it('reaches a limit no single knob could, by spending two of them', () => {
+    // 1.42 MB at the full frame and quality, 439 KB at the lossiest quality alone, 200 KB at
+    // the smallest frame alone - a 250 KB limit needs both, and a search that moved one
+    // dimension at a time would have reported it as impossible.
+    const result = fitToBudget({
+      format: 'webp',
+      frame,
+      fps: 24,
+      seconds: 6,
+      quality: 90,
+      budgetBytes: 250 * 1024
+    })
+    expect(result.fits).toBe(true)
+    expect(result.bytes).toBeLessThanOrEqual(250 * 1024)
+    expect(result.width).toBeLessThan(frame.width)
+    expect(result.quality).toBeLessThan(90)
+  })
+
+  it('never moves a quality slider the chosen engine cannot read', () => {
+    // ffmpeg's palette pipeline has no quality setting at all: a fit that moved it would be
+    // pretending to save bytes that nothing would save. The palette is a real lever there,
+    // so this asks only that the inert one is left alone.
+    const result = fitToBudget({
+      format: 'gif',
+      frame,
+      fps: 24,
+      seconds: 4,
+      quality: 40,
+      gif: { tuning: DEFAULT_GIF_TUNING, engine: 'palette', optimize: false, quality: 40 },
+      budgetBytes: 3 * 1024 * 1024
+    })
+    expect(result.quality).toBe(40)
+  })
+
+  it('spends the palette and the lossy strength before the geometry, when it can', () => {
+    // With gifsicle in the pipeline the lossy strength is the strongest lever in the app -
+    // measured, `--lossy 40` halves the file - so a limit that quality can reach must be met
+    // there rather than by shrinking the picture.
+    const result = fitToBudget({
+      format: 'gif',
+      frame,
+      fps: 15,
+      seconds: 4,
+      quality: 90,
+      gif: { tuning: DEFAULT_GIF_TUNING, engine: 'palette', optimize: true, quality: 90 },
+      // At the default tuning this clip is 1.48 MB with the optimiser, so 1.4 MB needs the
+      // lossy strength moved one notch - and nothing else.
+      budgetBytes: 1.4 * 1024 * 1024
+    })
+    expect(result.fits).toBe(true)
+    expect(result.changed).toBe('quality')
+    expect(result.tuning.lossy > DEFAULT_GIF_TUNING.lossy || result.tuning.colors < DEFAULT_GIF_TUNING.colors).toBe(true)
+    // Untouched: the frame size and rate are what quality was spent to protect.
+    expect(result.width).toBe(frame.width)
+    expect(result.fps).toBe(15)
   })
 })

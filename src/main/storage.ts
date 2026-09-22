@@ -64,6 +64,27 @@ export function updateCacheDir(): string {
 }
 
 /**
+ * The name electron-updater writes the installer it just applied under, and reads back as the
+ * old-file side of the next differential download (`CURRENT_APP_INSTALLER_FILE_NAME` in its
+ * own source). Fixed by the library, so it is spelled once here rather than at each use.
+ */
+const CURRENT_INSTALLER_NAME = 'installer.exe'
+
+/**
+ * The file the next update is patched against, whether or not it is there.
+ *
+ * Worth asking about before a check rather than discovering during a download: with this file
+ * absent the library's differential attempt cannot succeed, it fails with an `ENOENT` from
+ * inside itself and falls back to fetching all 357 MB. Two things reclaim it honestly - a
+ * profile whose cache was never populated, and a user who turned `keepUpdateInstaller` off -
+ * and in both cases telling the library not to try is the difference between a clean full
+ * download and an error line in the log that reads like a failed update.
+ */
+export function differentialBase(): string {
+  return path.join(updateCacheDir(), CURRENT_INSTALLER_NAME)
+}
+
+/**
  * A sentence waiting to be shown in the activity log, held until the renderer asks.
  *
  * The startup sweep finishes before there is a window to tell, and pushing the line at
