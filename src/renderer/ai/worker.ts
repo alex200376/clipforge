@@ -930,11 +930,13 @@ async function detect(request: AiDetectRequest): Promise<{ candidates: AiCandida
     // The strongest region is 1 by construction and everything else is its share of it, which
     // is a statement about the clip: how much the best mark stands out against the runner-up.
     score: blob.rank,
-    source: 'temporal' as const
+    source: 'temporal' as const,
+    analysisFrames: bitmaps.length,
+    relativeStrength: blob.rank
   }))
 
   // ---- the network
-  const perFrame: AiCandidate[][] = []
+  const perFrame: Array<Array<Detection & { source: 'model' }>> = []
   if (detector) {
     const canvas = new OffscreenCanvas(DETECT_INPUT, DETECT_INPUT)
     const context = canvas.getContext('2d', { willReadFrequently: true })
@@ -990,11 +992,22 @@ async function detect(request: AiDetectRequest): Promise<{ candidates: AiCandida
   const consensus = temporalConsensus(
     perFrame.map((frame) => frame.map((entry) => ({ box: entry.box, score: entry.score }))),
     { minSupport: Math.max(1, Math.ceil(bitmaps.length / 2)), iouThreshold: 0.3 }
-  ).map((entry) => ({ ...entry, source: 'model' as const }))
+  ).map((entry) => ({
+    ...entry,
+    source: 'model' as const,
+    frameSupport: { detected: entry.supportCount, total: bitmaps.length },
+    supportFrames: entry.supportFrames
+  }))
 
   // The network goes first: its box is tight around the visible mark, while the
   // statistics can only imply one from how the picture moves behind it.
-  const merged = mergeCandidates([consensus, temporal], { max: request.options.max, iouThreshold: 0.3 })
+  const merged = mergeCandidates<Detection & {
+    source: 'model' | 'temporal'
+    frameSupport?: { detected: number; total: number }
+    analysisFrames?: number
+    supportFrames?: number[]
+    relativeStrength?: number
+  }>([consensus, temporal], { max: request.options.max, iouThreshold: 0.3 })
   const candidates: AiCandidate[] = merged.map((entry) => ({
     box: expandBox(
       {
@@ -1008,8 +1021,12 @@ async function detect(request: AiDetectRequest): Promise<{ candidates: AiCandida
       // a tight box leaves it almost nothing to work from.
       3
     ),
-    score: entry.score,
-    source: entry.source ?? 'temporal'
+    score: entry.source === 'temporal' ? entry.relativeStrength ?? 1 : entry.score,
+    source: entry.source ?? 'temporal',
+    support: entry.source === 'model' ? entry.frameSupport : undefined,
+    supportFrames: entry.source === 'model' ? entry.supportFrames : undefined,
+    analysisFrames: entry.source === 'temporal' ? entry.analysisFrames : undefined,
+    relativeStrength: entry.source === 'temporal' ? entry.relativeStrength : undefined
   }))
   return { candidates, note: notesHere.length > 0 ? notesHere.join(' · ') : undefined }
 }

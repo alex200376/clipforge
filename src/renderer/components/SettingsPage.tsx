@@ -311,7 +311,7 @@ export function SettingsPage({
       <Tabs
         value={tab}
         onValueChange={(value) => setTab(value as SettingsTab)}
-        className="flex min-h-0 w-full max-w-[940px] flex-1 flex-col gap-5 overflow-x-hidden overflow-y-auto pb-6 [overscroll-behavior:contain]"
+        className="min-h-0 w-full max-w-[940px] flex-1 overflow-hidden pb-6 [overscroll-behavior:contain]"
       >
         <TabsList className="grid h-10 w-full max-w-[620px] grid-cols-4">
           <TabsTrigger value="output">{t('settings.tab.output')}</TabsTrigger>
@@ -896,11 +896,11 @@ export function SettingsPage({
 
       {/* A real footer row, not an overlay: the primary action is always on screen and the
           last field never slides under it. */}
-      <div className="relative -mx-8 flex shrink-0 border-t border-border bg-background px-8 py-3.5">
+      <div className="relative -mx-8 flex shrink-0 border-t border-border bg-background px-8 py-2.5">
         <div
           data-slot="settings-bar"
           data-dirty={dirty}
-          className="flex w-full max-w-[940px] items-center gap-3 rounded-lg border border-border bg-panel px-5 py-3.5 data-[dirty=true]:border-brand"
+          className="flex w-full max-w-[940px] items-center gap-3 rounded-lg border border-border bg-panel px-4 py-2.5 data-[dirty=true]:border-brand"
         >
           <span className="text-sm text-dim">{dirty ? t('settings.unsaved') : t('settings.saved')}</span>
           <Button variant="secondary" className="ml-auto" disabled={!dirty} onClick={() => setDraft(settings)}>
@@ -915,8 +915,7 @@ export function SettingsPage({
           The app's notices, anchored to this row rather than to the window: the stack sits a
           few pixels above the save row's top edge, so it can never cover Save - and it needs
           no magic number for how tall the row is, because the row is its own containing block.
-        */}
-        {noticeSlot}
+        */}                {noticeSlot}
       </div>
     </div>
   )

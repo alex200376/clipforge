@@ -85,8 +85,16 @@ export type AiWorkerRequestInput =
 export interface AiCandidate {
   box: CropSpec
   score: number
-  /** Which detector produced it; the network's boxes are trusted first. */
+  /** Which detector produced it; raw scores from the two sources are not comparable. */
   source: 'model' | 'temporal'
+  /** Model detections that agreed on this location. */
+  support?: { detected: number; total: number }
+  /** Number of frames compared by temporal analysis; it does not claim per-frame detections. */
+  analysisFrames?: number
+  /** Sample indices that supported the model match, for audit/debug detail. */
+  supportFrames?: number[]
+  /** Meaningful for the temporal detector only: share of the strongest still region. */
+  relativeStrength?: number
 }
 
 export interface AiLoadResponse {

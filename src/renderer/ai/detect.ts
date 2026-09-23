@@ -18,6 +18,14 @@ import type { CropSpec } from '../../shared/types'
 export interface Detection {
   box: CropSpec
   score: number
+  /** Number of sampled frames this box matched; zero/absent means not tracked. */
+  supportCount?: number
+  /** Model consensus retained through merging for the candidate UI. */
+  frameSupport?: { detected: number; total: number }
+  /** Number of frames the temporal detector compared. */
+  analysisFrames?: number
+  /** Exact sample positions that supported a model candidate. */
+  supportFrames?: number[]
 }
 
 /** A single sigmoid, used when a network hands over raw logits. */
@@ -241,24 +249,29 @@ export function fromLetterbox(
 export function temporalConsensus(
   frames: Detection[][],
   options: { minSupport: number; iouThreshold: number }
-): Detection[] {
+): Array<Detection & { supportCount: number; supportFrames: number[] }> {
   if (frames.length === 0) return []
   const support = Math.max(1, Math.min(options.minSupport, frames.length))
-  const clusters: { boxes: CropSpec[]; scores: number[] }[] = []
-  for (const frame of frames) {
+  const clusters: { boxes: CropSpec[]; scores: number[]; frameIndices: Set<number> }[] = []
+  for (const [frameIndex, frame] of frames.entries()) {
     for (const detection of frame) {
       const match = clusters.find((cluster) =>
+        !cluster.frameIndices.has(frameIndex) &&
         cluster.boxes.some((box) => iou(box, detection.box) >= options.iouThreshold)
       )
       if (match) {
+        // Support is sampled frames, not boxes. Duplicate overlapping predictions in one
+        // frame must never make a candidate look more stable than it was.
+        if (match.frameIndices.has(frameIndex)) continue
         match.boxes.push(detection.box)
         match.scores.push(detection.score)
+        match.frameIndices.add(frameIndex)
       } else {
-        clusters.push({ boxes: [detection.box], scores: [detection.score] })
+        clusters.push({ boxes: [detection.box], scores: [detection.score], frameIndices: new Set([frameIndex]) })
       }
     }
   }
-  const distinct = new Map<string, { boxes: CropSpec[]; scores: number[] }>()
+  const distinct = new Map<string, { boxes: CropSpec[]; scores: number[]; frameIndices: Set<number> }>()
   for (const cluster of clusters) {
     // One cluster per frame position, so a repeated logo in the same corner is
     // not counted twice just because two sampled frames both saw it.
@@ -270,13 +283,14 @@ export function temporalConsensus(
     if (existing) {
       existing.boxes.push(...cluster.boxes)
       existing.scores.push(...cluster.scores)
+      for (const frameIndex of cluster.frameIndices) existing.frameIndices.add(frameIndex)
     } else {
-      distinct.set(key, { boxes: [...cluster.boxes], scores: [...cluster.scores] })
+      distinct.set(key, { boxes: [...cluster.boxes], scores: [...cluster.scores], frameIndices: new Set(cluster.frameIndices) })
     }
   }
-  const out: Detection[] = []
+  const out: Array<Detection & { supportCount: number; supportFrames: number[] }> = []
   for (const cluster of distinct.values()) {
-    if (cluster.boxes.length < support) continue
+    if (cluster.frameIndices.size < support) continue
     const average = cluster.boxes.reduce(
       (total, box) => ({
         x: total.x + box.x,
@@ -294,7 +308,9 @@ export function temporalConsensus(
         width: Math.max(2, Math.round(average.width / count)),
         height: Math.max(2, Math.round(average.height / count))
       },
-      score: cluster.scores.reduce((sum, score) => sum + score, 0) / count
+      score: cluster.scores.reduce((sum, score) => sum + score, 0) / count,
+      supportCount: cluster.frameIndices.size,
+      supportFrames: [...cluster.frameIndices].sort((a, b) => a - b)
     })
   }
   return out

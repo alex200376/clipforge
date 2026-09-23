@@ -132,6 +132,7 @@ describe('requiring a watermark to stay put', () => {
   it('keeps a box that shows up in every sample', () => {
     const kept = temporalConsensus(frames, { minSupport: 2, iouThreshold: 0.3 })
     expect(kept).toHaveLength(1)
+    expect(kept[0]!.supportCount).toBe(3)
     // Averaged, which also smooths the jitter between predicted edges.
     expect(kept[0]!.box.x).toBeGreaterThanOrEqual(99)
     expect(kept[0]!.box.x).toBeLessThanOrEqual(102)
@@ -145,6 +146,7 @@ describe('requiring a watermark to stay put', () => {
       iouThreshold: 0.3
     })
     expect(kept).toHaveLength(1)
+    expect(kept[0]!.supportCount).toBe(2)
     expect(kept[0]!.box.x).toBeLessThan(200)
   })
 

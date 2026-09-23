@@ -1036,14 +1036,16 @@ record(
   )
 
 // ---------------------------------------------------------------- 5. the dialog is a dialog
-const sheet = await evaluate(`(() => {
+const shortcutTrigger = await evaluate(`(() => {
   const trigger = [...document.querySelectorAll('button')].find((el) => /shortcut/i.test(el.getAttribute('aria-label') || ''))
-  if (!trigger) return { found: false }
+  if (!trigger) return false
   trigger.focus()
-  const wasFocused = document.activeElement === trigger
-  trigger.click()
-  return { found: true, wasFocused }
+  return document.activeElement === trigger
 })()`)
+const shortcutClick = await pointerClick(
+  `[...document.querySelectorAll('button')].find((el) => /shortcut/i.test(el.getAttribute('aria-label') || ''))`
+)
+const sheet = { found: shortcutClick !== null, wasFocused: shortcutTrigger }
 await sleep(800)
 const opened = await evaluate(`(() => {
   const dialog = document.querySelector('[data-slot="dialog-content"]')
@@ -1380,7 +1382,8 @@ await shot('settings-release-notes')
 /** The settings scroller's own box against its content, and the last card's place in it. */
 const settingsScroller = () =>
   evaluate(`(() => {
-    const scroller = document.querySelector('[data-slot="tabs"]')
+    const root = document.querySelector('[data-slot="tabs"]')
+    const scroller = root?.querySelector('[data-slot="tabs-content"][data-state="active"]')
     if (!scroller) return null
     const cards = [...scroller.querySelectorAll('[data-slot="card"]')]
     const last = cards[cards.length - 1]
@@ -1411,18 +1414,22 @@ for (const [width, height] of SIZES) {
     continue
   }
   // Scrolled with real input rather than a scrollTop write, because a write would prove the
-  // number moves while a wheel is what the user actually has.
-  await evaluate(`document.querySelector('[data-slot="tabs"]').scrollTop = 0`)
-  // The pointer is moved to where the wheel is aimed first. Chromium routes a wheel event to
-  // whatever the pointer is *over*, not to the coordinates on the event, so a pointer parked
-  // somewhere else - which is what a previous check leaves behind - lands the wheel on the
-  // wrong element and scrolls nothing.
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(width / 2), y: Math.round(height / 2) })
-  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round(width / 2), y: Math.round(height / 2), deltaX: 0, deltaY: 4000 })
+  // number moves while a wheel is what the user actually has. Aim at the scroller's own box,
+  // not the window centre: at 1180x720 that point can land on a nested control after the tab
+  // layout changes, and Chromium routes wheel input to the element under the pointer.
+  const wheelPoint = await evaluate(`(() => {
+    const scroller = document.querySelector('[data-slot="tabs-content"][data-state="active"]')
+    if (!scroller) return null
+    scroller.scrollTop = 0
+    const box = scroller.getBoundingClientRect()
+    return { x: Math.round(box.right - Math.min(24, box.width / 4)), y: Math.round(box.top + Math.min(48, box.height / 2)) }
+  })()`)
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: wheelPoint.x, y: wheelPoint.y })
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: wheelPoint.x, y: wheelPoint.y, deltaX: 0, deltaY: 4000 })
   await sleep(600)
   const scrolled = await settingsScroller()
   const atBottom = await evaluate(`(() => {
-    const scroller = document.querySelector('[data-slot="tabs"]')
+    const scroller = document.querySelector('[data-slot="tabs-content"][data-state="active"]')
     return { top: Math.round(scroller.scrollTop), bottom: Math.round(scroller.scrollHeight - scroller.clientHeight) }
   })()`)
   // At the taller sizes the content may fit outright, and then there is nothing to prove

@@ -18,8 +18,9 @@ import { isWorthMentioning, type InstalledCopy } from '../shared/leftovers'
 import { DEFAULT_OUTPUT_TEMPLATE, type OutputNaming } from '../shared/outputName'
 import { isRemoteUrl, sourceNameFor } from '../shared/sources'
 import { videoSizeBytes } from '../shared/videoSize'
-import { findWatermarks, onAiNote, preloadModels, previewRemoval, runAiRemoval } from './ai/client'
-import type { AiFramePreview } from './ai/client'
+import { findWatermarks, onAiNote, onAiResourceState, preloadModels, previewRemoval, runAiRemoval } from './ai/client'
+import type { AiFramePreview, AiResourceState } from './ai/client'
+import type { AiCandidate } from './ai/protocol'
 import type { FillQuality } from './ai/quality'
 import type {
   AiAssets,
@@ -235,6 +236,12 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [activeRegion, setActiveRegion] = useState(0)
   const [watermarkEngine, setWatermarkEngine] = useState<WatermarkEngine>('delogo')
   const [aiAssetsState, setAiAssetsState] = useState<AiAssets | null>(null)
+  const [aiResource, setAiResource] = useState<{ state: AiResourceState; backend: 'webgpu' | 'wasm' | 'none' }>({
+    state: 'released',
+    backend: 'none'
+  })
+  const [detectedCandidates, setDetectedCandidates] = useState<AiCandidate[]>([])
+  const [detectedIncluded, setDetectedIncluded] = useState<boolean[]>([])
   const [aiProgress, setAiProgress] = useState<{ done: number; total: number } | null>(null)
   /** What the AI pass is doing while it has no frames to count, e.g. reading weights. */
   const [phaseNote, setPhaseNote] = useState<string | null>(null)
@@ -655,6 +662,9 @@ export function App({ initialSettings }: Props): JSX.Element {
       setAspect(null)
       setWatermarkOn(false)
       setWatermarks([])
+      setDetectedCandidates([])
+      setDetectedIncluded([])
+      aiPreloaded.current = false
       setActiveRegion(0)
       setMeasured(null)
       setSessionName(null)
@@ -1020,6 +1030,7 @@ export function App({ initialSettings }: Props): JSX.Element {
    *  in the activity log rather than in a console nobody reads. */
   useEffect(() => {
     onAiNote((text) => pushLog(text, 'raw'))
+    return onAiResourceState((state, backend) => setAiResource({ state, backend }))
   }, [pushLog])
 
   useEffect(() => {
@@ -1859,32 +1870,54 @@ export function App({ initialSettings }: Props): JSX.Element {
         assets,
         (text) => pushLog(text, 'raw')
       )
-      if (candidates.length === 0) {
+      const detectedBoxes = normalizeWatermarks(
+        candidates.map((candidate) => candidate.box),
+        source.width,
+        source.height
+      )
+      const usableCandidates = candidates.filter((_candidate, index) => detectedBoxes[index] !== undefined)
+      setDetectedCandidates(usableCandidates)
+      setDetectedIncluded(usableCandidates.map(() => true))
+      if (usableCandidates.length === 0) {
         pushLog(t('watermark.detectNone'), 'raw')
       } else {
-        const boxes = normalizeWatermarks(
-          candidates.map((candidate) => candidate.box),
-          source.width,
-          source.height
-        )
+        const boxes = detectedBoxes
         if (boxes.length > 0) {
           setWatermarks(boxes)
+          setDetectedCandidates(usableCandidates)
+          setDetectedIncluded(boxes.map(() => true))
           setWatermarkOn(true)
           setActiveRegion(0)
-          pushLog(
-            t('watermark.detectFound', {
-              count: boxes.length,
-              score: Math.round((candidates[0]?.score ?? 0) * 100),
-              // Which of the two found it is worth saying: the model's box is tight on
-              // the mark, the motion analysis can only imply one from still pixels, and
-              // knowing which one spoke is how a wrong box gets judged quickly.
-              method:
-                candidates[0]?.source === 'model'
-                  ? t('watermark.detectBy.model')
-                  : t('watermark.detectBy.motion')
-            }),
-            'done'
-          )
+          pushLog(t('watermark.detectFound', { count: boxes.length }), 'done')
+          usableCandidates.forEach((candidate, index) => {
+            const measure =
+              candidate.source === 'model'
+                ? t('watermark.detect.modelScore', { score: Math.round(candidate.score * 100) })
+                : t('watermark.detect.relativeStrength', {
+                    score: Math.round((candidate.relativeStrength ?? candidate.score) * 100)
+                  })
+            pushLog(
+              t('watermark.detect.candidateLog', {
+                index: index + 1,
+                method: candidate.source === 'model' ? t('watermark.detectBy.model') : t('watermark.detectBy.motion'),
+                measure,
+                evidence:
+                  candidate.source === 'model'
+                    ? t('watermark.detect.support', {
+                        detected: candidate.support?.detected ?? 0,
+                        total: candidate.support?.total ?? DETECT_SAMPLES
+                      })
+                    : t('watermark.detect.analyzedAcross', {
+                        total: candidate.analysisFrames ?? DETECT_SAMPLES
+                      }),
+                x: Math.round(boxes[index]?.x ?? candidate.box.x),
+                y: Math.round(boxes[index]?.y ?? candidate.box.y),
+                width: Math.round(boxes[index]?.width ?? candidate.box.width),
+                height: Math.round(boxes[index]?.height ?? candidate.box.height)
+              }),
+              'raw'
+            )
+          })
         } else {
           pushLog(t('watermark.detectNone'), 'raw')
         }
@@ -1896,6 +1929,41 @@ export function App({ initialSettings }: Props): JSX.Element {
       setDetectBusy(false)
     }
   }, [aiAssetsState, fail, failWith, preview, pushLog, range, source, t])
+
+  const toggleDetectedCandidate = useCallback(
+    (index: number, included: boolean) => {
+      const candidate = detectedCandidates[index]
+      if (!candidate || !source) return
+      const position = detectedIncluded
+        .slice(0, index)
+        .filter(Boolean).length
+      if (included) {
+        const box = normalizeWatermarks([candidate.box], source.width, source.height)[0]
+        if (!box) return
+        setWatermarks((current) => {
+          const next = [...current]
+          next.splice(position, 0, box)
+          return next
+        })
+        setDetectedIncluded((current) => current.map((value, entry) => (entry === index ? true : value)))
+        setWatermarkOn(true)
+        setActiveRegion(position)
+      } else {
+        setWatermarks((current) => current.filter((_box, entry) => entry !== position))
+        setDetectedIncluded((current) => current.map((value, entry) => (entry === index ? false : value)))
+        setActiveRegion((current) => Math.min(current, Math.max(0, watermarks.length - 2)))
+      }
+    },
+    [detectedCandidates, detectedIncluded, source, watermarks.length]
+  )
+
+  const selectDetectedCandidate = useCallback(
+    (index: number) => {
+      if (!detectedIncluded[index]) return
+      setActiveRegion(detectedIncluded.slice(0, index).filter(Boolean).length)
+    },
+    [detectedIncluded]
+  )
 
   /**
    * A logo-sized default box for a corner, with a margin around it: `delogo`
@@ -1928,6 +1996,8 @@ export function App({ initialSettings }: Props): JSX.Element {
       if (!box) return
       setWatermarkOn(true)
       setWatermarks([box])
+      setDetectedCandidates([])
+      setDetectedIncluded([])
       setActiveRegion(0)
     },
     [watermarkBox]
@@ -1965,6 +2035,13 @@ export function App({ initialSettings }: Props): JSX.Element {
     (index: number) => {
       const remaining = watermarks.filter((_, position) => position !== index)
       setWatermarks(remaining)
+      setDetectedIncluded((current) => {
+        const includedIndexes = current.flatMap((included, candidateIndex) => (included ? [candidateIndex] : []))
+        const removedCandidate = includedIndexes[index]
+        return removedCandidate === undefined
+          ? current
+          : current.map((included, candidateIndex) => (candidateIndex === removedCandidate ? false : included))
+      })
       setActiveRegion((current) =>
         Math.min(current > index ? current - 1 : current, Math.max(0, remaining.length - 1))
       )
@@ -2260,6 +2337,12 @@ export function App({ initialSettings }: Props): JSX.Element {
                       onWatermarkOn={toggleWatermarks}
                       watermarks={activeWatermarks}
                       activeRegion={activeRegion}
+                      detectedCandidates={detectedCandidates}
+                      detectedIncluded={detectedIncluded}
+                      aiResourceState={aiResource.state}
+                      aiResourceBackend={aiResource.backend}
+                      onToggleDetectedCandidate={toggleDetectedCandidate}
+                      onSelectDetectedCandidate={selectDetectedCandidate}
                       onActiveRegion={setActiveRegion}
                       onWatermarkCorner={placeWatermark}
                       onAddWatermark={addWatermark}

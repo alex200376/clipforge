@@ -245,7 +245,7 @@ export function ShortcutSheet({ open, onClose }: { open: boolean; onClose: () =>
         <DialogHeader>
           <DialogTitle>{t('shortcuts.title')}</DialogTitle>
         </DialogHeader>
-        <ul className="flex flex-col overflow-y-auto">
+        <ul data-slot="shortcut-list" className="flex min-h-0 flex-col overflow-y-auto">
           {SHORTCUTS.map((entry) => (
             <li
               key={entry.keys.join(' ')}

@@ -33,6 +33,6 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
 
 export function TabsContent({ className, ...props }: ComponentProps<typeof TabsPrimitive.Content>): JSX.Element {
   return (
-    <TabsPrimitive.Content data-slot="tabs-content" className={cn('min-h-0 flex-1 outline-none', className)} {...props} />
+    <TabsPrimitive.Content data-slot="tabs-content" className={cn('min-h-0 flex-1 overflow-y-auto outline-none', className)} {...props} />
   )
 }

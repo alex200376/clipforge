@@ -5,6 +5,8 @@ import type { ReactNode } from 'react'
 import { ProgressBlock } from './ProgressBlock'
 import { Button } from './ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
+import { Checkbox } from './ui/checkbox'
+import { Badge } from './ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Field, Hint } from './ui/field'
 import { Label } from './ui/label'
@@ -43,6 +45,8 @@ import type { EstimateView, ExportMode, PresetId, WatermarkCorner } from '../typ
 import type { AiPace, AiPowerMode } from '../../shared/aiPower'
 import { AI_POWER_MODES } from '../../shared/aiPower'
 import type { ExportProgressView } from '../useProgress'
+import type { AiCandidate } from '../ai/protocol'
+import type { AiResourceState } from '../ai/client'
 
 interface Props {
   mode: ExportMode
@@ -87,6 +91,12 @@ interface Props {
   onWatermarkOn: (value: boolean) => void
   /** Clamped boxes, in source pixels. */
   watermarks: WatermarkRegion[]
+  detectedCandidates: AiCandidate[]
+  detectedIncluded: boolean[]
+  aiResourceState: AiResourceState
+  aiResourceBackend: 'webgpu' | 'wasm' | 'none'
+  onToggleDetectedCandidate: (index: number, included: boolean) => void
+  onSelectDetectedCandidate: (index: number) => void
   activeRegion: number
   onActiveRegion: (index: number) => void
   onWatermarkCorner: (corner: WatermarkCorner) => void
@@ -225,6 +235,12 @@ export function ExportPanel(props: Props): JSX.Element {
     watermarkOn,
     onWatermarkOn,
     watermarks,
+    detectedCandidates,
+    detectedIncluded,
+    aiResourceState,
+    aiResourceBackend,
+    onToggleDetectedCandidate,
+    onSelectDetectedCandidate,
     activeRegion,
     onActiveRegion,
     onWatermarkCorner,
@@ -451,6 +467,78 @@ export function ExportPanel(props: Props): JSX.Element {
             </Button>
             <Hint>{t('watermark.detectHint')}</Hint>
           </div>
+
+          {aiAvailable && (
+            <div className="flex items-center gap-2" data-slot="ai-resource-state">
+              <span className={`size-2 rounded-full ${aiResourceState === 'ready' ? 'bg-[var(--text-success)]' : aiResourceState === 'loading' ? 'animate-pulse bg-[var(--text-warning)]' : 'bg-muted-foreground'}`} />
+              <Hint>
+                {t(
+                  aiResourceState === 'ready'
+                    ? 'watermark.aiResource.ready'
+                    : aiResourceState === 'loading'
+                      ? 'watermark.aiResource.loading'
+                      : aiResourceState === 'released'
+                        ? 'watermark.aiResource.released'
+                        : 'watermark.aiResource.notLoaded',
+                  { backend: aiResourceBackend === 'webgpu' ? 'GPU' : aiResourceBackend === 'wasm' ? 'CPU' : '' }
+                )}
+              </Hint>
+            </div>
+          )}
+
+          {detectedCandidates.length > 0 && (
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3" data-slot="watermark-candidates">
+              <div>
+                <Label>{t('watermark.detect.explanationTitle')}</Label>
+                <Hint>{t('watermark.detect.explanationHint')}</Hint>
+              </div>
+              {detectedCandidates.map((candidate, index) => {
+                const metric = candidate.source === 'model'
+                  ? t('watermark.detect.modelScore', { score: Math.round(candidate.score * 100) })
+                  : t('watermark.detect.relativeStrength', { score: Math.round((candidate.relativeStrength ?? candidate.score) * 100) })
+                const evidence = candidate.source === 'model'
+                  ? t('watermark.detect.support', {
+                      detected: candidate.support?.detected ?? 0,
+                      total: candidate.support?.total ?? 0
+                    })
+                  : t('watermark.detect.analyzedAcross', {
+                      total: candidate.analysisFrames ?? 0
+                    })
+                return (
+                  <div key={`${candidate.box.x}-${candidate.box.y}-${index}`} className="flex min-w-0 items-start gap-2 border-t border-border pt-2" data-slot="watermark-candidate">
+                    <Checkbox
+                      checked={detectedIncluded[index] ?? false}
+                      onCheckedChange={(checked) => onToggleDetectedCandidate(index, checked === true)}
+                      aria-label={t('watermark.detect.include', { index: index + 1 })}
+                    />
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 flex-col items-start gap-1 text-left"
+                      onClick={() => onSelectDetectedCandidate(index)}
+                      aria-label={t('watermark.detect.select', { index: index + 1 })}
+                    >
+                      <span className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-bright">
+                        {t('watermark.region', { index: index + 1 })}
+                        <Badge variant="secondary">{candidate.source === 'model' ? t('watermark.detectBy.model') : t('watermark.detectBy.motion')}</Badge>
+                      </span>
+                      <span className="text-xs text-dim">{metric} · {evidence}</span>
+                      {candidate.source === 'model' && candidate.supportFrames && (
+                        <span className="text-[11px] text-dim">
+                          {t('watermark.detect.sampleIndices', {
+                            indices: candidate.supportFrames.map((frame) => frame + 1).join(', ')
+                          })}
+                        </span>
+                      )}
+                      <span className="text-[11px] text-dim">{t('watermark.detect.box', {
+                        x: Math.round(candidate.box.x), y: Math.round(candidate.box.y),
+                        width: Math.round(candidate.box.width), height: Math.round(candidate.box.height)
+                      })}</span>
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
           {watermarkOn && (
             <>

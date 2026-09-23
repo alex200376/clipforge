@@ -12,6 +12,7 @@ import { AI_BACKEND_FAILURE, AI_LOAD_TIMEOUT } from './protocol'
 import { FILL_DETAIL_FLOOR, FILL_SEAM_CEILING, formatQuality, hasQuality, mergeQuality } from './quality'
 import type { FillQuality } from './quality'
 import type { AiCandidate, AiWorkerRequest, AiWorkerRequestInput, AiWorkerResponse } from './protocol'
+import { createIdleReleaseController } from './idleRelease'
 import { createQueue } from './queue'
 
 /**
@@ -74,6 +75,22 @@ const cores = (): number => Math.max(1, Math.min(8, (navigator.hardwareConcurren
 let activeThreads = 1
 /** Which weights the worker has already opened, so nothing is loaded twice. */
 const opened = { lama: false, detector: false }
+export type AiResourceState = 'not-loaded' | 'released' | 'loading' | 'ready'
+let resourceState: AiResourceState = 'not-loaded'
+type AiResourceListener = (state: AiResourceState, backend: 'webgpu' | 'wasm' | 'none') => void
+const resourceListeners = new Set<AiResourceListener>()
+
+function updateResourceState(next: AiResourceState): void {
+  resourceState = next
+  for (const listener of resourceListeners) listener(resourceState, backend)
+}
+
+/** Subscribe to warm-up/readiness/release so the UI can show where the model is. */
+export function onAiResourceState(listener: AiResourceListener): () => void {
+  resourceListeners.add(listener)
+  listener(resourceState, backend)
+  return () => resourceListeners.delete(listener)
+}
 
 /** Where the worker's own remarks go: the activity log, not the console. */
 export function onAiNote(handler: (text: string) => void): void {
@@ -103,7 +120,13 @@ function ensureWorker(): Worker {
     else entry.reject(new Error(reply.error ?? 'The AI worker failed.'))
   }
   worker.onerror = (event: ErrorEvent) => {
-    fail(new Error(event.message || 'The AI worker stopped unexpectedly.'))
+    const error = new Error(event.message || 'The AI worker stopped unexpectedly.')
+    fail(error)
+    worker = null
+    opened.lama = false
+    opened.detector = false
+    backend = 'none'
+    updateResourceState('released')
   }
   return worker
 }
@@ -122,8 +145,10 @@ const LOAD_TIMEOUT_MS = 5 * 60 * 1000
  */
 const THREADED_LOAD_TIMEOUT_MS = 150 * 1000
 
-function send<T>(request: AiWorkerRequestInput, timeoutMs = 0): Promise<T> {
+function send<T>(request: AiWorkerRequestInput, timeoutMs = 0, trackIdle = true): Promise<T> {
+  if (trackIdle) aiIdleRelease.cancel()
   const active = ensureWorker()
+  const releaseUse = trackIdle ? aiIdleRelease.hold() : () => undefined
   sequence += 1
   const id = sequence
   return new Promise<T>((resolve, reject) => {
@@ -139,7 +164,7 @@ function send<T>(request: AiWorkerRequestInput, timeoutMs = 0): Promise<T> {
       }, timeoutMs)
     }
     active.postMessage({ ...request, id } as AiWorkerRequest)
-  })
+  }).finally(releaseUse)
 }
 
 /**
@@ -157,11 +182,23 @@ function discardWorker(): void {
     /* already gone */
   }
   worker = null
-  pending.clear()
+  fail(new Error('The AI worker was restarted; retry the operation.'))
   opened.lama = false
   opened.detector = false
   backend = 'none'
+  updateResourceState('released')
 }
+
+/** Five quiet minutes after the last AI worker request releases the entire worker heap. */
+export const AI_IDLE_RELEASE_MS = 5 * 60 * 1000
+const aiIdleRelease = createIdleReleaseController(AI_IDLE_RELEASE_MS, () => {
+  if (!worker) return
+  // The grace callback and AI requests run on the renderer event loop. Terminating here
+  // is atomic with respect to new requests and releases the worker-owned ONNX sessions,
+  // WebAssembly heap and WebGPU device without an async disposal race.
+  discardWorker()
+  describe('AI models released after five minutes idle')
+})
 
 /**
  * Loads run one at a time.
@@ -185,7 +222,9 @@ export function prepareModels(
   assets: AiAssets,
   models: 'lama' | 'detector' | 'both'
 ): Promise<'webgpu' | 'wasm' | 'none'> {
-  return loadQueue.run(() => openModels(assets, models))
+  aiIdleRelease.cancel()
+  const releaseUse = aiIdleRelease.hold()
+  return loadQueue.run(() => openModels(assets, models)).finally(releaseUse)
 }
 
 /**
@@ -202,10 +241,14 @@ export function prepareModels(
  * nobody has opened.
  */
 export async function preloadModels(assets: AiAssets, models: 'lama' | 'detector' | 'both'): Promise<void> {
+  aiIdleRelease.cancel()
+  const releaseUse = aiIdleRelease.hold()
   try {
     await loadQueue.run(() => openModels(assets, models))
   } catch {
     /* the next caller reports it properly */
+  } finally {
+    releaseUse()
   }
 }
 
@@ -231,6 +274,7 @@ async function openModels(
   }
   // Worth saying out loud: the inpainting weights are 208 MB, so the first AI removal
   // of a session pauses for a moment that has to look deliberate rather than stuck.
+  updateResourceState('loading')
   describe(
     models === 'detector'
       ? 'Loading the watermark detector…'
@@ -275,11 +319,13 @@ async function openModels(
       discardWorker()
       return openModels(assets, models)
     }
+    updateResourceState(opened.lama || opened.detector ? 'ready' : 'released')
     throw error
   }
   if (needLama) opened.lama = true
   if (needDetector) opened.detector = true
   backend = result.backend
+  updateResourceState('ready')
   activeThreads = result.threads ?? 1
   if (result.note) describe(result.note)
   // A kernel failing is not something that improves later: the GPU accepted a session and
@@ -298,6 +344,10 @@ export function aiThreads(): number {
 
 export function aiBackend(): 'webgpu' | 'wasm' | 'none' {
   return backend
+}
+
+export function aiResourceState(): AiResourceState {
+  return resourceState
 }
 
 async function inpaintBatch(
@@ -354,7 +404,7 @@ export interface AiRunHandlers {
  * the key covers the source, the range, the frame rate and the boxes, so changing
  * the GIF size or the quality does not cost a second inference run.
  */
-export async function runAiRemoval(
+export function runAiRemoval(
   request: AiPrepareRequest,
   feather: number,
   handlers: AiRunHandlers,
@@ -363,6 +413,17 @@ export async function runAiRemoval(
    * How hard this run may push the GPU. Already resolved - `auto` was answered by the
    * caller, because the answer depends on the charger and not on anything in here.
    */
+  pace: AiPace
+): Promise<AiPrepareResult> {
+  const releaseUse = aiIdleRelease.hold()
+  return runAiRemovalWork(request, feather, handlers, assets, pace).finally(releaseUse)
+}
+
+async function runAiRemovalWork(
+  request: AiPrepareRequest,
+  feather: number,
+  handlers: AiRunHandlers,
+  assets: AiAssets,
   pace: AiPace
 ): Promise<AiPrepareResult> {
   const prepared = await window.clipforge.aiPrepare(request)
@@ -532,7 +593,17 @@ export interface AiFramePreview {
  * about whether their own logo comes out clean. The windows, the geometry and the network are
  * the ones the export would use, so looking at this frame is looking at the export.
  */
-export async function previewRemoval(
+export function previewRemoval(
+  request: { source: string; time: number; regions: WatermarkRegion[]; width: number; height: number },
+  feather: number,
+  assets: AiAssets
+): Promise<AiFramePreview> {
+  aiIdleRelease.cancel()
+  const releaseUse = aiIdleRelease.hold()
+  return previewRemovalWork(request, feather, assets).finally(releaseUse)
+}
+
+async function previewRemovalWork(
   request: { source: string; time: number; regions: WatermarkRegion[]; width: number; height: number },
   feather: number,
   assets: AiAssets
@@ -584,7 +655,18 @@ export async function previewRemoval(
 }
 
 /** Asks both detectors where the watermark is. Returns boxes in source pixels. */
-export async function findWatermarks(
+export function findWatermarks(
+  request: { source: string; isUrl: boolean; start: number; duration: number; width: number; height: number; samples: number },
+  max: number,
+  assets: AiAssets,
+  onNote: (text: string) => void
+): Promise<AiCandidate[]> {
+  aiIdleRelease.cancel()
+  const releaseUse = aiIdleRelease.hold()
+  return findWatermarksWork(request, max, assets, onNote).finally(releaseUse)
+}
+
+async function findWatermarksWork(
   request: { source: string; isUrl: boolean; start: number; duration: number; width: number; height: number; samples: number },
   max: number,
   assets: AiAssets,
