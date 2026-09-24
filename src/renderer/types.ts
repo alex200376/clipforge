@@ -123,8 +123,10 @@ export interface EstimateView {
     quality: number
     tuning: GifTuning
   } | null
-  /** Last measured estimate against reality for this source. */
+  /** Last measured estimate against reality for this source, only when it applies here. */
   measured: { estimated: number; actual: number } | null
+  /** True when the last measured export can legitimately calibrate this estimate. */
+  measurementApplies: boolean
 }
 
 export interface InstallViewState {

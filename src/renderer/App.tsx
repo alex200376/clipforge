@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { errorPayload, errorMessage } from '../shared/errors'
-import { estimateAnimatedRange, estimateVideoBytes, fitToBudget, outputDimensions } from '../shared/estimate'
+import { estimateAnimatedRange, estimateVideoBytes, fitToBudget, measurementAppliesToEstimate, outputDimensions } from '../shared/estimate'
 import { gifLimitBytes } from '../shared/gifLimit'
 import { resolvePace } from '../shared/aiPower'
 import { AI_FEATHER } from '../shared/aiWindow'
@@ -1089,13 +1089,15 @@ export function App({ initialSettings }: Props): JSX.Element {
    * Reused rather than measured again: the model is a single bits-per-pixel constant, and
    * one real export of the same source replaces it with what that picture actually costs.
    */
+  const measurementApplies = measurementAppliesToEstimate(measured?.mode, mode, !isGif && size !== 'original')
+  const applicableMeasurement = measurementApplies ? measured : null
   const calibration = useMemo(() => {
-    if (!measured || measured.mode !== mode) return 1
-    return Math.max(0.3, Math.min(3, measured.actual / measured.estimated))
-  }, [measured, mode])
+    if (!applicableMeasurement) return 1
+    return Math.max(0.3, Math.min(3, applicableMeasurement.actual / applicableMeasurement.estimated))
+  }, [applicableMeasurement])
 
-  /** Whether the model has been replaced by something that was actually written. */
-  const calibrated = measured !== null && measured.mode === mode
+  /** Whether the content model has been replaced by a real measurement for these settings. */
+  const calibrated = measurementApplies
   const budget = gifLimitBytes(limit)
 
   /**
@@ -1103,17 +1105,17 @@ export function App({ initialSettings }: Props): JSX.Element {
    * numbers the panel promises are the ones the export uses.
    */
   const estimate: EstimateView = useMemo(() => {
-    const nothing = { range: null, calibrated, enforcing: false }
-    if (!source) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'noClip' }
-    if (clipSeconds <= 0) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'noLength' }
+    const nothing = { range: null, calibrated, enforcing: false, measurementApplies }
+    if (!source) return { ...nothing, bytes: null, fitted: null, measured: applicableMeasurement, unknown: 'noClip' }
+    if (clipSeconds <= 0) return { ...nothing, bytes: null, fitted: null, measured: applicableMeasurement, unknown: 'noLength' }
     // No frame size yet: the clip is known but its dimensions are not, which is "still
     // reading" rather than "no clip" - and the panel says which.
-    if (!outputFrame) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'reading' }
+    if (!outputFrame) return { ...nothing, bytes: null, fitted: null, measured: applicableMeasurement, unknown: 'reading' }
     if (!isGif) {
       // A video export keeps the source's frame rate, so a clip whose rate is still unknown
       // - a link that has not been read yet - cannot be counted. Saying so beats a number
       // invented from a default.
-      if (!(source.fps > 0)) return { ...nothing, bytes: null, fitted: null, measured, unknown: 'reading' }
+      if (!(source.fps > 0)) return { ...nothing, bytes: null, fitted: null, measured: applicableMeasurement, unknown: 'reading' }
       return {
         bytes: estimateVideoBytes({
           frame: outputFrame,
@@ -1122,15 +1124,16 @@ export function App({ initialSettings }: Props): JSX.Element {
           targetBytes: videoSizeBytes(size),
           audio: !mute,
           correction: calibration
-        }        ),
+        }),
         fitted: null,
-        measured,
+        measured: applicableMeasurement,
         unknown: null,
         // A video target is a bitrate the encoder is handed, so it lands where it was aimed
         // rather than being re-encoded to fit afterwards.
         range: null,
         calibrated,
-        enforcing: false
+        enforcing: false,
+        measurementApplies
       }
     }
     // The knobs change the file size directly - measured, 64 colours with the optimiser
@@ -1142,7 +1145,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     const input = { format, frame: outputFrame, fps, seconds: clipSeconds, calibration, calibrated, quality, gif }
     const plain = estimateAnimatedRange(input)
     if (budget === null) {
-      return { bytes: plain.bytes, range: { low: plain.low, high: plain.high }, fitted: null, measured, unknown: null, calibrated, enforcing: false }
+      return { bytes: plain.bytes, range: { low: plain.low, high: plain.high }, fitted: null, measured: applicableMeasurement, unknown: null, calibrated, enforcing: false, measurementApplies }
     }
     const fitted = fitToBudget({ ...input, budgetBytes: budget })
     return {
@@ -1160,14 +1163,15 @@ export function App({ initialSettings }: Props): JSX.Element {
         quality: fitted.quality,
         tuning: fitted.tuning
       },
-      measured,
+      measured: applicableMeasurement,
       unknown: null,
       calibrated,
+      measurementApplies,
       // The fit is a prediction too, so the limit is only a promise once the file has been
       // re-encoded to meet it - which is what happens if the first pass overshoots.
       enforcing: true
     }
-  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, calibrated, budget, measured, tuning, engine, optimize, gifsicleReady, quality])
+  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, calibrated, budget, applicableMeasurement, measurementApplies, tuning, engine, optimize, gifsicleReady, quality])
 
   // With a limit active the export follows the fitted numbers, not the sliders - including the
   // picture quality, which the fit is allowed to spend before it touches the frame size.

@@ -100,13 +100,13 @@ export function UpdatePanel({ state, version, autoUpdate, onAutoUpdate, onCheck,
         {notes.length > 0 && (
           <div
             data-slot="release-notes"
-            className="flex flex-col gap-1.5 rounded-lg border border-border bg-elevated/40 px-3 py-2.5"
+            className="flex max-h-64 flex-col gap-1.5 overflow-hidden rounded-lg border border-border bg-elevated/40 px-3 py-2.5"
           >
             <span className="text-xs font-bold tracking-wider text-dim uppercase">
               {t('update.notes.title', { version: state.notesFor ?? '' })}
             </span>
             {published && <span className="text-xs text-dim">{t('update.notes.published', { when: published })}</span>}
-            <ul className="flex flex-col gap-1 text-sm text-soft">
+            <ul data-slot="release-note-list" className="flex max-h-48 min-h-0 flex-col gap-1 overflow-y-auto pr-1 text-sm text-soft [overscroll-behavior:contain] [&>li]:break-words">
               {notes.map((line, index) => (
                 // The index is the key on purpose: release notes repeat lines, and a line is
                 // not an identity - two identical "• Fixed…" entries are still two entries.

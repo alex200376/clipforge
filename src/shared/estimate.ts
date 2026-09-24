@@ -180,6 +180,21 @@ const CONTAINER_BYTES = 24 * 1024
 /** The share of a target size the encoder is aimed at, matching `targetVideoBitrate`. */
 const TARGET_SHARE = 0.94
 
+/**
+ * Whether a previous export's measured ratio can calibrate this estimate.
+ *
+ * A target-size video estimate is derived directly from the requested target, not from the
+ * content model. Showing a previous export's measurement under that estimate is misleading,
+ * and applying its ratio cannot change the target-size prediction either.
+ */
+export function measurementAppliesToEstimate(
+  measuredMode: 'gif' | 'video' | null | undefined,
+  mode: 'gif' | 'video',
+  hasVideoTarget: boolean
+): boolean {
+  return measuredMode === mode && !(mode === 'video' && hasVideoTarget)
+}
+
 export interface VideoEstimateInput {
   frame: FrameSize
   fps: number

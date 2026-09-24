@@ -96,7 +96,9 @@ describe('remote content', () => {
     // Not the assertion above: text nodes *are* the mechanism, and this is what says the
     // notes go through one. A `<ul>` of `<li>{line}</li>` cannot execute a release body.
     expect(updatePanel.source).toMatch(/notes\.map\(\(line, index\)/) 
-    expect(updatePanel.source).toContain('<li key={index}>{line}</li>')
+    expect(updatePanel.source).toMatch(/<li key={index}(?: className="[^"]*")?>\{line\}<\/li>/)
+    expect(updatePanel.source).toContain('data-slot="release-note-list"')
+    expect(updatePanel.source).toContain('overflow-y-auto')
     // And they are only shown for the version they describe, so a later check cannot present
     // one release's notes as another's.
     expect(updatePanel.source).toContain('state.notesFor === state.version')

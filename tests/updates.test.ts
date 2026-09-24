@@ -240,6 +240,11 @@ const REAL_BODY = `## What changed since \`0.4.5\`
 `
 
 describe('reading a release body', () => {
+  it('caps extra-long release notes without making the Settings card unbounded', () => {
+    const many = Array.from({ length: 20 }, (_, index) => `- change ${index + 1}`).join('\n')
+    expect(releaseNoteLines(many)).toHaveLength(12)
+  })
+
   it('turns markdown into lines a card can print', () => {
     expect(releaseNoteLines(REAL_BODY)).toEqual([
       'What changed since 0.4.5',

@@ -5,6 +5,7 @@ import {
   estimateAnimatedRange,
   estimateVideoBytes,
   fitToBudget,
+  measurementAppliesToEstimate,
   outputDimensions
 } from '../src/shared/estimate'
 import { DEFAULT_GIF_TUNING } from '../src/shared/gifTuning'
@@ -105,6 +106,16 @@ describe('size estimation', () => {
     const plain = estimateAnimatedRange({ format: 'gif', frame, fps: 15, seconds: 2, calibration: 1 })
     const measured = estimateAnimatedRange({ format: 'gif', frame, fps: 15, seconds: 2, calibration: 1, calibrated: true })
     expect(measured.high).toBeLessThan(plain.high)
+  })
+})
+
+describe('estimate measurement relevance', () => {
+  it('uses a measurement only for a matching format without a fixed video size target', () => {
+    expect(measurementAppliesToEstimate('gif', 'gif', false)).toBe(true)
+    expect(measurementAppliesToEstimate('video', 'video', false)).toBe(true)
+    expect(measurementAppliesToEstimate('video', 'video', true)).toBe(false)
+    expect(measurementAppliesToEstimate('gif', 'video', false)).toBe(false)
+    expect(measurementAppliesToEstimate(null, 'gif', false)).toBe(false)
   })
 })
 

@@ -1019,6 +1019,35 @@ record(
     `[...document.querySelectorAll('[data-slot="toggle-group-item"]')].find((el) => /video|影片/i.test((el.textContent || '').trim()))`
   )
   await sleep(900)
+  // Video's target-size estimate is based on the selected budget. Walk two real menu changes
+  // and verify the pinned footer follows each one instead of showing a stale previous value.
+  const targetTriggerExpression = `[...document.querySelectorAll('[data-slot="select-trigger"]')].find((el) => /target size|target file size/i.test(el.getAttribute('aria-label') || ''))`
+  const targetPickerReady = await evaluate(`Boolean(${targetTriggerExpression})`)
+  const chooseTarget = async (label) => {
+    const trigger = await pointerClick(targetTriggerExpression)
+    if (!trigger) return { value: '', estimate: null }
+    await sleep(300)
+    const option = await pointerClick(
+      `([...document.querySelectorAll('[role="option"]')].find((el) => (el.textContent || '').trim().toLowerCase().startsWith(${JSON.stringify(label.toLowerCase())})))`
+    )
+    await sleep(500)
+    const value = await evaluate(`(() => { const trigger = ${targetTriggerExpression}; return (trigger?.textContent || '').trim() })()`)
+    return { value, estimate: await estimateReadout(), option }
+  }
+  const targetFive = await chooseTarget('5 MB')
+  const targetTen = await chooseTarget('10 MB')
+  record(
+    'the video file-size preview updates when its target preset changes',
+    Boolean(gifMode) && targetPickerReady && Boolean(targetFive.option) && Boolean(targetTen.option) &&
+      targetFive.value.includes('5 MB') && targetTen.value.includes('10 MB') &&
+      targetFive.estimate !== null && targetTen.estimate !== null &&
+      targetFive.estimate.headline !== targetTen.estimate.headline &&
+      targetFive.estimate.headline.includes('4.7 MB') && targetTen.estimate.headline.includes('9.4 MB'),
+    `5MB: ${targetFive.value} => ${targetFive.estimate?.headline} · 10MB: ${targetTen.value} => ${targetTen.estimate?.headline}`
+  )
+  // Put the panel back in its default target mode before the remaining UI checks.
+  await chooseTarget('Original quality')
+  if (!targetPickerReady) record('video target selector is available for live preview', false, 'missing target-size selector')
   // The section goes back to closed, so the checks that follow see the panel a user gets.
   await evaluate(`document.querySelector('[data-slot="collapsible-trigger"]')?.click()`)
   await sleep(600)
@@ -1352,6 +1381,12 @@ const notes = await evaluate(`(() => {
     found: true,
     heading: (card.querySelector('span')?.textContent || '').trim(),
     lines: [...card.querySelectorAll('li')].map((el) => el.textContent || ''),
+    list: (() => {
+      const list = card.querySelector('[data-slot="release-note-list"]')
+      if (!list) return null
+      const style = getComputedStyle(list)
+      return { maxHeight: Number.parseFloat(style.maxHeight), overflowY: style.overflowY }
+    })(),
     // The whole body, flattened: markdown markers that should have been stripped would show
     // up here, and so would a payload that had been turned into elements.
     text: card.textContent || '',
@@ -1363,6 +1398,9 @@ record(
   'the release notes are drawn, and drawn as text',
   notes.found &&
     notes.lines.length === 4 &&
+    notes.list !== null &&
+    notes.list.maxHeight <= 256 &&
+    notes.list.overflowY === 'auto' &&
     notes.lines[0] === 'What changed since 0.4.5' &&
     /Bump to 0.4.6 - the headline change/.test(notes.lines[1]) &&
     // Markdown gone, payload intact and inert, and the generated build footer cut.
@@ -1372,7 +1410,7 @@ record(
     notes.elements === 0 &&
     notes.injected === null,
   notes.found
-    ? `${notes.lines.length} line(s) · elements=${notes.elements} · ran=${notes.injected} · "${notes.lines.join(' / ').slice(0, 120)}"`
+    ? `${notes.lines.length} line(s), list cap=${notes.list?.maxHeight}px overflow=${notes.list?.overflowY} · elements=${notes.elements} · ran=${notes.injected} · "${notes.lines.join(' / ').slice(0, 120)}"`
     : 'no [data-slot="release-notes"] in the card'
 )
 await evaluate(`document.querySelector('[data-slot="release-notes"]')?.scrollIntoView({ block: 'center' })`)

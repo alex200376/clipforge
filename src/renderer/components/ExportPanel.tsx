@@ -1031,8 +1031,8 @@ export function ExportPanel(props: Props): JSX.Element {
               {estimateLabel}
             </span>
           </div>
-          {estimate.measured && (
-            <span className="text-xs text-dim">
+          {estimate.measurementApplies && estimate.measured && (
+            <span className="text-xs text-dim" data-slot="estimate-measurement">
               {t('export.estimate.measure', {
                 est: formatBytes(estimate.measured.estimated),
                 actual: formatBytes(estimate.measured.actual)
