@@ -278,7 +278,7 @@ export const zhTW: Record<TranslationKey, string> = {
   'export.hint.detecting': '正在偵測硬體…',
   'export.estimate': '約 {size}',
   'export.estimate.upTo': '最多 {size}',
-  'export.estimate.measure': '上次預估 {est} → 實際 {actual}',
+  'export.estimate.measure': '模型預估 {est} → 實際 {actual}',
   'export.estimate.unknown': '載入片段後會顯示容量預估',
   'export.estimate.noLength': '選取範圍後會顯示容量預估',
   'export.estimate.reading': '正在讀取影片，取得長度後就會顯示容量預估',

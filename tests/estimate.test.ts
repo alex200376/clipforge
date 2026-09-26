@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  CORRECTION_MAX,
+  CORRECTION_MIN,
+  correctionFrom,
   estimateAnimatedBytes,
   estimateAnimatedRange,
   estimateVideoBytes,
   fitToBudget,
   measurementAppliesToEstimate,
-  outputDimensions
+  measurementFrom,
+  outputDimensions,
+  type Measurement
 } from '../src/shared/estimate'
 import { DEFAULT_GIF_TUNING } from '../src/shared/gifTuning'
 
@@ -116,6 +121,61 @@ describe('estimate measurement relevance', () => {
     expect(measurementAppliesToEstimate('video', 'video', true)).toBe(false)
     expect(measurementAppliesToEstimate('gif', 'video', false)).toBe(false)
     expect(measurementAppliesToEstimate(null, 'gif', false)).toBe(false)
+  })
+})
+
+describe('export measurement calibration', () => {
+  it('measures the model, not the figure the panel showed', () => {
+    // The figure shown already carries the current correction, so a ratio taken from it would
+    // compose the two corrections instead of replacing the old one. 1000 is the model's own
+    // answer; 1800 was on screen because an earlier file had come out at 1.8x.
+    const measurement = measurementFrom({ model: 1000, shown: 1800, actual: 2200, mode: 'gif', hasVideoTarget: false })
+    expect(measurement).not.toBeNull()
+    expect(correctionFrom(measurement as Measurement)).toBeCloseTo(2.2, 5)
+    // Taking the ratio from the shown figure instead would have read 2200/1800 = 1.22, and the
+    // correction the model already carried would have been thrown away.
+    expect(correctionFrom(measurement as Measurement)).not.toBeCloseTo(2200 / 1800, 2)
+  })
+
+  it('clamps a ratio the model cannot describe', () => {
+    expect(correctionFrom({ model: 1000, shown: 1000, actual: 100_000, mode: 'gif' })).toBe(CORRECTION_MAX)
+    expect(correctionFrom({ model: 1000, shown: 1000, actual: 1, mode: 'gif' })).toBe(CORRECTION_MIN)
+    // A measurement with no model behind it says nothing, so it must not move the estimate.
+    expect(correctionFrom({ model: 0, shown: 0, actual: 500, mode: 'gif' })).toBe(1)
+  })
+
+  it('refuses to learn from a fixed target size', () => {
+    // A target is arithmetic, not a fact about the content: recording it would apply the
+    // encoder's margin to the next unlimited export as though it were a correction.
+    expect(measurementFrom({ model: 1000, shown: 9400, actual: 9300, mode: 'video', hasVideoTarget: true })).toBeNull()
+    expect(measurementFrom({ model: 0, shown: 0, actual: 0, mode: 'gif', hasVideoTarget: false })).toBeNull()
+  })
+
+  it('keeps the correction steady across repeated exports of the same clip', () => {
+    // The loop the renderer runs: the panel shows `model * correction`, and the file that comes
+    // back teaches the next correction. Measured against the shown figure this oscillated - the
+    // first export was right and every second one collapsed back to the raw model, which is
+    // exactly the "sometimes bigger, sometimes smaller" the panel used to show.
+    const raw = estimateAnimatedBytes({ format: 'gif', frame, fps: 15, seconds: 3 })
+    const actual = Math.round(raw * 2.4)
+    let measurement: Measurement | null = null
+    const shown: number[] = []
+    for (let exportIndex = 0; exportIndex < 4; exportIndex += 1) {
+      const correction = measurement ? correctionFrom(measurement) : 1
+      const bytes = Math.round(raw * correction)
+      shown.push(bytes)
+      measurement = measurementFrom({
+        model: correction > 0 ? bytes / correction : bytes,
+        shown: bytes,
+        actual,
+        mode: 'gif',
+        hasVideoTarget: false
+      })
+    }
+    // Every export after the first promises the size that was written, and keeps promising it.
+    expect(shown.slice(1)).toEqual([actual, actual, actual])
+    // The model half of the measured pair does not drift with the export count either.
+    expect((measurement as Measurement).model).toBeCloseTo(raw, 0)
   })
 })
 

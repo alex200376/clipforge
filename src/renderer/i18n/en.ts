@@ -281,7 +281,9 @@ export const en = {
   'export.hint.detecting': 'Detecting hardware…',
   'export.estimate': 'About {size}',
   'export.estimate.upTo': 'Up to {size}',
-  'export.estimate.measure': 'measured {est} → {actual}',
+  // The first figure is the model's own answer, not the corrected one shown above it, so the
+  // line reads as the pair the correction was learned from rather than the same number twice.
+  'export.estimate.measure': 'model {est} → measured {actual}',
   'export.estimate.unknown': 'Load a clip to see a size estimate',
   'export.estimate.noLength': 'Select a range to see a size estimate',
   'export.estimate.reading': 'Reading the clip — the estimate appears once its length is known',

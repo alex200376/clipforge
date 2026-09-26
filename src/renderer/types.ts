@@ -1,4 +1,5 @@
 import type { FillQuality } from './ai/quality'
+import type { Measurement } from '../shared/estimate'
 import type { GifTuning } from '../shared/gifTuning'
 import type { InstallProgressEvent } from '../shared/types'
 
@@ -123,8 +124,14 @@ export interface EstimateView {
     quality: number
     tuning: GifTuning
   } | null
-  /** Last measured estimate against reality for this source, only when it applies here. */
-  measured: { estimated: number; actual: number } | null
+  /**
+   * Last measured estimate against reality for this source, only when it applies here.
+   *
+   * Carries the model's own uncorrected answer as well as the figure that was shown, because
+   * the next correction has to be measured against the model - measuring it against the shown
+   * figure would compound the two corrections instead of replacing the old one.
+   */
+  measured: Measurement | null
   /** True when the last measured export can legitimately calibrate this estimate. */
   measurementApplies: boolean
 }

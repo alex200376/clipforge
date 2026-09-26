@@ -311,7 +311,12 @@ export function ExportPanel(props: Props): JSX.Element {
   const estimateNote = ((): string | undefined => {
     if (estimate.bytes === null) return undefined
     if (estimate.fitted) return undefined
-    if (!estimate.range) return estimate.calibrated ? t('export.estimate.calibrated') : undefined
+    // Once something has actually been written, quoting the model's own uncertainty band and
+    // saying a real export would sharpen it is asking the user to do the thing they just did -
+    // and the animated estimate always carries a band, so that text used to outlive the
+    // measurement that replaced it.
+    if (estimate.calibrated) return t('export.estimate.calibrated')
+    if (!estimate.range) return undefined
     return t('export.estimate.range', {
       low: formatBytes(estimate.range.low),
       high: formatBytes(estimate.range.high)
@@ -1031,10 +1036,16 @@ export function ExportPanel(props: Props): JSX.Element {
               {estimateLabel}
             </span>
           </div>
+          {/*
+            The model's own answer against the file that was written, deliberately not the
+            corrected figure above: the corrected figure is the headline, so quoting it here
+            would read as the same number twice. This is the pair that says what the model got
+            wrong and by how much, which is what the correction was learned from.
+          */}
           {estimate.measurementApplies && estimate.measured && (
             <span className="text-xs text-dim" data-slot="estimate-measurement">
               {t('export.estimate.measure', {
-                est: formatBytes(estimate.measured.estimated),
+                est: formatBytes(estimate.measured.model),
                 actual: formatBytes(estimate.measured.actual)
               })}
             </span>

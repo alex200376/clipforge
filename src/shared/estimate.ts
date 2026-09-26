@@ -59,6 +59,16 @@ const UNCALIBRATED_HIGH = 1.6
 /** What a real export of the same source leaves: the settings changed, the content did not. */
 const CALIBRATED_SPREAD = 0.15
 
+/**
+ * How far a measured ratio is allowed to move the model.
+ *
+ * The constants above are measured against real clips, so a ratio inside this band is the
+ * content being different; a ratio outside it is a clip the model cannot describe, and letting
+ * one through would turn a single odd export into a permanently wrong readout.
+ */
+export const CORRECTION_MIN = 0.3
+export const CORRECTION_MAX = 3
+
 export interface FrameSize {
   width: number
   height: number
@@ -193,6 +203,50 @@ export function measurementAppliesToEstimate(
   hasVideoTarget: boolean
 ): boolean {
   return measuredMode === mode && !(mode === 'video' && hasVideoTarget)
+}
+
+/**
+ * What a finished export taught the model about this source.
+ *
+ * `model` is the prediction before any correction was applied and `actual` is the file that was
+ * written. The ratio has to be taken against `model` rather than the figure the panel showed:
+ * that figure already carries the previous correction, so measuring against it composes the two
+ * corrections instead of replacing the old one - and the estimate then swings back to the
+ * uncorrected model on the very next export of the same clip.
+ */
+export interface Measurement {
+  /** The model's own answer for the settings this export ran with, before any correction. */
+  model: number
+  /** The figure the panel promised, which is what the user compares the written file against. */
+  shown: number
+  /** The size of the file that was actually written. */
+  actual: number
+  mode: 'gif' | 'video'
+}
+
+/**
+ * The record to keep from a finished export, or null when there is nothing worth keeping.
+ *
+ * A fixed target size is arithmetic rather than a fact about the picture, so a video export that
+ * was aimed at one has nothing to teach the content model - and a ratio taken from it would then
+ * be applied to the next unlimited export as though it were.
+ */
+export function measurementFrom(input: {
+  model: number
+  shown: number
+  actual: number
+  mode: 'gif' | 'video'
+  hasVideoTarget: boolean
+}): Measurement | null {
+  if (input.hasVideoTarget) return null
+  if (!(input.model > 0) || !(input.shown > 0) || !(input.actual > 0)) return null
+  return { model: input.model, shown: input.shown, actual: input.actual, mode: input.mode }
+}
+
+/** How far a measurement says the model was out, as a multiplier on the model's own answer. */
+export function correctionFrom(measurement: Measurement): number {
+  if (!(measurement.model > 0) || !(measurement.actual > 0)) return 1
+  return Math.max(CORRECTION_MIN, Math.min(CORRECTION_MAX, measurement.actual / measurement.model))
 }
 
 export interface VideoEstimateInput {

@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { errorPayload, errorMessage } from '../shared/errors'
-import { estimateAnimatedRange, estimateVideoBytes, fitToBudget, measurementAppliesToEstimate, outputDimensions } from '../shared/estimate'
+import {
+  correctionFrom,
+  estimateAnimatedRange,
+  estimateVideoBytes,
+  fitToBudget,
+  measurementAppliesToEstimate,
+  measurementFrom,
+  outputDimensions,
+  type Measurement
+} from '../shared/estimate'
 import { gifLimitBytes } from '../shared/gifLimit'
 import { resolvePace } from '../shared/aiPower'
 import { AI_FEATHER } from '../shared/aiWindow'
@@ -272,7 +281,7 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [guideOpen, setGuideOpen] = useState(!seed.onboarded)
   const [sessionName, setSessionName] = useState<string | null>(null)
-  const [measured, setMeasured] = useState<{ estimated: number; actual: number; mode: ExportMode } | null>(null)
+  const [measured, setMeasured] = useState<Measurement | null>(null)
   // The window is frameless, so the renderer mirrors its frame state: the controls
   // swap in a restore glyph, and fullscreen drops chrome that has nowhere to sit.
   const [chrome, setChrome] = useState<WindowState>({ maximized: false, fullscreen: false })
@@ -1091,10 +1100,17 @@ export function App({ initialSettings }: Props): JSX.Element {
    */
   const measurementApplies = measurementAppliesToEstimate(measured?.mode, mode, !isGif && size !== 'original')
   const applicableMeasurement = measurementApplies ? measured : null
-  const calibration = useMemo(() => {
-    if (!applicableMeasurement) return 1
-    return Math.max(0.3, Math.min(3, applicableMeasurement.actual / applicableMeasurement.estimated))
-  }, [applicableMeasurement])
+  /**
+   * The model is corrected against its own uncorrected answer, never against the figure shown.
+   *
+   * Measuring the ratio against the displayed number is what made the prediction oscillate:
+   * the displayed number already carries this correction, so the ratio composed the two and
+   * collapsed back to the raw model on the next export of the same clip.
+   */
+  const calibration = useMemo(
+    () => (applicableMeasurement ? correctionFrom(applicableMeasurement) : 1),
+    [applicableMeasurement]
+  )
 
   /** Whether the content model has been replaced by a real measurement for these settings. */
   const calibrated = measurementApplies
@@ -1416,6 +1432,10 @@ export function App({ initialSettings }: Props): JSX.Element {
        * clip that cannot reach the limit under its smallest settings is a thing to say, not
        * something to keep encoding.
        */
+      // Set when the retry below replaces the file the prediction was made for, which is the
+      // one case where the byte count that comes back does not describe the settings the
+      // panel was showing.
+      let replaced = false
       if (result.ok && isGif && budget !== null && outputFrame && (result.sizeBytes ?? 0) > budget) {
         const actual = result.sizeBytes ?? 0
         const ratio = expected && expected > 0 ? actual / expected : 1
@@ -1430,7 +1450,10 @@ export function App({ initialSettings }: Props): JSX.Element {
           fps: effectiveFps,
           seconds: clipSeconds,
           budgetBytes: budget,
-          calibration: Math.max(0.1, Math.min(10, ratio)),
+          // The ratio is against the figure that was shown, which already carries the model's
+          // current correction, so what the model still needs is the product of the two.
+          // Passing the ratio alone would re-apply a correction it already has.
+          calibration: Math.max(0.1, Math.min(10, ratio * calibration)),
           calibrated: true,
           quality: effectiveQuality,
           gif: { tuning: effectiveTuning, engine, optimize: optimize && gifsicleReady, quality: effectiveQuality }
@@ -1450,6 +1473,7 @@ export function App({ initialSettings }: Props): JSX.Element {
               }),
               'raw'
             )
+            replaced = true
             result = await encodeGif({
               fps: replan.fps,
               width: replan.width,
@@ -1482,11 +1506,24 @@ export function App({ initialSettings }: Props): JSX.Element {
         if (result.encoderFallback) {
           pushLog(t('export.encoderHint') + ` (${result.encoderFallback} → libx264)`, 'raw')
         }
-        if (expected && result.sizeBytes) {
-          // A measurement beats a model: the next estimate uses the real ratio. Recorded
-          // with the mode it came from, because a GIF's bytes-per-pixel says nothing about
-          // a re-encoded video - applying one to the other turned a measurement into a lie.
-          setMeasured({ estimated: expected, actual: result.sizeBytes, mode: isGif ? 'gif' : 'video' })
+        if (expected && result.sizeBytes && !replaced) {
+          // Recorded with the model's own uncorrected answer, not the figure that was shown:
+          // the shown figure already carries this correction, so a ratio taken from it would
+          // compose the two and collapse back to the raw model on the next export of this
+          // clip - the estimate would be right once and then wrong every other time.
+          // The mode comes along because a GIF's bytes-per-pixel says nothing about a
+          // re-encoded video - applying one to the other turned a measurement into a lie -
+          // and a fixed target is left out entirely, being arithmetic rather than content.
+          // Left out rather than cleared: it says nothing new about the picture, so a
+          // measurement of this clip from an unlimited export is still the best thing known.
+          const learned = measurementFrom({
+            model: calibration > 0 ? expected / calibration : expected,
+            shown: expected,
+            actual: result.sizeBytes,
+            mode: isGif ? 'gif' : 'video',
+            hasVideoTarget: !isGif && size !== 'original'
+          })
+          if (learned) setMeasured(learned)
         }
         setPanelTab('output')
         raise({
@@ -1572,6 +1609,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     encoder,
     settings.outputDir,
     estimate.bytes,
+    calibration,
     fail,
     failExport,
     failWith,

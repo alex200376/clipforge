@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { fitToBudget } from '../src/shared/estimate'
+import { correctionFrom, estimateAnimatedBytes, fitToBudget, measurementFrom } from '../src/shared/estimate'
 import { DEFAULT_GIF_TUNING } from '../src/shared/gifTuning'
 import {
   FILMSTRIP_FRAMES,
@@ -291,6 +291,49 @@ describe.skipIf(!haveTools)('golden exports', () => {
     // The limit is a promise about the file, not about the model: this is the assertion that
     // makes it one, and it is why the retry exists rather than a tighter estimate.
     expect(statSync(output).size).toBeLessThanOrEqual(budget)
+  }, TIMEOUT)
+
+  it('keeps a measured correction from collapsing on the next export', () => {
+    // The renderer's loop, against the real encoder: the panel shows the model times whatever the
+    // last export taught it, and the file that comes back is that export's measurement. Measured
+    // against the shown figure rather than the model, the second measurement reads 1 and the
+    // prediction swings back to the raw model - right once, wrong every other export.
+    const output = join(scratch, 'repeat.gif')
+    const frame = { width: 240, height: 180 }
+    const quality = 80
+    const gif = { tuning: DEFAULT_GIF_TUNING, engine: 'palette' as const, optimize: false, quality }
+    const options = { start: 0, end: 2, fps: 12, width: frame.width, quality }
+    const encode = (): number => {
+      const result = run(ffmpeg, paletteArgs(source, output, options))
+      expect(result.ok, result.output.slice(-800)).toBe(true)
+      return statSync(output).size
+    }
+
+    const model = estimateAnimatedBytes({ format: 'gif', frame, fps: 12, seconds: 2, quality, gif })
+    const first = encode()
+    const measurement = measurementFrom({ model, shown: model, actual: first, mode: 'gif', hasVideoTarget: false })
+    expect(measurement).not.toBeNull()
+    const firstCorrection = correctionFrom(measurement!)
+    // This synthetic pattern is one the model over-predicts, which is what makes the assertion
+    // below meaningful: a correction that had collapsed would read exactly 1.
+    expect(firstCorrection).toBeLessThan(0.9)
+
+    // What the panel now promises for the next export is the file the first one wrote.
+    const promised = Math.round(model * firstCorrection)
+    expect(Math.abs(promised - first) / first).toBeLessThan(0.05)
+
+    const second = encode()
+    const next = measurementFrom({
+      model: promised / firstCorrection,
+      shown: promised,
+      actual: second,
+      mode: 'gif',
+      hasVideoTarget: false
+    })
+    // The correction the first file taught is still the correction in force, so the panel keeps
+    // promising the size the encoder actually produces.
+    expect(correctionFrom(next!)).toBeCloseTo(firstCorrection, 1)
+    expect(Math.abs(Math.round(model * correctionFrom(next!)) - second) / second).toBeLessThan(0.3)
   }, TIMEOUT)
 
   it('detects letterboxing with cropdetect', () => {
