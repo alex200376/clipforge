@@ -443,6 +443,39 @@ export function gifsicleOptimizeArgs(
   return ['-O3', `--lossy=${gifsicleLossy(options.lossy)}`, '--colors', String(options.colors), input, '-o', output]
 }
 
+/** How many windows a letterbox scan may sample, and how long each one runs. */
+export const CROP_SCAN_WINDOWS = 4
+export const CROP_SCAN_SECONDS = 3
+
+/**
+ * Splits a span into the short windows a cropdetect scan samples.
+ *
+ * One window in the middle is what the first version did, and it is the wrong single choice: an
+ * intro over black, a fade, or a letterbox that only appears partway through all sit away from
+ * the middle. So the span is sampled instead - a few seconds here, a few seconds there, spread
+ * from its start to its end - and the pooled lines are voted on. Decoding is bounded by the
+ * window count and length, so a two-hour clip costs the same handful of seconds as a ten-second
+ * one.
+ *
+ * A span no longer than one window is sampled exactly where it starts; a longer one gets at
+ * least two and at most {@link CROP_SCAN_WINDOWS}, the first at the start and the last ending at
+ * the span's end.
+ */
+export function sampleCropWindows(start: number, duration: number): Array<{ start: number; seconds: number }> {
+  const span = Math.max(0, duration)
+  const origin = Math.max(0, start)
+  if (span <= CROP_SCAN_SECONDS) return [{ start: origin, seconds: Math.max(1, span || 1) }]
+
+  const count = Math.min(CROP_SCAN_WINDOWS, Math.max(2, Math.floor(span / CROP_SCAN_SECONDS)))
+  const length = Math.min(CROP_SCAN_SECONDS, span / count)
+  const windows: Array<{ start: number; seconds: number }> = []
+  for (let index = 0; index < count; index += 1) {
+    const offset = count === 1 ? 0 : (span - length) * (index / (count - 1))
+    windows.push({ start: origin + offset, seconds: length })
+  }
+  return windows
+}
+
 /** Scans a window of the source to find letterboxing. */
 export function cropdetectArgs(source: string, start: number, seconds: number): string[] {
   return [
@@ -461,13 +494,92 @@ export function cropdetectArgs(source: string, start: number, seconds: number): 
   ]
 }
 
-/** Reads the last `crop=w:h:x:y` ffmpeg printed while running cropdetect. */
-export function parseCropDetect(output: string): CropSpec | null {
+/**
+ * Where a cropdetect scan landed, and how much the sampled frames agreed.
+ *
+ * `agreement` is the share of printed lines that carried the winning box, so a scan that
+ * found one stable border everywhere reads near 1 and a scan taken across a picture that
+ * keeps changing reads lower. It is `0` when nothing was detected at all.
+ */
+export interface CropConsensus {
+  crop: CropSpec | null
+  /** How many `crop=` lines the output carried, across every window fed into it. */
+  samples: number
+  /** Share of samples that carried the chosen box, `0`-`1`. */
+  agreement: number
+}
+
+/**
+ * Finds the crop the sampled frames agree on, rather than trusting the last line printed.
+ *
+ * cropdetect prints one line per analysed frame, and the last one is not privileged: a scan
+ * that runs across a cut, a fade or a moving letterbox ends on whichever frame happened to
+ * come last, which is exactly where a single bad frame would mislead. The box that the most
+ * samples agree on is the stable border, so that is what this returns. Ties keep the most
+ * recent box, so a scan whose frames each differ by a pixel still answers with the settled
+ * reading rather than an arbitrary earliest one.
+ *
+ * `output` may be the pre-joined lines of several windows: the counts are pooled, so a box
+ * seen across many windows outranks a one-off reading from any of them.
+ */
+export function parseCropDetectConsensus(output: string): CropConsensus {
   const matches = [...output.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)]
-  const last = matches[matches.length - 1]
-  if (!last) return null
-  const [, width, height, x, y] = last
-  return { x: Number(x), y: Number(y), width: Number(width), height: Number(height) }
+  if (matches.length === 0) return { crop: null, samples: 0, agreement: 0 }
+
+  const counts = new Map<string, { crop: CropSpec; count: number; last: number }>()
+  matches.forEach((match, index) => {
+    const key = `${match[1]}:${match[2]}:${match[3]}:${match[4]}`
+    const seen = counts.get(key)
+    if (seen) {
+      seen.count += 1
+      seen.last = index
+      return
+    }
+    counts.set(key, {
+      crop: { x: Number(match[3]), y: Number(match[4]), width: Number(match[1]), height: Number(match[2]) },
+      count: 1,
+      last: index
+    })
+  })
+
+  let best: { crop: CropSpec; count: number; last: number } | null = null
+  for (const entry of counts.values()) {
+    if (!best || entry.count > best.count || (entry.count === best.count && entry.last > best.last)) best = entry
+  }
+  // `best` cannot be null: `counts` holds at least one entry whenever `matches` is non-empty.
+  const winner = best as { crop: CropSpec; count: number; last: number }
+  return { crop: winner.crop, samples: matches.length, agreement: winner.count / matches.length }
+}
+
+/**
+ * Reads the `crop=w:h:x:y` ffmpeg settled on while running cropdetect.
+ *
+ * A thin view over {@link parseCropDetectConsensus} for callers that only want the box. It
+ * used to take the last line; it now takes the agreed one, which is the same answer on a
+ * stable scan and the correct one on a scan that ends somewhere noisy.
+ */
+export function parseCropDetect(output: string): CropSpec | null {
+  return parseCropDetectConsensus(output).crop
+}
+
+/**
+ * Adds up the `packet=size` lines `ffprobe` prints for one stream, in bytes.
+ *
+ * This is how a stream's real weight is read: the muxer reports a size per packet, and their
+ * sum is what the encoder actually spent on that stream - unlike the file's own size, which
+ * also carries the other streams and the container. The probe uses it to separate a video's
+ * picture from its audio track, so a content ratio describes the picture rather than the file.
+ *
+ * Anything that is not a positive number is skipped, so empty output, a header line or a
+ * truncated read contributes nothing instead of poisoning the total with `NaN`.
+ */
+export function sumPacketSizes(output: string): number {
+  let total = 0
+  for (const line of output.split(/\r?\n/)) {
+    const value = Number(line.trim())
+    if (Number.isFinite(value) && value > 0) total += value
+  }
+  return total
 }
 
 /** Per-encoder quality flags: the name of the knob differs on every vendor. */

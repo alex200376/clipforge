@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CORRECTION_MAX,
   CORRECTION_MIN,
+  contentFactorFrom,
   correctionFrom,
   estimateAnimatedBytes,
   estimateAnimatedRange,
@@ -11,6 +12,10 @@ import {
   measurementAppliesToEstimate,
   measurementFrom,
   outputDimensions,
+  PROBE_SAMPLE_SECONDS,
+  PROBE_SAMPLE_WINDOWS,
+  sampleProbeWindows,
+  videoOverheadBytes,
   type Measurement
 } from '../src/shared/estimate'
 import { DEFAULT_GIF_TUNING } from '../src/shared/gifTuning'
@@ -144,6 +149,22 @@ describe('export measurement calibration', () => {
     expect(correctionFrom({ model: 0, shown: 0, actual: 500, mode: 'gif' })).toBe(1)
   })
 
+  it('reads the same content ratio from a sample as from a whole export', () => {
+    // A probe divides the bytes a one-second sample wrote by the model's prediction for the
+    // same settings, which is exactly the ratio `correctionFrom` reads - just measured before
+    // the export instead of after it.
+    expect(contentFactorFrom(1000, 1800)).toBeCloseTo(1.8, 5)
+    expect(contentFactorFrom(1000, 1800)).toBeCloseTo(correctionFrom({ model: 1000, shown: 1000, actual: 1800, mode: 'gif' }), 5)
+  })
+
+  it('clamps a sample ratio the model cannot describe, and says nothing without a model', () => {
+    expect(contentFactorFrom(1000, 100_000)).toBe(CORRECTION_MAX)
+    expect(contentFactorFrom(1000, 1)).toBe(CORRECTION_MIN)
+    // A sample with no model behind it, or no bytes, must not move the estimate.
+    expect(contentFactorFrom(0, 500)).toBe(1)
+    expect(contentFactorFrom(1000, 0)).toBe(1)
+  })
+
   it('refuses to learn from a fixed target size', () => {
     // A target is arithmetic, not a fact about the content: recording it would apply the
     // encoder's margin to the next unlimited export as though it were a correction.
@@ -231,10 +252,103 @@ describe('video estimation', () => {
     expect(corrected).toBe(plain)
   })
 
-  it('applies a correction from a real measurement', () => {
-    const plain = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5 })
-    const corrected = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5, correction: 0.5 })
-    expect(corrected).toBe(Math.round(plain * 0.5))
+  it('applies a correction to the picture, not to the audio or the container', () => {
+    // The correction is a fact about the content, so it moves the picture and leaves the parts
+    // of the file the content does not decide where they are. Scaling the whole prediction is
+    // what dragged a one-second probe's own audio and container up to the length of the whole
+    // clip, which on a real filmed clip measured a few percent of over-prediction.
+    const seconds = 5
+    const plain = estimateVideoBytes({ frame: measured, fps: 24, seconds })
+    const corrected = estimateVideoBytes({ frame: measured, fps: 24, seconds, correction: 0.5 })
+    const overhead = videoOverheadBytes(seconds, true)
+    expect(corrected).toBe(Math.round((plain - overhead) * 0.5 + overhead))
+    // The audio and the container survive untouched, so the file never shrinks below them.
+    expect(corrected).toBeGreaterThan(Math.round(plain * 0.5))
+  })
+
+  it('counts the non-content bytes separately from the picture', () => {
+    // Container always, audio only when there is a track to write.
+    expect(videoOverheadBytes(0, false)).toBe(24 * 1024)
+    expect(videoOverheadBytes(3, false)).toBe(24 * 1024)
+    expect(videoOverheadBytes(0, true)).toBe(24 * 1024)
+    expect(videoOverheadBytes(5, true)).toBe(24 * 1024 + 5 * 16_000)
+    // Matching exactly what `estimateVideoBytes` counted, since the two are subtracted from
+    // each other to find the picture's share of a prediction.
+    const whole = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5 })
+    const muted = estimateVideoBytes({ frame: measured, fps: 24, seconds: 5, audio: false })
+    expect(whole - muted).toBe(Math.round(videoOverheadBytes(5, true) - videoOverheadBytes(5, false)))
+  })
+
+  it('records a video measurement as the picture, so a repeat export is exact', () => {
+    const seconds = 5
+    const model = estimateVideoBytes({ frame: measured, fps: 24, seconds })
+    const actual = Math.round(model * 1.3)
+    const learned = measurementFrom({
+      model,
+      shown: model,
+      actual,
+      mode: 'video',
+      hasVideoTarget: false,
+      overhead: videoOverheadBytes(seconds, true)
+    })
+    expect(learned).not.toBeNull()
+    // The same file predicted again: the measurement took the audio and the container out of
+    // both sides, so scaling the picture alone puts them back and lands on the written size.
+    const predicted = estimateVideoBytes({
+      frame: measured,
+      fps: 24,
+      seconds,
+      correction: correctionFrom(learned as Measurement)
+    })
+    expect(predicted).toBe(actual)
+  })
+})
+
+describe('probe sampling', () => {
+  it('takes several slices spread from the start of the selection to its end', () => {
+    const windows = sampleProbeWindows(0, 30)
+    expect(windows.length).toBe(PROBE_SAMPLE_WINDOWS)
+    expect(windows[0]!.start).toBe(0)
+    // The last slice ends where the selection does, so the tail of the clip is represented too.
+    const last = windows[windows.length - 1]!
+    expect(last.start + last.seconds).toBeCloseTo(30, 5)
+    // And no two slices are the same, or the pooling buys nothing.
+    expect(new Set(windows.map((window) => window.start)).size).toBe(windows.length)
+  })
+
+  it('keeps every slice short, so measuring a long clip stays cheap', () => {
+    for (const window of sampleProbeWindows(0, 600)) {
+      expect(window.seconds).toBeLessThanOrEqual(PROBE_SAMPLE_SECONDS)
+      expect(window.seconds).toBeGreaterThan(0)
+    }
+  })
+
+  it('takes one centred slice when the clip is too short to divide', () => {
+    const windows = sampleProbeWindows(0, 1)
+    expect(windows).toHaveLength(1)
+    expect(windows[0]!.seconds).toBeCloseTo(1, 5)
+    // Middle rather than the start: the first moments are the likeliest to be a title card.
+    expect(windows[0]!.start).toBeCloseTo(0, 5)
+    const later = sampleProbeWindows(4, 1)
+    expect(later[0]!.start).toBeCloseTo(4, 5)
+  })
+
+  it('never asks for zero seconds or a slice off the end of the clip', () => {
+    for (const duration of [0.5, 2, 5, 30, 1800]) {
+      const windows = sampleProbeWindows(1.5, duration)
+      expect(windows.length).toBeGreaterThan(0)
+      for (const window of windows) {
+        expect(window.seconds).toBeGreaterThan(0)
+        expect(window.start).toBeGreaterThanOrEqual(1.5 - 1e-6)
+        expect(window.start + window.seconds).toBeLessThanOrEqual(1.5 + duration + 1e-6)
+      }
+    }
+    // A selection with no length at all still proposes a usable, positive slice rather than
+    // a zero-second encode nothing could divide by.
+    const empty = sampleProbeWindows(2, 0)
+    expect(empty).toHaveLength(1)
+    expect(empty[0]!.seconds).toBeGreaterThan(0)
+    expect(empty[0]!.start).toBeGreaterThanOrEqual(2)
   })
 })
 

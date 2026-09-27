@@ -316,6 +316,62 @@ export interface VideoRequest extends RangeSpec {
   naming?: OutputNaming
 }
 
+/**
+ * A request to measure what this clip's content costs, by encoding a short sample.
+ *
+ * Deliberately the same knobs an export would carry, because the probe reuses the export
+ * pipeline: what it measures is the size the export's own settings would produce, over a second
+ * chosen from the middle of the selection. The renderer pairs the bytes that come back with the
+ * model's prediction for the same settings and keeps the ratio as the source's content factor.
+ */
+export interface SizeProbeRequest {
+  source: string
+  isUrl: boolean
+  mode: 'gif' | 'video'
+  /** Animated only: which container the sample is written in. */
+  format: OutputFormat
+  engine: GifEngine
+  width: number | null
+  fps: number
+  quality: number
+  tuning: GifTuning
+  optimize: boolean
+  /** Both modes: the picture the sample is taken from. */
+  crop: CropSpec | null
+  mute: boolean
+  /** Video only; the encoder the sample is written with. */
+  encoder: EncoderChoice
+  /** Where the sample starts, and how long it runs. */
+  start: number
+  seconds: number
+}
+
+export interface SizeProbeResult {
+  ok: boolean
+  /** Bytes the sample encoded to; present only when `ok`. */
+  bytes?: number
+  /**
+   * The sample's picture stream alone, as the muxer counted it.
+   *
+   * A video file's size is the picture plus an audio track and a container, and only the picture
+   * is what the content model is trying to predict. Asking the encoder how many bytes it spent on
+   * the picture is a fact; subtracting the model's own guess at the audio and the container is an
+   * assumption, and it was that assumption which made a short sample over-predict a long clip.
+   * Video only; absent when ffprobe could not be read.
+   */
+  videoBytes?: number
+  /**
+   * The sample's audio stream alone, as the muxer counted it.
+   *
+   * The export asks for 128 kbps, but an encoder given a quiet track spends less, so this is
+   * the only way to know what the audio will really cost. Divided by the sample's length it
+   * becomes the rate the whole clip is predicted with. Video only, and only when there is a
+   * track; absent when ffprobe could not be read.
+   */
+  audioBytes?: number
+  error?: string
+}
+
 export interface ExportResult {
   ok: boolean
   output?: string
@@ -557,6 +613,10 @@ export interface CropDetection {
   crop: CropSpec | null
   width: number
   height: number
+  /** cropdetect lines the scan pooled, across every sampled window. */
+  samples: number
+  /** Share of those samples that carried the chosen box, `0`-`1`. */
+  agreement: number
   error?: string
 }
 

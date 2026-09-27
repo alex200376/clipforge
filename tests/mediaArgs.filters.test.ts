@@ -15,6 +15,8 @@ import {
   outputDuration,
   paletteArgs,
   parseCropDetect,
+  parseCropDetectConsensus,
+  sampleCropWindows,
   targetSizeArgs,
   trimArgs,
   videoEncoderArgs,
@@ -333,9 +335,81 @@ describe('gifsicle and cropdetect', () => {
     expect(parseCropDetect('no detection here')).toBeNull()
   })
 
+  it('takes the box the samples agree on, not the last one printed', () => {
+    const line = (crop: string): string => `[Parsed_cropdetect_0 @ 1] ${crop}`
+    const output = [
+      line('crop=1920:816:0:132'),
+      line('crop=1920:816:0:132'),
+      line('crop=1920:816:0:132'),
+      // A cut to a tighter frame at the very end must not win just for being last.
+      line('crop=1920:800:0:140')
+    ].join('\n')
+    const consensus = parseCropDetectConsensus(output)
+    expect(consensus.crop).toEqual({ x: 0, y: 132, width: 1920, height: 816 })
+    expect(consensus.samples).toBe(4)
+    expect(consensus.agreement).toBeCloseTo(0.75, 5)
+  })
+
+  it('pools several windows, so a one-off reading cannot outvote them', () => {
+    const output = [
+      'crop=1920:816:0:132',
+      'crop=1918:814:2:134',
+      'crop=1920:816:0:132',
+      'crop=1920:816:0:132',
+      'crop=1918:814:2:134',
+      'crop=1920:816:0:132'
+    ].join('\n')
+    const consensus = parseCropDetectConsensus(output)
+    expect(consensus.crop).toEqual({ x: 0, y: 132, width: 1920, height: 816 })
+    expect(consensus.agreement).toBeCloseTo(4 / 6, 5)
+  })
+
+  it('keeps the most recent box when every sample differs', () => {
+    const output = ['crop=10:10:0:0', 'crop=20:20:0:0', 'crop=30:30:0:0'].join('\n')
+    const consensus = parseCropDetectConsensus(output)
+    expect(consensus.crop).toEqual({ x: 0, y: 0, width: 30, height: 30 })
+    expect(consensus.agreement).toBeCloseTo(1 / 3, 5)
+  })
+
+  it('reports nothing when the scan printed no crop at all', () => {
+    expect(parseCropDetectConsensus('no detection here')).toEqual({ crop: null, samples: 0, agreement: 0 })
+  })
+
   it('scans a quiet window of the source', () => {
     const args = cropdetectArgs('in.mp4', 5, 3)
     expect(args).toContain('cropdetect=24:16:0')
     expect(args[args.indexOf('-f') + 1]).toBe('null')
+  })
+})
+
+describe('how a letterbox scan is spread across a clip', () => {
+  it('samples a short span exactly where it starts', () => {
+    expect(sampleCropWindows(4, 2)).toEqual([{ start: 4, seconds: 2 }])
+  })
+
+  it('never asks for zero seconds, even from a degenerate span', () => {
+    expect(sampleCropWindows(0, 0)).toEqual([{ start: 0, seconds: 1 }])
+  })
+
+  it('spreads the samples so the first sits at the start and the last ends at the span end', () => {
+    const windows = sampleCropWindows(0, 30)
+    expect(windows.length).toBeGreaterThan(1)
+    expect(windows[0]).toEqual({ start: 0, seconds: 3 })
+    const last = windows[windows.length - 1]!
+    expect(last.start + last.seconds).toBeCloseTo(30, 5)
+  })
+
+  it('keeps the sampling work bounded on a long clip', () => {
+    const windows = sampleCropWindows(0, 3600)
+    expect(windows.length).toBeLessThanOrEqual(4)
+    for (const window of windows) expect(window.seconds).toBeLessThanOrEqual(3)
+  })
+
+  it('never samples past the span it was given', () => {
+    const windows = sampleCropWindows(10, 20)
+    for (const window of windows) {
+      expect(window.start).toBeGreaterThanOrEqual(10)
+      expect(window.start + window.seconds).toBeLessThanOrEqual(30)
+    }
   })
 })

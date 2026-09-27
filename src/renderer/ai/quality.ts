@@ -325,6 +325,62 @@ export function verdictOf(quality: FillQuality | null | undefined): FillVerdict 
   return 'clean'
 }
 
+/**
+ * How much a verdict is worth, best first, as a number to sort by.
+ *
+ * The measurement already says which failures a person notices first - a soft fill is the
+ * complaint that comes back every time, and a seam is the one they spot only on a still - so the
+ * ordering is the same one `verdictOf` reads in.
+ */
+const VERDICT_RANK: Record<FillVerdict, number> = { clean: 3, seam: 2, soft: 1, unknown: 0 }
+
+/**
+ * Orders two fills by how good they look: a positive number means `left` is the better one.
+ *
+ * A better verdict decides it outright; within a verdict the fill with more of its own detail
+ * wins, and if the detail cannot tell them apart the one with the smaller boundary step does. A
+ * half that could not be measured (`null`) is treated as neutral rather than as a failure, so an
+ * unjudgeable fill is not pushed below a measured bad one - it simply has nothing to say.
+ */
+export function compareQuality(left: FillQuality, right: FillQuality): number {
+  const rank = VERDICT_RANK[verdictOf(left)] - VERDICT_RANK[verdictOf(right)]
+  if (rank !== 0) return rank
+  const detail = (left.detail ?? 1) - (right.detail ?? 1)
+  if (Math.abs(detail) > 0.02) return detail
+  // A smaller boundary step is the better fill, so the sign is flipped here.
+  return (right.seam ?? 1) - (left.seam ?? 1)
+}
+
+/** One candidate fill and what it measured, for {@link chooseVariant}. */
+export interface FillVariant<T> {
+  value: T
+  quality: FillQuality | null
+}
+
+/**
+ * The variant that measured best, or `null` when none of them could be judged.
+ *
+ * Ties keep the earlier entry, so a caller that lists its default first gets that default back
+ * whenever the alternative is not actually better - which is what makes spending a second
+ * inference run on a comparison safe: it can only ever improve the answer, never replace a good
+ * fill with an equally good one just because it came second.
+ *
+ * A variant with no measurement at all (`null`) never wins: a fill nobody could score is no
+ * evidence for switching away from one that scored well.
+ */
+export function chooseVariant<T>(variants: readonly FillVariant<T>[]): FillVariant<T> | null {
+  let best: FillVariant<T> | null = null
+  let bestQuality: FillQuality | null = null
+  for (const variant of variants) {
+    if (!variant.quality) continue
+    if (!bestQuality || compareQuality(variant.quality, bestQuality) > 0) {
+      best = variant
+      bestQuality = variant.quality
+    }
+  }
+  return best
+}
+
 /** The two numbers as they are shown, so the log, the card and the tests agree on the digits. */
 export function formatQuality(quality: Pick<FillQuality, 'detail' | 'seam'>): string {
   const detail = quality.detail === null ? '-' : quality.detail.toFixed(2)

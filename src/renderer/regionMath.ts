@@ -51,6 +51,63 @@ function size(value: number, min: number, even: boolean): number {
   return even ? Math.max(evenFloor(min), evenFloor(value)) : Math.max(Math.round(min), Math.round(value))
 }
 
+/** The four numbers a box is edited by, one field at a time. */
+export type RegionField = 'x' | 'y' | 'width' | 'height'
+
+/**
+ * The box after one of its fields is typed to a new value.
+ *
+ * The pointer drags above are how a box is placed; this is how it is *specified*. A user who
+ * knows the mark is at 1912,40 should be able to say so rather than hunting for it with a
+ * mouse, and a size has to survive being typed as exactly as it does being dragged.
+ *
+ * With an aspect on, editing the width moves the height to match and the other way round, so a
+ * locked box keeps its shape whichever side the user reaches for. The edited edge is honoured
+ * and the derived one follows, rather than the two being allowed to disagree. Everything is
+ * clamped into `bounds` and rounded the same way a drag is, so the two ways of editing a box
+ * cannot produce a shape the export would refuse.
+ */
+export function editRegionField(
+  start: CropSpec,
+  field: RegionField,
+  value: number,
+  options: RegionDragOptions
+): CropSpec {
+  const { bounds, min, aspect = null, even = false } = options
+  const next: CropSpec = { ...start }
+  // Room measured from the corner the box already sits at: a size typed larger than the frame
+  // is trimmed against the edge ahead of the box, not allowed to drag the box back to fit.
+  const roomWidth = Math.max(min, bounds.right - start.x)
+  const roomHeight = Math.max(min, bounds.bottom - start.y)
+
+  if (field === 'x' || field === 'y') {
+    next[field] = value
+  } else if (aspect && aspect > 0) {
+    const main = Math.max(min, value)
+    next.width = field === 'width' ? main : main * aspect
+    next.height = field === 'width' ? main / aspect : main
+    // The derived side can overshoot the frame; scale the whole box back, so the locked shape
+    // is kept rather than one axis being clipped into a different ratio.
+    const scale = Math.min(1, roomWidth / next.width, roomHeight / next.height)
+    next.width *= scale
+    next.height *= scale
+  } else if (field === 'width') {
+    next.width = Math.max(min, value)
+  } else {
+    next.height = Math.max(min, value)
+  }
+
+  next.width = Math.min(next.width, roomWidth)
+  next.height = Math.min(next.height, roomHeight)
+
+  next.x = Math.round(clamp(next.x, bounds.left, bounds.right - next.width))
+  next.y = Math.round(clamp(next.y, bounds.top, bounds.bottom - next.height))
+
+  next.width = size(next.width, min, even)
+  next.height = size(next.height, min, even)
+  return next
+}
+
 /**
  * The box a drag ends on. `dx`/`dy` are movement in source pixels since the
  * pointer went down, so the caller only has to divide by the preview's zoom.

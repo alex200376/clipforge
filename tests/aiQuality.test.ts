@@ -4,6 +4,8 @@ import {
   FILL_DETAIL_FLOOR,
   FILL_SEAM_CEILING,
   RING_WIDTH,
+  chooseVariant,
+  compareQuality,
   formatQuality,
   hasQuality,
   measureFill,
@@ -243,5 +245,38 @@ describe('what the numbers read as', () => {
 describe('the ring', () => {
   it('is stated once, so the measurement and its comment cannot disagree', () => {
     expect(RING_WIDTH).toBeGreaterThan(0)
+  })
+})
+
+describe('choosing between two fills', () => {
+  const quality = (detail: number | null, seam: number | null): FillQuality => ({ detail, seam, windows: 1, weight: 100 })
+
+  it('prefers the better verdict over the better number', () => {
+    // A clean fill with a plain number beats a soft fill with a rounder one.
+    const clean = quality(0.9, 0.9)
+    const soft = quality(0.6, 0.1)
+    expect(compareQuality(clean, soft)).toBeGreaterThan(0)
+  })
+
+  it('decides a tie on detail, then on the smaller edge', () => {
+    expect(compareQuality(quality(1.1, 0.5), quality(0.95, 0.5))).toBeGreaterThan(0)
+    expect(compareQuality(quality(1, 0.2), quality(1, 0.8))).toBeGreaterThan(0)
+  })
+
+  it('treats an unmeasurable half as neutral rather than as a failure', () => {
+    expect(compareQuality(quality(null, null), quality(1, 0))).toBeLessThan(0)
+    expect(compareQuality(quality(1, 0), quality(null, null))).toBeGreaterThan(0)
+  })
+
+  it('returns the better variant, and the first one on a tie', () => {
+    const first = { value: 'a', quality: quality(1, 0.2) }
+    const second = { value: 'b', quality: quality(1, 0.2) }
+    expect(chooseVariant([first, second])).toBe(first)
+    expect(chooseVariant([first, { value: 'b', quality: quality(1.2, 0.2) }])?.value).toBe('b')
+  })
+
+  it('never switches to a variant that could not be measured', () => {
+    expect(chooseVariant([{ value: 'a', quality: quality(1, 0.1) }, { value: 'b', quality: null }])?.value).toBe('a')
+    expect(chooseVariant([{ value: 'a', quality: null }, { value: 'b', quality: null }])).toBeNull()
   })
 })

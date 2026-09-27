@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Crop as CropIcon, Eraser, Eye, Gauge, Image as ImageIcon, Layers, Plus, Scan, Trash2, Video } from 'lucide-react'
+import { ChevronDown, ChevronUp, Crop as CropIcon, Eraser, Eye, Gauge, Image as ImageIcon, Layers, Lock, Plus, Scan, Trash2, Unlock, Video } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -25,7 +25,9 @@ import type {
   WatermarkEngine,
   WatermarkRegion
 } from '../../shared/types'
-import { clampSpeed, MAX_SPEED, MIN_SPEED } from '../../shared/mediaArgs'
+import { clampSpeed, MAX_SPEED, MIN_SPEED, WATERMARK_EDGE } from '../../shared/mediaArgs'
+import { editRegionField, frameBounds, insetBounds } from '../regionMath'
+import type { RegionBounds, RegionField } from '../regionMath'
 import {
   DEFAULT_GIF_TUNING,
   DITHER_MODES,
@@ -81,6 +83,10 @@ interface Props {
   cropEnabled: boolean
   onCropEnabled: (value: boolean) => void
   crop: CropSpec | null
+  /** Source pixels, so a crop or a box can be typed into without a preview. */
+  frame: { width: number; height: number } | null
+  onCropChange: (crop: CropSpec) => void
+  onWatermarkChange: (index: number, region: WatermarkRegion) => void
   onResetCrop: () => void
   onDetectCrop: () => void
   cropBusy: boolean
@@ -196,6 +202,89 @@ function Section({ icon, title, children }: { icon: ReactNode; title: string; ch
   )
 }
 
+/** Smallest a crop box may be typed to, matching the pointer editor in the preview. */
+const CROP_MIN = 32
+/** Smallest a logo box may be typed to, matching the pointer editor in the preview. */
+const LOGO_MIN = 8
+
+interface BoxFieldsProps {
+  region: CropSpec
+  frame: { width: number; height: number }
+  bounds: RegionBounds
+  min: number
+  /** Rounds a crop onto even pixels; a logo box keeps whatever is typed. */
+  even: boolean
+  /** Aspect (width / height) carried into size edits, or null to leave the box free. */
+  aspect: number | null
+  /** Renders the lock toggle when given; logo boxes have no ratio to keep. */
+  lock?: { locked: boolean; onToggle: (locked: boolean) => void }
+  ariaLabel: string
+  lockLabel: string
+  onCommit: (region: CropSpec) => void
+}
+
+/**
+ * The four numbers behind a box, so it can be typed as well as dragged.
+ *
+ * A marked area is usually a rectangle a user can see the edges of but not catch with a mouse
+ * on a moving frame; typing the exact pixels is the difference between "close enough" and a
+ * box that actually covers the mark. Clamping, rounding and the aspect lock all live in
+ * `editRegionField`, so a typed box cannot take a shape a dragged one would be refused.
+ */
+function BoxFields({
+  region,
+  frame,
+  bounds,
+  min,
+  even,
+  aspect,
+  lock,
+  ariaLabel,
+  lockLabel,
+  onCommit
+}: BoxFieldsProps): JSX.Element {
+  const { t } = useI18n()
+  const edit = (field: RegionField, value: number): void =>
+    onCommit(editRegionField(region, field, value, { bounds, min, aspect, even }))
+
+  const fields: Array<{ field: RegionField; label: TranslationKey; max: number }> = [
+    { field: 'x', label: 'field.x', max: Math.max(0, frame.width - min) },
+    { field: 'y', label: 'field.y', max: Math.max(0, frame.height - min) },
+    { field: 'width', label: 'field.width', max: Math.max(min, frame.width) },
+    { field: 'height', label: 'field.height', max: Math.max(min, frame.height) }
+  ]
+
+  return (
+    <div className="flex flex-col gap-2" data-slot="box-fields">
+      <div className="grid grid-cols-2 gap-2">
+        {fields.map((entry) => (
+          <Field key={entry.field} label={t(entry.label)}>
+            <NumberField
+              value={Math.round(region[entry.field])}
+              min={entry.field === 'x' || entry.field === 'y' ? 0 : min}
+              max={entry.max}
+              aria-label={`${ariaLabel}: ${t(entry.label)}`}
+              onCommit={(value) => edit(entry.field, value)}
+            />
+          </Field>
+        ))}
+      </div>
+      {lock && (
+        <Button
+          size="sm"
+          variant={lock.locked ? 'secondary' : 'ghost'}
+          className="w-fit"
+          aria-pressed={lock.locked}
+          onClick={() => lock.onToggle(!lock.locked)}
+        >
+          {lock.locked ? <Lock /> : <Unlock />}
+          {lockLabel}
+        </Button>
+      )}
+    </div>
+  )
+}
+
 export function ExportPanel(props: Props): JSX.Element {
   const {
     mode,
@@ -226,6 +315,9 @@ export function ExportPanel(props: Props): JSX.Element {
     cropEnabled,
     onCropEnabled,
     crop,
+    frame,
+    onCropChange,
+    onWatermarkChange,
     onResetCrop,
     onDetectCrop,
     cropBusy,
@@ -279,6 +371,8 @@ export function ExportPanel(props: Props): JSX.Element {
   const isGif = mode === 'gif'
   const isWebp = isGif && format === 'webp'
   const [advanced, setAdvanced] = useState(false)
+  /** Whether a typed crop size carries the other side with it. */
+  const [lockAspect, setLockAspect] = useState(false)
 
   const hint = hardware
     ? isGif
@@ -315,7 +409,7 @@ export function ExportPanel(props: Props): JSX.Element {
     // saying a real export would sharpen it is asking the user to do the thing they just did -
     // and the animated estimate always carries a band, so that text used to outlive the
     // measurement that replaced it.
-    if (estimate.calibrated) return t('export.estimate.calibrated')
+    if (estimate.calibrated) return t(estimate.sampled ? 'export.estimate.sampled' : 'export.estimate.calibrated')
     if (!estimate.range) return undefined
     return t('export.estimate.range', {
       low: formatBytes(estimate.range.low),
@@ -439,7 +533,20 @@ export function ExportPanel(props: Props): JSX.Element {
                 </Button>
               </div>
 
-              {crop && <Hint>{t('crop.size', { width: crop.width, height: crop.height })}</Hint>}
+              {crop && frame && (
+                <BoxFields
+                  region={crop}
+                  frame={frame}
+                  bounds={frameBounds(frame.width, frame.height)}
+                  min={CROP_MIN}
+                  even
+                  aspect={lockAspect && crop.height > 0 ? crop.width / crop.height : null}
+                  lock={{ locked: lockAspect, onToggle: setLockAspect }}
+                  ariaLabel={t('crop.editLabel')}
+                  lockLabel={t('crop.lockAspect')}
+                  onCommit={onCropChange}
+                />
+              )}
             </>
           )}
         </Section>
@@ -582,14 +689,29 @@ export function ExportPanel(props: Props): JSX.Element {
                 </ToggleGroup>
 
                 {watermarks[activeRegion] ? (
-                  <Hint>
-                    {t('watermark.size', {
-                      width: watermarks[activeRegion].width,
-                      height: watermarks[activeRegion].height,
-                      x: watermarks[activeRegion].x,
-                      y: watermarks[activeRegion].y
-                    })}
-                  </Hint>
+                  <>
+                    <Hint>
+                      {t('watermark.size', {
+                        width: watermarks[activeRegion].width,
+                        height: watermarks[activeRegion].height,
+                        x: watermarks[activeRegion].x,
+                        y: watermarks[activeRegion].y
+                      })}
+                    </Hint>
+                    {frame && (
+                      <BoxFields
+                        region={watermarks[activeRegion]}
+                        frame={frame}
+                        bounds={insetBounds(frame.width, frame.height, WATERMARK_EDGE)}
+                        min={LOGO_MIN}
+                        even={false}
+                        aspect={null}
+                        ariaLabel={t('watermark.editLabel')}
+                        lockLabel={t('crop.lockAspect')}
+                        onCommit={(region) => onWatermarkChange(activeRegion, region)}
+                      />
+                    )}
+                  </>
                 ) : (
                   <Hint warn>{t('watermark.none')}</Hint>
                 )}

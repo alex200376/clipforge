@@ -33,6 +33,7 @@ import type {
   PowerState,
   PreviewSource,
   SessionState,
+  SizeProbeRequest,
   StorageReport,
   StorageTarget,
   VideoRequest,
@@ -57,6 +58,7 @@ import { detectHardware } from './hardware'
 import { installedCopies, leftoverCopy } from './installed'
 import { installMissing } from './installer'
 import { registerMediaToken, resolveMediaToken } from './mediaProtocol'
+import { cancelSizeProbe, probeSize } from './sizeProbe'
 import { effectiveOutputDir, loadSettings, saveSettings } from './settings'
 import { defaultOutputDir, resolveOutputDir } from './paths'
 import { clearScratch, releaseAllWorkDirs, releaseWorkDir, scratchStats, workDir } from './scratch'
@@ -145,6 +147,9 @@ export function cancelActiveWork(): void {
   activeJob = null
   activeInstall?.abort()
   activeInstall = null
+  // The size probe is not an export and never becomes `activeJob`, so nothing else would
+  // stop it; quitting mid-measurement leaves an ffmpeg child running otherwise.
+  cancelSizeProbe()
 }
 
 /**
@@ -377,6 +382,11 @@ export function registerIpc(getWindow: WindowGetter): void {
   ipcMain.handle('clipforge:export:video', (_event, request: VideoRequest) =>
     exportVideo({ ...request, outputDir: resolveOutputDir(request.outputDir || effectiveOutputDir()) }, { emit, log, registerJob: track })
   )
+
+  ipcMain.handle('clipforge:estimate:probe', (_event, request: SizeProbeRequest) => {
+    const source = requireLocalSource(request.source)
+    return probeSize({ ...request, source })
+  })
 
   ipcMain.handle('clipforge:job:cancel', () => {
     cancelActiveWork()

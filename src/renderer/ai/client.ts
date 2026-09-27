@@ -9,7 +9,8 @@ import type {
   WatermarkRegion
 } from '../../shared/types'
 import { AI_BACKEND_FAILURE, AI_LOAD_TIMEOUT } from './protocol'
-import { FILL_DETAIL_FLOOR, FILL_SEAM_CEILING, formatQuality, hasQuality, mergeQuality } from './quality'
+import { alternateFeather } from '../../shared/aiWindow'
+import { chooseVariant, compareQuality, FILL_DETAIL_FLOOR, FILL_SEAM_CEILING, formatQuality, hasQuality, mergeQuality, verdictOf } from './quality'
 import type { FillQuality } from './quality'
 import type { AiCandidate, AiWorkerRequest, AiWorkerRequestInput, AiWorkerResponse } from './protocol'
 import { createIdleReleaseController } from './idleRelease'
@@ -487,6 +488,11 @@ async function runAiRemovalWork(
   // Every batch that came back measured, in the order they were painted. The weighted average of
   // them is what "how clean was this removal?" means for the run as a whole.
   const measured: FillQuality[] = []
+  // The edge width the run is using, which the first batch may change: painting one batch
+  // twice is cheap next to the whole clip, and it is the only moment the fill can be judged
+  // before the rest of an expensive run is committed to it.
+  let activeFeather = feather
+  let compared = false
   // Timed because the rate is the whole story of this stage: it decides whether a clip
   // is a short wait or an afternoon, and it is what tells the difference between a slow
   // machine and a runtime that quietly lost its threads.
@@ -498,7 +504,22 @@ async function runAiRemovalWork(
       const workStartedAt = Date.now()
       const frames = await window.clipforge.aiFrames({ token: prepared.token, index: plan.index, from, count: BATCH })
       if (frames.length === 0) break
-      const painted = await inpaintBatch(plan, frames, feather)
+      let painted = await inpaintBatch(plan, frames, activeFeather)
+      // One extra inference, once, on the first batch that could be measured: if a softer edge
+      // produces the cleaner fill here it is used for the rest of the run, and the numbers the
+      // user sees are the ones that decided it rather than a fixed guess.
+      if (!compared && painted.quality) {
+        compared = true
+        const other = alternateFeather(activeFeather)
+        const alternative = await inpaintBatch(plan, frames, other)
+        if (alternative.quality && compareQuality(alternative.quality, painted.quality) > 0) {
+          painted = alternative
+          activeFeather = other
+          handlers.onNote(
+            `Compared two edge widths on the first frame; the ${activeFeather}-pixel edge measured better and is used for the rest of the run`
+          )
+        }
+      }
       // Said as soon as it happens: a run that fell back mid-batch still produces the
       // right pixels, and the user deserves to know why it got slower.
       if (painted.note) handlers.onNote(painted.note)
@@ -583,6 +604,10 @@ export interface AiFramePreview {
    * busy background and the eye cannot be sure.
    */
   quality?: FillQuality
+  /** The edge width this preview settled on, in source pixels. */
+  feather: number
+  /** True when two edge widths were painted and the better one is being shown. */
+  compared: boolean
 }
 
 /**
@@ -628,11 +653,47 @@ async function previewRemovalWork(
   composed.drawImage(source, 0, 0)
   source.close()
 
-  const measured: FillQuality[] = []
-  for (const patch of frame.patches) {
-    const painted = await inpaintBatch(patch.plan, [patch.window], feather)
-    if (painted.quality) measured.push(painted.quality)
-    const bytes = painted.patches[0]
+  /**
+   * Paints every window of the frame with one edge width, measuring as it goes.
+   *
+   * Returns the patches alongside their windows so the caller can composite whichever pass it
+   * chooses, rather than having to paint again to recover the pixels.
+   */
+  type PaintedPatch = { patch: (typeof frame.patches)[number]; bytes: Uint8Array | undefined }
+  const paint = async (edge: number): Promise<{ painted: PaintedPatch[]; quality: FillQuality | null }> => {
+    const painted: PaintedPatch[] = []
+    const measured: FillQuality[] = []
+    for (const patch of frame.patches) {
+      const result = await inpaintBatch(patch.plan, [patch.window], edge)
+      if (result.quality) measured.push(result.quality)
+      painted.push({ patch, bytes: result.patches[0] })
+    }
+    const merged = mergeQuality(measured)
+    return { painted, quality: hasQuality(merged) ? merged : null }
+  }
+
+  // The default edge first. A clean result needs no second opinion, so the alternative is only
+  // painted when the first pass leaves something to improve - which is most of the interesting
+  // cases and none of the easy ones.
+  const primary = await paint(feather)
+  let chosen = { edge: feather, painted: primary.painted }
+  let quality = primary.quality
+  let compared = false
+  if (quality && verdictOf(quality) !== 'clean') {
+    compared = true
+    const other = alternateFeather(feather)
+    const alternative = await paint(other)
+    const better = chooseVariant([
+      { value: { edge: feather, painted: primary.painted }, quality: primary.quality },
+      { value: { edge: other, painted: alternative.painted }, quality: alternative.quality }
+    ])
+    if (better && better.value.edge === other) {
+      chosen = better.value
+      quality = better.quality
+    }
+  }
+
+  for (const { patch, bytes } of chosen.painted) {
     if (!bytes) continue
     const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]))
     // Placed where the window was cut from, and in the order the export composites them - so
@@ -642,7 +703,6 @@ async function previewRemovalWork(
     bitmap.close()
   }
 
-  const quality = mergeQuality(measured)
   return {
     before: canvas.toDataURL('image/png'),
     after: after.toDataURL('image/png'),
@@ -650,7 +710,9 @@ async function previewRemovalWork(
     height: canvas.height,
     seconds: (Date.now() - started) / 1000,
     windows: frame.patches.length,
-    quality: hasQuality(quality) ? quality : undefined
+    quality: quality ?? undefined,
+    feather: chosen.edge,
+    compared
   }
 }
 

@@ -26,6 +26,8 @@ import type {
   PreviewSource,
   RegisteredMedia,
   SessionState,
+  SizeProbeRequest,
+  SizeProbeResult,
   StorageReport,
   StorageTarget,
   ToolVersion,
@@ -110,6 +112,13 @@ export interface ClipForgeApi {
   hardwareProfile(): Promise<HardwareProfile>
   /** Finds the real picture area inside letterboxing; null when already tight. */
   detectCrop(request: CropRequest): Promise<CropDetection>
+  /**
+   * Encodes a one-second sample of the clip and reports what it weighed.
+   *
+   * Used to learn the source's own content factor, so the size the panel promises describes the
+   * clip in front of the user rather than the clips the model's constants were measured on.
+   */
+  probeSize(request: SizeProbeRequest): Promise<SizeProbeResult>
   revealInFolder(filePath: string): Promise<void>
   /**
    * A single frame with the marks filled in, for the before/after comparison.

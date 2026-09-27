@@ -15,6 +15,7 @@ import {
   parseProgressTime,
   parseYtDlpPercent,
   scaleFilter,
+  sumPacketSizes,
   targetSizeArgs,
   targetVideoBitrate,
   trimArgs,
@@ -262,5 +263,20 @@ describe('progress chatter filtering', () => {
       'Streaming 45%'
     ]
     expect(kept.filter(isProgressLine)).toEqual([])
+  })
+})
+
+describe('stream packet sizes', () => {
+  it('adds the sizes ffprobe prints, one per line', () => {
+    expect(sumPacketSizes('1200\n3400\n800\n')).toBe(5400)
+    expect(sumPacketSizes('1200\r\n3400\r\n800')).toBe(5400)
+  })
+
+  it('reads nothing from nothing, and ignores junk instead of poisoning the total', () => {
+    // The probe's fallback depends on this being a clean 0 rather than NaN, which would make
+    // every later comparison against it false.
+    expect(sumPacketSizes('')).toBe(0)
+    expect(sumPacketSizes('\n\n')).toBe(0)
+    expect(sumPacketSizes('size\n100\nN/A\n50\n-3\n')).toBe(150)
   })
 })

@@ -18,7 +18,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { correctionFrom, estimateAnimatedBytes, fitToBudget, measurementFrom } from '../src/shared/estimate'
+import {
+  contentFactorFrom,
+  correctionFrom,
+  estimateAnimatedBytes,
+  estimateVideoBytes,
+  fitToBudget,
+  measurementFrom,
+  sampleProbeWindows,
+  videoOverheadBytes
+} from '../src/shared/estimate'
 import { DEFAULT_GIF_TUNING } from '../src/shared/gifTuning'
 import {
   FILMSTRIP_FRAMES,
@@ -27,6 +36,7 @@ import {
   gifskiArgs,
   paletteArgs,
   parseCropDetect,
+  sumPacketSizes,
   targetSizeArgs,
   trimArgs,
   webpArgs,
@@ -334,6 +344,125 @@ describe.skipIf(!haveTools)('golden exports', () => {
     // promising the size the encoder actually produces.
     expect(correctionFrom(next!)).toBeCloseTo(firstCorrection, 1)
     expect(Math.abs(Math.round(model * correctionFrom(next!)) - second) / second).toBeLessThan(0.3)
+  }, TIMEOUT)
+
+  it('predicts a repeat video export exactly from the picture it measured', () => {
+    // The video half of the renderer's loop, against the real encoder: a measurement takes the
+    // audio track and the container out of both the model and the file - the content ratio is a
+    // fact about the picture, and a probe measured over a different length must not scale bytes
+    // that do not depend on it - so re-applying it must land back on the size that was written.
+    const output = join(scratch, 'repeat.mp4')
+    const options = { start: 0, end: 2, mute: false, streamCopy: false }
+    const encode = (): number => {
+      const result = run(ffmpeg, trimArgs(source, output, options))
+      expect(result.ok, result.output.slice(-800)).toBe(true)
+      return statSync(output).size
+    }
+
+    const frame = { width: 320, height: 240 }
+    const seconds = 2
+    const model = estimateVideoBytes({ frame, fps: 30, seconds })
+    const first = encode()
+    const learned = measurementFrom({
+      model,
+      shown: model,
+      actual: first,
+      mode: 'video',
+      hasVideoTarget: false,
+      overhead: videoOverheadBytes(seconds, true)
+    })
+    expect(learned).not.toBeNull()
+
+    const predicted = estimateVideoBytes({
+      frame,
+      fps: 30,
+      seconds,
+      correction: correctionFrom(learned!)
+    })
+    expect(Math.abs(predicted - first)).toBeLessThanOrEqual(1)
+  }, TIMEOUT)
+
+  it('predicts a longer clip from the picture a sample measured', async () => {
+    // The renderer's probe, against the real encoder: several slices of the clip are encoded,
+    // the muxer's own packet sizes give each slice's picture bytes, and their ratio to the
+    // model's picture for the same slices is what the whole clip is predicted with. Before the
+    // slices were pooled and the picture was measured directly, one unrepresentative second of
+    // a clip - and a guess at how much of it was audio - carried the whole prediction.
+    const full = join(scratch, 'probe-full.mp4')
+    const sample = join(scratch, 'probe-sample.mp4')
+    const frame = { width: 320, height: 240 }
+    const fps = 30
+    const common = { mute: false, streamCopy: false }
+    expect(run(ffmpeg, trimArgs(source, full, { ...common, start: 0, end: 4 })).ok).toBe(true)
+
+    const packets = (file: string, stream: 'v:0' | 'a:0'): number => {
+      const result = run(ffprobe, [
+        '-v',
+        'error',
+        '-select_streams',
+        stream,
+        '-show_entries',
+        'packet=size',
+        '-of',
+        'csv=p=0',
+        file
+      ])
+      expect(result.ok, result.output.slice(-800)).toBe(true)
+      return sumPacketSizes(result.output)
+    }
+
+    const windows = sampleProbeWindows(0, 4)
+    expect(windows.length).toBeGreaterThan(0)
+    let modelTotal = 0
+    let actualTotal = 0
+    let audioTotal = 0
+    let sampledSeconds = 0
+    for (const window of windows) {
+      const encoded = run(
+        ffmpeg,
+        trimArgs(source, sample, { ...common, start: window.start, end: window.start + window.seconds })
+      )
+      expect(encoded.ok, encoded.output.slice(-800)).toBe(true)
+      const picture = packets(sample, 'v:0')
+      // A real picture stream is more than a packet header and less than the whole file.
+      expect(picture).toBeGreaterThan(0)
+      expect(picture).toBeLessThan(statSync(sample).size)
+      modelTotal +=
+        estimateVideoBytes({ frame, fps, seconds: window.seconds }) - videoOverheadBytes(window.seconds, true)
+      actualTotal += picture
+      audioTotal += packets(sample, 'a:0')
+      sampledSeconds += window.seconds
+    }
+
+    // The renderer measures both halves from the same sample: the picture's ratio to the model,
+    // and what the audio track really cost per second rather than the 128 kbps it asked for.
+    const factor = contentFactorFrom(modelTotal, actualTotal)
+    const audioRate = audioTotal / sampledSeconds
+    expect(audioRate).toBeGreaterThan(0)
+
+    // Both measured quantities are compared against the whole clip they were extrapolated to.
+    // The picture is the point: two 2-second slices predict a 4-second encode's picture stream.
+    const truePicture = packets(full, 'v:0')
+    const predictedPicture = Math.round(
+      (estimateVideoBytes({ frame, fps, seconds: 4 }) - videoOverheadBytes(4, true)) * factor
+    )
+    expect(Math.abs(predictedPicture - truePicture) / truePicture).toBeLessThan(0.03)
+
+    // And the audio rate carries across the length change, rather than the requested 128 kbps
+    // standing in for whatever the encoder actually spent.
+    const trueRate = packets(full, 'a:0') / 4
+    expect(Math.abs(audioRate - trueRate) / trueRate).toBeLessThan(0.05)
+
+    // The whole file, too, should land within the model's container constant's worth of slack.
+    const predicted = estimateVideoBytes({
+      frame,
+      fps,
+      seconds: 4,
+      correction: factor,
+      audioBytesPerSecond: audioRate
+    })
+    const trueSize = statSync(full).size
+    expect(Math.abs(predicted - trueSize) / trueSize).toBeLessThan(0.15)
   }, TIMEOUT)
 
   it('detects letterboxing with cropdetect', () => {

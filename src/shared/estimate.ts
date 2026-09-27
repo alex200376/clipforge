@@ -183,12 +183,38 @@ export function estimateAnimatedBytes({
  * export of the same source is what sharpens it into a real prediction.
  */
 const VIDEO_BITS_PER_PIXEL = 0.096
-/** The app's fixed audio bitrate, in bytes per second. */
-const AUDIO_BYTES_PER_SECOND = 16_000
+/**
+ * The audio bitrate the export asks for (128 kbps), in bytes per second.
+ *
+ * This is the *requested* rate, and most content lands on it - but an encoder given a quiet
+ * track spends less, so it is the model's starting point rather than the truth. A probe can
+ * replace it with what the encoder actually spent, which is what turns a few percent of
+ * over-prediction on a quiet clip into a measurement.
+ */
+export const DEFAULT_AUDIO_BYTES_PER_SECOND = 16_000
 /** MP4 headers, index and frame tables. */
 const CONTAINER_BYTES = 24 * 1024
 /** The share of a target size the encoder is aimed at, matching `targetVideoBitrate`. */
 const TARGET_SHARE = 0.94
+
+/**
+ * The bytes a video file spends before the picture: the container, and the audio track when
+ * there is one.
+ *
+ * Neither depends on the content, which is why a content ratio must not be applied to them.
+ * They also do not scale with the sample the way the picture does, so a ratio measured over a
+ * one-second probe and used over a whole clip has to leave them out of both sides - otherwise
+ * the sample's own audio and container are silently extrapolated to a length they do not grow
+ * with, which is where most of a few-percent over-prediction came from.
+ */
+export function videoOverheadBytes(
+  seconds: number,
+  audio: boolean,
+  audioBytesPerSecond = DEFAULT_AUDIO_BYTES_PER_SECOND
+): number {
+  const length = Math.max(0, seconds)
+  return CONTAINER_BYTES + (audio ? length * audioBytesPerSecond : 0)
+}
 
 /**
  * Whether a previous export's measured ratio can calibrate this estimate.
@@ -208,18 +234,20 @@ export function measurementAppliesToEstimate(
 /**
  * What a finished export taught the model about this source.
  *
- * `model` is the prediction before any correction was applied and `actual` is the file that was
- * written. The ratio has to be taken against `model` rather than the figure the panel showed:
- * that figure already carries the previous correction, so measuring against it composes the two
- * corrections instead of replacing the old one - and the estimate then swings back to the
- * uncorrected model on the very next export of the same clip.
+ * `model` is the prediction for the picture alone, before any correction, and `actual` is the
+ * picture's share of the file that was written - the audio track and the container are taken
+ * out of both, since the content does not decide them and they must not be scaled by a ratio
+ * measured on a different length. The ratio has to be taken against `model` rather than the
+ * figure the panel showed: that figure already carries the previous correction, so measuring
+ * against it composes the two corrections instead of replacing the old one - and the estimate
+ * then swings back to the uncorrected model on the very next export of the same clip.
  */
 export interface Measurement {
-  /** The model's own answer for the settings this export ran with, before any correction. */
+  /** The model's own answer for the picture, before any correction. */
   model: number
   /** The figure the panel promised, which is what the user compares the written file against. */
   shown: number
-  /** The size of the file that was actually written. */
+  /** The picture's share of the file that was actually written. */
   actual: number
   mode: 'gif' | 'video'
 }
@@ -237,16 +265,91 @@ export function measurementFrom(input: {
   actual: number
   mode: 'gif' | 'video'
   hasVideoTarget: boolean
+  /**
+   * The bytes the file spends on what the content does not change - a video's audio track and
+   * container. Removed from both `model` and `actual` so the ratio describes the picture, which
+   * is the one part the model has any hope of predicting. Zero for a GIF, which has neither.
+   */
+  overhead?: number
 }): Measurement | null {
   if (input.hasVideoTarget) return null
   if (!(input.model > 0) || !(input.shown > 0) || !(input.actual > 0)) return null
-  return { model: input.model, shown: input.shown, actual: input.actual, mode: input.mode }
+  const overhead = Math.max(0, input.overhead ?? 0)
+  return {
+    model: Math.max(1, input.model - overhead),
+    shown: input.shown,
+    actual: Math.max(1, input.actual - overhead),
+    mode: input.mode
+  }
 }
 
-/** How far a measurement says the model was out, as a multiplier on the model's own answer. */
+/**
+ * How far a measurement says the model was out about the picture, as a multiplier on the model's
+ * own answer for it.
+ */
 export function correctionFrom(measurement: Measurement): number {
   if (!(measurement.model > 0) || !(measurement.actual > 0)) return 1
   return Math.max(CORRECTION_MIN, Math.min(CORRECTION_MAX, measurement.actual / measurement.model))
+}
+
+/**
+ * The content factor a short probe of a clip measured, as a multiplier on the model.
+ *
+ * This is the same ratio `correctionFrom` reads, computed directly from a sample encode rather
+ * than from a finished export: `model` is what the model predicts for the sample's settings and
+ * `actual` is the file the encoder wrote. Both are the picture's share - a video's audio track
+ * and container come out of each first (see {@link videoOverheadBytes}), so the ratio describes
+ * the picture rather than the length of the sample. The bounds are shared with the export
+ * measurement because they answer the same question - a ratio outside them is a clip the model
+ * cannot describe at all, and letting one through would turn a single odd source into a
+ * permanently wrong readout.
+ *
+ * The probe is what makes the panel honest on the *first* export of a clip. Until now the only
+ * way to learn what the content cost was to spend a whole export learning it, and the model is
+ * content-blind by construction - its constants are measured on other clips, so it can be 2x out
+ * either way. A one-second sample costs a second and replaces that guess with a fact.
+ */
+export function contentFactorFrom(model: number, actual: number): number {
+  if (!(model > 0) || !(actual > 0)) return 1
+  return Math.max(CORRECTION_MIN, Math.min(CORRECTION_MAX, actual / model))
+}
+
+/** How many separate slices of a clip a size probe looks at. */
+export const PROBE_SAMPLE_WINDOWS = 3
+/** How long each slice runs, when the clip is long enough to spare it. */
+export const PROBE_SAMPLE_SECONDS = 2
+
+/**
+ * The slices of a clip a size probe should encode.
+ *
+ * One slice is a guess about the whole picture: a clip with a still title card, a bright scene
+ * and a dark one has three different costs, and whichever the probe happened to land on became
+ * the factor for all of it. So a probe takes several slices spread from the start of the
+ * selection to its end and pools what they cost, which is the same shape of answer the black-bar
+ * scan already gives - a handful of samples rather than one frame pretending to be the film.
+ *
+ * Each slice is at most {@link PROBE_SAMPLE_SECONDS} long and their number is capped by
+ * {@link PROBE_SAMPLE_WINDOWS}, so the cost of measuring stays bounded no matter how long the
+ * clip is. A clip too short to divide gets a single slice taken from its middle, since the start
+ * of a clip is the part most likely to be a title card or a fade.
+ */
+export function sampleProbeWindows(
+  start: number,
+  duration: number
+): Array<{ start: number; seconds: number }> {
+  const span = Math.max(0, duration)
+  const origin = Math.max(0, start)
+  const length = Math.min(PROBE_SAMPLE_SECONDS, Math.max(0.2, span || PROBE_SAMPLE_SECONDS))
+  const count = Math.max(1, Math.min(PROBE_SAMPLE_WINDOWS, Math.floor(span / length)))
+  if (count === 1) {
+    return [{ start: origin + Math.max(0, (span - length) / 2), seconds: length }]
+  }
+  const windows: Array<{ start: number; seconds: number }> = []
+  for (let index = 0; index < count; index += 1) {
+    const offset = (span - length) * (index / (count - 1))
+    windows.push({ start: origin + offset, seconds: length })
+  }
+  return windows
 }
 
 export interface VideoEstimateInput {
@@ -257,7 +360,19 @@ export interface VideoEstimateInput {
   targetBytes?: number | null
   /** False when the audio track is muted, which changes the answer for short clips. */
   audio?: boolean
-  /** Actual/estimated from the last export of this source, to sharpen the model. */
+  /**
+   * The audio bitrate to count, in bytes per second.
+   *
+   * Defaults to the rate the export asks for. A probe replaces it with what the encoder spent
+   * per second of the sample, which is content-dependent and can be well under the request.
+   */
+  audioBytesPerSecond?: number
+  /**
+   * What the picture costs against the model's guess, from the last export of this source or a
+   * probe of it. It scales the picture alone: the audio track and container are the same bytes
+   * whatever the content does, and scaling them by a ratio measured on another length is what
+   * made a short probe over-predict a whole clip.
+   */
   correction?: number
 }
 
@@ -276,6 +391,7 @@ export function estimateVideoBytes({
   seconds,
   targetBytes = null,
   audio = true,
+  audioBytesPerSecond,
   correction = 1
 }: VideoEstimateInput): number {
   const length = Math.max(0, seconds)
@@ -283,8 +399,8 @@ export function estimateVideoBytes({
   const frames = Math.max(1, Math.round(length * fps))
   const pixels = Math.max(1, frame.width * frame.height)
   const video = (pixels * frames * VIDEO_BITS_PER_PIXEL) / 8
-  const track = audio ? length * AUDIO_BYTES_PER_SECOND : 0
-  return Math.round((video + track + CONTAINER_BYTES) * (correction > 0 ? correction : 1))
+  const rate = audioBytesPerSecond && audioBytesPerSecond > 0 ? audioBytesPerSecond : DEFAULT_AUDIO_BYTES_PER_SECOND
+  return Math.round(video * (correction > 0 ? correction : 1) + videoOverheadBytes(length, audio, rate))
 }
 
 export interface BudgetStep {

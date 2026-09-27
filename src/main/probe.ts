@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 
 import { ClipForgeError } from '../shared/errors'
+import { sumPacketSizes } from '../shared/mediaArgs'
 import { isRemoteUrl } from '../shared/sources'
 import type { MediaInfo } from '../shared/types'
 import { findBinary, missingBinaryError } from './binaries'
@@ -29,13 +30,9 @@ function parseRate(value: string | undefined): number {
   return n / d
 }
 
-function runFfprobe(ffprobe: string, target: string): Promise<string> {
+function runFfprobe(ffprobe: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      ffprobe,
-      ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', target],
-      { windowsHide: true }
-    )
+    const child = spawn(ffprobe, args, { windowsHide: true })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => {
@@ -64,7 +61,9 @@ export async function probeLocalFile(filePath: string): Promise<MediaInfo> {
   }
   const ffprobe = findBinary('ffprobe')
   if (!ffprobe) throw missingBinaryError('ffprobe')
-  const payload = JSON.parse(await runFfprobe(ffprobe, filePath)) as ProbePayload
+  const payload = JSON.parse(
+    await runFfprobe(ffprobe, ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', filePath])
+  ) as ProbePayload
   const video = payload.streams?.find((stream) => stream.codec_type === 'video')
   const audio = payload.streams?.find((stream) => stream.codec_type === 'audio')
   // The codecs come free with the same probe - `-show_streams` was already asked for - and
@@ -80,5 +79,38 @@ export async function probeLocalFile(filePath: string): Promise<MediaInfo> {
     isUrl: false,
     videoCodec: video?.codec_name ?? '',
     audioCodec: audio?.codec_name ?? ''
+  }
+}
+
+/**
+ * Sums the bytes one stream actually spent, by adding up the muxer's own packet sizes.
+ *
+ * The size probe needs what the picture weighed, not what the file weighed: the file also
+ * carries an audio track and a container, which the content does not decide. ffprobe reports a
+ * `size` for every packet, so adding the video stream's is the encoder's own answer rather than
+ * the model's guess, and it costs one pass over a two-second file's packets.
+ *
+ * Answers 0 rather than throwing when ffprobe is missing or the file has no such stream: the
+ * probe has a fallback, and a measurement that could not be taken is not a failed export.
+ */
+export async function sumStreamBytes(filePath: string, kind: 'video' | 'audio' = 'video'): Promise<number> {
+  if (isRemoteUrl(filePath) || !existsSync(filePath)) return 0
+  const ffprobe = findBinary('ffprobe')
+  if (!ffprobe) return 0
+  try {
+    const output = await runFfprobe(ffprobe, [
+      '-v',
+      'error',
+      '-select_streams',
+      kind === 'audio' ? 'a:0' : 'v:0',
+      '-show_entries',
+      'packet=size',
+      '-of',
+      'csv=p=0',
+      filePath
+    ])
+    return sumPacketSizes(output)
+  } catch {
+    return 0
   }
 }

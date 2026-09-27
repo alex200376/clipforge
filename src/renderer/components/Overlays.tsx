@@ -10,6 +10,7 @@ import { Slider } from './ui/slider'
 import { useI18n } from '../i18n'
 import type { TranslationKey } from '../i18n'
 import type { ErrorNotice } from '../types'
+import { verdictOf } from '../ai/quality'
 import type { FillQuality } from '../ai/quality'
 
 /**
@@ -121,6 +122,9 @@ export function FrameCompare({
     seconds: number
     windows: number
     quality?: FillQuality
+    /** The edge width the preview settled on, and whether a second one was compared. */
+    feather?: number
+    compared?: boolean
   } | null
   onClose: () => void
 }): JSX.Element | null {
@@ -163,6 +167,22 @@ export function FrameCompare({
               </>
             )}
           </DialogDescription>
+          {/*
+            What the numbers add up to, in words, and which of the two edge widths produced the
+            frame on screen. This is the decision the preview exists to support, so it is stated
+            rather than left to be inferred from two decimals.
+          */}
+          <div className="flex flex-col gap-1 text-sm">
+            {preview.quality && (
+              <span className="text-soft">{t(`watermark.preview.verdict.${verdictOf(preview.quality)}` as TranslationKey)}</span>
+            )}
+            {typeof preview.feather === 'number' && (
+              <span className="text-xs text-dim">
+                {t('watermark.preview.edge', { pixels: preview.feather })}
+                {preview.compared ? ` · ${t('watermark.preview.compared')}` : ''}
+              </span>
+            )}
+          </div>
         </DialogHeader>
 
         <div
@@ -225,6 +245,7 @@ const SHORTCUTS: Array<{ keys: string[]; label: TranslationKey }> = [
   { keys: ['I', 'O'], label: 'shortcuts.inOut' },
   { keys: ['Alt'], label: 'shortcuts.snap' },
   { keys: ['Ctrl', 'V'], label: 'shortcuts.paste' },
+  { keys: ['Ctrl', 'K'], label: 'shortcuts.palette' },
   { keys: ['Ctrl', '1', '2'], label: 'shortcuts.panels' },
   { keys: ['F11'], label: 'shortcuts.fullscreen' },
   { keys: ['?'], label: 'shortcuts.help' }

@@ -134,6 +134,14 @@ export interface EstimateView {
   measured: Measurement | null
   /** True when the last measured export can legitimately calibrate this estimate. */
   measurementApplies: boolean
+  /**
+   * True when the calibration came from a size probe rather than from a finished export.
+   *
+   * Worth telling apart, because the two sentences the panel puts under the number are
+   * different: an export replaced the model with the file it wrote, while a probe measured a
+   * one-second sample and applied the ratio to settings it did not encode.
+   */
+  sampled: boolean
 }
 
 export interface InstallViewState {

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  AI_FEATHER,
+  AI_FEATHER_ALTERNATE,
   AI_INPUT,
   AI_MASK_GROW,
   AI_TILE_CONTEXT,
   AI_TILE_OVERLAP,
+  alternateFeather,
   boxInModel,
   contextMargin,
   featherAlpha,
@@ -515,5 +518,24 @@ describe('the fade-in ramp between windows', () => {
     // in a hard line exactly where the mark does.
     expect(patchRamp(patchBox, 0, 0, { overlap: AI_TILE_OVERLAP, leading: { left: false, top: false } })).toBe(1)
     expect(patchRamp(patchBox, 0, 0, { overlap: AI_TILE_OVERLAP, leading: { left: true, top: true } })).toBeLessThan(0.001)
+  })
+})
+
+describe('the two edge widths a fill is compared at', () => {
+  it('are two different, positive widths, and the alternate is the softer one', () => {
+    expect(AI_FEATHER).toBeGreaterThan(0)
+    expect(AI_FEATHER_ALTERNATE).toBeGreaterThan(AI_FEATHER)
+  })
+
+  it('flips to the other width, whichever one it is handed', () => {
+    expect(alternateFeather(AI_FEATHER)).toBe(AI_FEATHER_ALTERNATE)
+    expect(alternateFeather(AI_FEATHER_ALTERNATE)).toBe(AI_FEATHER)
+  })
+
+  it('answers with the other width, so a caller is never sent back to the one it rejected', () => {
+    // 3 is nearer the default 2, so the width worth trying instead is the soft one - and 5 is
+    // nearer the soft one, so the alternative it gets is the default back.
+    expect(alternateFeather(AI_FEATHER + 1)).toBe(AI_FEATHER_ALTERNATE)
+    expect(alternateFeather(AI_FEATHER_ALTERNATE - 1)).toBe(AI_FEATHER)
   })
 })

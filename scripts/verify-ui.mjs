@@ -1064,6 +1064,68 @@ record(
     `openLayers=${leftovers.layers} bodyPointerEvents=${leftovers.bodyPointer}`
   )
 
+  // ---------------------------------------------------------------- 4c. the size was measured
+  // The panel promises a size before anything is exported. Assert that promise describes *this*
+  // clip: a one-second probe encodes a sample on load and replaces the content-blind model, so
+  // the note under the number should say so rather than quoting the model's uncertainty band.
+  let sizeNote = ''
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    sizeNote = await evaluate(
+      `document.querySelector('[data-slot="estimate-note"]')?.textContent?.trim() ?? ''`
+    )
+    if (/sample|樣本|measured against this clip|實際匯出校正/.test(sizeNote)) break
+    await sleep(250)
+  }
+  record(
+    'the size readout is calibrated to this clip, not left on the model',
+    /sample|樣本|measured against this clip|實際匯出校正/.test(sizeNote),
+    `note="${sizeNote}"`
+  )
+
+  // ---------------------------------------------------------------- 4d. the box, typed
+  // The crop editor's numbers are what let a box be *specified* rather than dragged; assert that
+  // typing one reaches the box, and that the panel reads the value back. The crop is switched on
+  // here if the panel left it off, because the fields only exist while it is on.
+  const cropReady = await evaluate(`(() => {
+    if (document.querySelector('[data-slot="box-fields"]')) return 'already'
+    const control = [...document.querySelectorAll('[role="checkbox"]')]
+      .find((el) => /crop|裁切/i.test(el.getAttribute('aria-label') || ''))
+    if (!control) return 'missing'
+    control.click()
+    return 'enabled'
+  })()`)
+  await sleep(800)
+  const typedBox = await evaluate(`(() => {
+    const box = document.querySelector('[data-slot="box-fields"]')
+    if (!box) return { found: false }
+    const fields = [...box.querySelectorAll('[data-slot="number-field"]')]
+    if (fields.length < 4) return { found: false, count: fields.length }
+    const width = fields[2]
+    const before = width.value
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    const next = String(Number(before) - 40)
+    width.focus()
+    setter.call(width, next)
+    width.dispatchEvent(new Event('input', { bubbles: true }))
+    width.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    return { found: true, count: fields.length, before, next }
+  })()`)
+  await sleep(500)
+  const boxAfter = await evaluate(`(() => {
+    const box = document.querySelector('[data-slot="box-fields"]')
+    const fields = box ? [...box.querySelectorAll('[data-slot="number-field"]')] : []
+    return { width: fields[2]?.value ?? null }
+  })()`)
+  // H.264 needs even dimensions, so the typed value lands on the even pixel at or below it.
+  const expectedBoxWidth = typedBox.found
+    ? String(Math.max(32, Math.floor((Number(typedBox.before) - 40) / 2) * 2))
+    : null
+  record(
+    'a crop box can be typed, and the box takes the value',
+    typedBox.found === true && typedBox.count >= 4 && boxAfter.width === expectedBoxWidth,
+    `enable=${cropReady} fields=${typedBox.count} ${typedBox.before} → typed ${typedBox.next} → ${boxAfter.width} (expected ${expectedBoxWidth})`
+  )
+
 // ---------------------------------------------------------------- 5. the dialog is a dialog
 const shortcutTrigger = await evaluate(`(() => {
   const trigger = [...document.querySelectorAll('button')].find((el) => /shortcut/i.test(el.getAttribute('aria-label') || ''))
@@ -1094,7 +1156,9 @@ const opened = await evaluate(`(() => {
 })()`)
 record(
   'every shortcut row draws its keys as grouped chips',
-  opened.kbdGroups === 9 && opened.keys === 16 && opened.rows === 9 && opened.keyEdges === 1,
+  // 10 rows now that the command palette (Ctrl+K) is on the sheet: one row per shortcut, every
+  // row's keys in one group, and every group starting at the same x.
+  opened.kbdGroups === 10 && opened.keys === 18 && opened.rows === 10 && opened.keyEdges === 1,
   `groups=${opened.kbdGroups} keys=${opened.keys} rows=${opened.rows} distinctKeyColumns=${opened.keyEdges}`
 )
 for (let press = 0; press < 5; press += 1) await key('Tab')
@@ -1127,6 +1191,71 @@ record(
   'Escape closes it and focus returns to the trigger',
   closed === true && focusBack.back === true,
   `closed=${closed} focusOn=${focusBack.label} at=${focusBack.where} · triggerFocusedBefore=${sheet.wasFocused}`
+)
+
+// ---------------------------------------------------------------- 5b. the command palette
+await key('k', 2)
+await sleep(450)
+const palette = await evaluate(`(() => {
+  const dialog = document.querySelector('[data-slot="dialog-content"]')
+  const list = document.querySelector('[data-slot="command-list"]')
+  if (!dialog || !list) return { open: false }
+  return {
+    open: true,
+    groups: [...list.querySelectorAll('[data-slot="command-group"]')].map((el) => (el.textContent || '').trim()),
+    rows: list.querySelectorAll('[role="option"]').length
+  }
+})()`)
+record('Ctrl+K opens the command palette, sectioned and populated', palette.open === true && palette.rows > 0, JSON.stringify(palette))
+
+/** Sets the palette's field the way React reads it, so the filter really re-runs. */
+const typeQuery = (value) =>
+  evaluate(`(() => {
+    const input = document.querySelector('[data-slot="dialog-content"] input')
+    if (!input) return false
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, ${JSON.stringify(value)})
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.focus()
+    return true
+  })()`)
+
+await typeQuery('settings')
+await sleep(350)
+const filtered = await evaluate(`(() => {
+  const list = document.querySelector('[data-slot="command-list"]')
+  if (!list) return null
+  return { rows: [...list.querySelectorAll('[role="option"]')].map((el) => (el.textContent || '').trim()) }
+})()`)
+record(
+  'typing narrows the palette to the matching command',
+  filtered !== null && filtered.rows.some((row) => /settings/i.test(row)) && filtered.rows.length < palette.rows,
+  JSON.stringify(filtered)
+)
+
+await typeQuery('shortcuts')
+await sleep(350)
+await key('Enter')
+await sleep(500)
+const ran = await evaluate(`(() => {
+  const dialog = document.querySelector('[data-slot="dialog-content"]')
+  return {
+    paletteGone: !document.querySelector('[data-slot="command-list"]'),
+    dialogs: document.querySelectorAll('[data-slot="dialog-content"]').length,
+    title: dialog?.querySelector('[data-slot="dialog-title"]')?.textContent ?? null
+  }
+})()`)
+record(
+  'Enter runs the highlighted command and closes the palette',
+  ran.paletteGone === true && /shortcut/i.test(ran.title || ''),
+  JSON.stringify(ran)
+)
+await key('Escape')
+await sleep(500)
+record(
+  'the dialog a palette command opened closes again',
+  (await evaluate(`document.querySelectorAll('[data-slot="dialog-content"]').length`)) === 0,
+  'dialogs left open'
 )
 
 // ---------------------------------------------------------------- 6. it fits, and how it looks

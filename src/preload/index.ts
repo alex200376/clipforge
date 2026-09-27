@@ -31,6 +31,8 @@ import type {
   StorageTarget,
   ToolVersion,
   PreviewSource,
+  SizeProbeRequest,
+  SizeProbeResult,
   UpdateState,
   UrlMetadata,
   VideoRequest,
@@ -72,6 +74,8 @@ const api: ClipForgeApi = {
   toolVersions: () => ipcRenderer.invoke('clipforge:deps:versions') as Promise<ToolVersion[]>,
   hardwareProfile: () => ipcRenderer.invoke('clipforge:hardware') as Promise<HardwareProfile>,
   detectCrop: (request: CropRequest) => ipcRenderer.invoke('clipforge:media:crop', request) as Promise<CropDetection>,
+  probeSize: (request: SizeProbeRequest) =>
+    ipcRenderer.invoke('clipforge:estimate:probe', request) as Promise<SizeProbeResult>,
   revealInFolder: (filePath: string) => ipcRenderer.invoke('clipforge:shell:reveal', filePath) as Promise<void>,
   openFile: (filePath: string) => ipcRenderer.invoke('clipforge:shell:open', filePath) as Promise<string>,
   openOutputFolder: () => ipcRenderer.invoke('clipforge:shell:open-output') as Promise<void>,

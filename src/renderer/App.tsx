@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { errorPayload, errorMessage } from '../shared/errors'
 import {
+  contentFactorFrom,
   correctionFrom,
+  estimateAnimatedBytes,
   estimateAnimatedRange,
   estimateVideoBytes,
   fitToBudget,
   measurementAppliesToEstimate,
   measurementFrom,
   outputDimensions,
+  sampleProbeWindows,
+  videoOverheadBytes,
   type Measurement
 } from '../shared/estimate'
 import { gifLimitBytes } from '../shared/gifLimit'
@@ -55,6 +59,7 @@ import type {
   WindowState
 } from '../shared/types'
 import { ActivityLog } from './components/ActivityLog'
+import { CommandPalette } from './components/CommandPalette'
 import { ExportPanel } from './components/ExportPanel'
 import { planSteps } from './progress'
 import { useExportProgress } from './useProgress'
@@ -79,6 +84,7 @@ import { clockTime, formatBytes, formatTime } from './format'
 import { codedFailureMessage, localizedError, stageLabel, useI18n } from './i18n'
 import { adoptProbe } from './sourceAdoption'
 import { EMPTY_QUEUE, dismissKind, dismissNotice, pushNotice } from './notices'
+import type { Command } from './commands'
 import type { NoticeDraft, NoticeQueue } from './notices'
 import type {
   ErrorNotice,
@@ -279,9 +285,29 @@ export function App({ initialSettings }: Props): JSX.Element {
   const [panelTab, setPanelTab] = useState<PanelTab>('export')
   const [dropping, setDropping] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [guideOpen, setGuideOpen] = useState(!seed.onboarded)
   const [sessionName, setSessionName] = useState<string | null>(null)
   const [measured, setMeasured] = useState<Measurement | null>(null)
+  /**
+   * What a short probe of this clip measured about its content.
+   *
+   * Keyed by source and mode, because a GIF and a re-encoded video cost differently and a factor
+   * learned for one says nothing about the other. The probe runs at most once per key, so moving
+   * a knob does not re-encode a sample; the ratio it leaves describes the content, not the
+   * settings it was taken at.
+   */
+  const [contentProbe, setContentProbe] = useState<{
+    key: string
+    mode: 'gif' | 'video'
+    /** Pooled picture bytes: what the model predicted, and what the encoder spent. */
+    model: number
+    actual: number
+    /** Video only: what the encoder really spent on the audio, per second of sample. */
+    audioBytesPerSecond?: number
+  } | null>(null)
+  const probedKeys = useRef<Set<string>>(new Set())
+  const probeToken = useRef(0)
   // The window is frameless, so the renderer mirrors its frame state: the controls
   // swap in a restore glyph, and fullscreen drops chrome that has nowhere to sit.
   const [chrome, setChrome] = useState<WindowState>({ maximized: false, fullscreen: false })
@@ -932,6 +958,14 @@ export function App({ initialSettings }: Props): JSX.Element {
         setPanelTab(event.key === '1' ? 'export' : 'output')
         return
       }
+      // The palette opens from anywhere, including from inside a text field: a user who is
+      // halfway through typing a URL and remembers the action they wanted should not have to
+      // click away first.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen(true)
+        return
+      }
       const target = event.target as HTMLElement | null
       const tag = target?.tagName
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable
@@ -1100,6 +1134,32 @@ export function App({ initialSettings }: Props): JSX.Element {
    */
   const measurementApplies = measurementAppliesToEstimate(measured?.mode, mode, !isGif && size !== 'original')
   const applicableMeasurement = measurementApplies ? measured : null
+  /** Which kind of estimate the probe in flight is for, and the identity of its result. */
+  const probeMode: 'gif' | 'video' = isGif ? 'gif' : 'video'
+  const probeKey = source ? `${source.path}|${probeMode}` : null
+
+  /**
+   * The content factor a probe of this clip measured, when one applies here.
+   *
+   * A finished export of the same source measures the same thing better - it encoded the real
+   * settings for the whole clip - so it wins where both exist. They are deliberately not
+   * multiplied: both describe the content, and composing them would count it twice.
+   */
+  const probeApplies = Boolean(contentProbe && probeKey !== null && contentProbe.key === probeKey)
+  const probeFactor =
+    probeApplies && contentProbe ? contentFactorFrom(contentProbe.model, contentProbe.actual) : 1
+  /**
+   * What the probe measured the audio track costing, per second.
+   *
+   * `undefined` means nothing was measured - no probe, or a muted clip - and the model's
+   * requested 128 kbps stands. A finished export takes precedence with the probe, and it does
+   * not carry a measured audio rate, so its own rate is left to the model.
+   */
+  const probeAudioRate =
+    probeApplies && !measurementApplies && contentProbe?.audioBytesPerSecond && contentProbe.audioBytesPerSecond > 0
+      ? contentProbe.audioBytesPerSecond
+      : undefined
+
   /**
    * The model is corrected against its own uncorrected answer, never against the figure shown.
    *
@@ -1108,12 +1168,14 @@ export function App({ initialSettings }: Props): JSX.Element {
    * collapsed back to the raw model on the next export of the same clip.
    */
   const calibration = useMemo(
-    () => (applicableMeasurement ? correctionFrom(applicableMeasurement) : 1),
-    [applicableMeasurement]
+    () => (applicableMeasurement ? correctionFrom(applicableMeasurement) : probeFactor),
+    [applicableMeasurement, probeFactor]
   )
 
-  /** Whether the content model has been replaced by a real measurement for these settings. */
-  const calibrated = measurementApplies
+  /** Whether the content model has been replaced by something measured about this source. */
+  const calibrated = measurementApplies || probeApplies
+  /** True when that measurement was a probe rather than a finished export. */
+  const sampled = !measurementApplies && probeApplies
   const budget = gifLimitBytes(limit)
 
   /**
@@ -1121,7 +1183,7 @@ export function App({ initialSettings }: Props): JSX.Element {
    * numbers the panel promises are the ones the export uses.
    */
   const estimate: EstimateView = useMemo(() => {
-    const nothing = { range: null, calibrated, enforcing: false, measurementApplies }
+    const nothing = { range: null, calibrated, sampled, enforcing: false, measurementApplies }
     if (!source) return { ...nothing, bytes: null, fitted: null, measured: applicableMeasurement, unknown: 'noClip' }
     if (clipSeconds <= 0) return { ...nothing, bytes: null, fitted: null, measured: applicableMeasurement, unknown: 'noLength' }
     // No frame size yet: the clip is known but its dimensions are not, which is "still
@@ -1139,6 +1201,7 @@ export function App({ initialSettings }: Props): JSX.Element {
           seconds: clipSeconds,
           targetBytes: videoSizeBytes(size),
           audio: !mute,
+          audioBytesPerSecond: probeAudioRate,
           correction: calibration
         }),
         fitted: null,
@@ -1148,6 +1211,7 @@ export function App({ initialSettings }: Props): JSX.Element {
         // rather than being re-encoded to fit afterwards.
         range: null,
         calibrated,
+        sampled,
         enforcing: false,
         measurementApplies
       }
@@ -1161,7 +1225,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     const input = { format, frame: outputFrame, fps, seconds: clipSeconds, calibration, calibrated, quality, gif }
     const plain = estimateAnimatedRange(input)
     if (budget === null) {
-      return { bytes: plain.bytes, range: { low: plain.low, high: plain.high }, fitted: null, measured: applicableMeasurement, unknown: null, calibrated, enforcing: false, measurementApplies }
+      return { bytes: plain.bytes, range: { low: plain.low, high: plain.high }, fitted: null, measured: applicableMeasurement, unknown: null, calibrated, sampled, enforcing: false, measurementApplies }
     }
     const fitted = fitToBudget({ ...input, budgetBytes: budget })
     return {
@@ -1182,12 +1246,159 @@ export function App({ initialSettings }: Props): JSX.Element {
       measured: applicableMeasurement,
       unknown: null,
       calibrated,
+      sampled,
       measurementApplies,
       // The fit is a prediction too, so the limit is only a promise once the file has been
       // re-encoded to meet it - which is what happens if the first pass overshoots.
       enforcing: true
     }
-  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, calibrated, budget, applicableMeasurement, measurementApplies, tuning, engine, optimize, gifsicleReady, quality])
+  }, [isGif, source, size, outputFrame, clipSeconds, format, fps, mute, calibration, calibrated, sampled, budget, applicableMeasurement, measurementApplies, probeAudioRate, tuning, engine, optimize, gifsicleReady, quality])
+
+  /**
+   * Measures this clip's content once, so the first estimate describes the clip in front of the
+   * user rather than the clips the model's constants were measured on.
+   *
+   * A probe is a real encode, so it is deliberately rare: at most one per source and mode,
+   * skipped while an export is running, and taken from the middle of the selection so a black
+   * intro does not stand in for the clip. A probe that cannot run - the tools are still being
+   * installed, or the encoder refused the sample - is not something to tell the user about: the
+   * key is dropped so a later attempt can retry, and until one succeeds the estimate is exactly
+   * the model it was before this existed.
+   */
+  useEffect(() => {
+    if (!source || !probeKey || busy) return
+    if (!outputFrame || clipSeconds <= 0) return
+    if (probeMode === 'video' && !(source.fps > 0)) return
+    if (!dependencies.some((entry) => entry.name === 'ffmpeg' && entry.available)) return
+    if (
+      probeMode === 'gif' &&
+      format === 'gif' &&
+      engine === 'gifski' &&
+      !dependencies.some((entry) => entry.name === 'gifski' && entry.available)
+    ) {
+      return
+    }
+    // A link is measured from its downloaded copy: before the preview exists there is nothing
+    // local to encode, and the render after it arrives tries again.
+    const target = source.kind === 'url' ? preview?.url : (preview?.url ?? source.path)
+    if (!target) return
+    if (probedKeys.current.has(probeKey)) return
+    probedKeys.current.add(probeKey)
+
+    const token = probeToken.current + 1
+    probeToken.current = token
+    // Several slices spread across the selection, not one: a clip's cost changes with the scene,
+    // so one slice makes the whole estimate whatever that slice happened to be. Both sides of
+    // the ratio are pooled over the slices, which is a weighted average of the content rather
+    // than a bet on one second of it.
+    const windows = sampleProbeWindows(range.start, Math.max(0, range.end - range.start))
+
+    void (async () => {
+      try {
+        let modelTotal = 0
+        let actualTotal = 0
+        let audioTotal = 0
+        let sampledSeconds = 0
+        for (const slice of windows) {
+          const outcome = await window.clipforge.probeSize({
+            source: target,
+            isUrl: false,
+            mode: probeMode,
+            format,
+            engine,
+            width: isGif ? width : null,
+            fps,
+            quality,
+            tuning,
+            optimize: optimize && gifsicleReady,
+            crop: activeCrop,
+            mute,
+            encoder,
+            start: slice.start,
+            seconds: slice.seconds
+          })
+          // A newer probe has taken over: the answer here is about settings nobody is looking
+          // at any more, so it is dropped rather than pooled.
+          if (token !== probeToken.current) return
+          if (!outcome.ok || !(outcome.bytes && outcome.bytes > 0)) continue
+          const model =
+            probeMode === 'gif'
+              ? estimateAnimatedBytes({
+                  format,
+                  frame: outputFrame,
+                  fps,
+                  seconds: slice.seconds,
+                  quality,
+                  gif: { tuning, engine, optimize: optimize && gifsicleReady, quality }
+                })
+              : estimateVideoBytes({
+                  frame: outputFrame,
+                  fps: source.fps,
+                  seconds: slice.seconds,
+                  targetBytes: null,
+                  audio: !mute
+                })
+          // The model counts an audio track and a container for this slice, but the content
+          // model is about the picture, so they come off both sides. For a video the encoder's
+          // own picture bytes are used when ffprobe could read them, which needs no assumption
+          // about how much the audio and the container weighed.
+          const overhead = probeMode === 'video' ? videoOverheadBytes(slice.seconds, !mute) : 0
+          const picture = probeMode === 'video' ? model - overhead : model
+          const actual =
+            probeMode === 'video' && outcome.videoBytes && outcome.videoBytes > 0
+              ? outcome.videoBytes
+              : outcome.bytes - overhead
+          if (!(picture > 0) || !(actual > 0)) continue
+          modelTotal += picture
+          actualTotal += actual
+          if (probeMode === 'video' && outcome.audioBytes && outcome.audioBytes > 0) {
+            audioTotal += outcome.audioBytes
+            sampledSeconds += slice.seconds
+          }
+        }
+        if (!(modelTotal > 0) || !(actualTotal > 0)) {
+          probedKeys.current.delete(probeKey)
+          return
+        }
+        // The export asks for 128 kbps, but the encoder only spends that on content that needs
+        // it. Measuring what the sample's own track cost is the difference between assuming and
+        // knowing, and quiet clips are where the assumption was worst.
+        const audioBytesPerSecond = sampledSeconds > 0 ? audioTotal / sampledSeconds : undefined
+        setContentProbe({
+          key: probeKey,
+          mode: probeMode,
+          model: modelTotal,
+          actual: actualTotal,
+          ...(audioBytesPerSecond && audioBytesPerSecond > 0 ? { audioBytesPerSecond } : {})
+        })
+      } catch {
+        probedKeys.current.delete(probeKey)
+      }
+    })()
+  }, [
+    source,
+    probeKey,
+    probeMode,
+    busy,
+    outputFrame,
+    clipSeconds,
+    preview,
+    format,
+    engine,
+    dependencies,
+    width,
+    fps,
+    quality,
+    tuning,
+    optimize,
+    gifsicleReady,
+    activeCrop,
+    mute,
+    encoder,
+    range.start,
+    range.end,
+    isGif
+  ])
 
   // With a limit active the export follows the fitted numbers, not the sliders - including the
   // picture quality, which the fit is allowed to spend before it touches the frame size.
@@ -1516,12 +1727,32 @@ export function App({ initialSettings }: Props): JSX.Element {
           // and a fixed target is left out entirely, being arithmetic rather than content.
           // Left out rather than cleared: it says nothing new about the picture, so a
           // measurement of this clip from an unlimited export is still the best thing known.
+          // The video correction scales the picture, not the file, so the model half of the
+          // measurement cannot be recovered by dividing the shown figure - it is recomputed,
+          // uncorrected, for exactly the length this export ran at. A GIF carries its
+          // calibration on the whole prediction, so dividing is still correct there.
+          const rawModel =
+            isGif || !outputFrame || !(source.fps > 0)
+              ? calibration > 0
+                ? expected / calibration
+                : expected
+              : estimateVideoBytes({
+                  frame: outputFrame,
+                  fps: source.fps,
+                  seconds: clipSeconds,
+                  targetBytes: null,
+                  audio: !mute,
+                  audioBytesPerSecond: probeAudioRate
+                })
           const learned = measurementFrom({
-            model: calibration > 0 ? expected / calibration : expected,
+            model: rawModel,
             shown: expected,
             actual: result.sizeBytes,
             mode: isGif ? 'gif' : 'video',
-            hasVideoTarget: !isGif && size !== 'original'
+            hasVideoTarget: !isGif && size !== 'original',
+            // The same rate the estimate used, so the measurement's picture share and the
+            // estimate's disagree about nothing.
+            overhead: isGif ? 0 : videoOverheadBytes(clipSeconds, !mute, probeAudioRate)
           })
           if (learned) setMeasured(learned)
         }
@@ -1610,6 +1841,7 @@ export function App({ initialSettings }: Props): JSX.Element {
     settings.outputDir,
     estimate.bytes,
     calibration,
+    probeAudioRate,
     fail,
     failExport,
     failWith,
@@ -1860,14 +2092,29 @@ export function App({ initialSettings }: Props): JSX.Element {
         source: target,
         isUrl: false,
         start: range.start,
-        duration: Math.max(1, Math.min(range.end - range.start || source.duration, 6)),
+        // The whole selection, not a fixed middle window: the main process splits it into a few
+        // short samples across its length, so an intro over black or a letterbox that appears
+        // partway through is seen rather than averaged away.
+        duration: Math.max(1, range.end - range.start || source.duration),
         width: source.width,
         height: source.height
       })
       if (detected.crop) {
         setCrop(detected.crop)
         setCropEnabled(true)
-        pushLog(t('crop.found', { width: detected.crop.width, height: detected.crop.height }))
+        const vars = {
+          width: detected.crop.width,
+          height: detected.crop.height,
+          percent: Math.round(detected.agreement * 100),
+          samples: detected.samples
+        }
+        // A close vote is reported as one rather than dressed up as a confident find: the whole
+        // point of sampling is to say when the answer is not settled.
+        pushLog(
+          detected.samples > 1 && detected.agreement < 0.6
+            ? t('crop.foundUncertain', vars)
+            : t('crop.foundSamples', vars)
+        )
       } else {
         pushLog(t('crop.none'))
       }
@@ -2135,6 +2382,125 @@ export function App({ initialSettings }: Props): JSX.Element {
       .catch(() => undefined)
   }, [logs, showNotice, t])
 
+  /**
+   * Every action the palette can offer, in the order it lists them for an empty query.
+   *
+   * Built here rather than in the palette because the palette knows nothing about this app: it
+   * is handed a translated, runnable list and ranks it. A command that cannot run right now is
+   * still listed with `enabled: false`, so the palette teaches the action exists instead of
+   * hiding it until the moment it happens to work.
+   */
+  const commands = useMemo<Command[]>(
+    () => [
+      {
+        id: 'media.load',
+        title: t('palette.cmd.loadMedia'),
+        group: t('palette.group.media'),
+        keywords: ['open', 'import', 'file'],
+        enabled: !busy,
+        run: () => {
+          void window.clipforge.pickMedia().then((info) => {
+            if (info) loadMedia(info, 'file')
+          })
+        }
+      },
+      {
+        id: 'media.pasteLink',
+        title: t('palette.cmd.pasteLink'),
+        group: t('palette.group.media'),
+        keywords: ['url', 'clipboard', 'youtube'],
+        enabled: !busy,
+        run: () => {
+          void window.clipforge
+            .readClipboard()
+            .then((text) => {
+              const value = text.trim()
+              if (value.length === 0) return
+              setUrl(value)
+              if (/^https?:/i.test(value)) void resolveUrl(value)
+            })
+            .catch(() => undefined)
+        }
+      },
+      {
+        id: 'export.run',
+        title: t('palette.cmd.export'),
+        group: t('palette.group.export'),
+        keywords: ['save', 'render', 'gif', 'video'],
+        enabled: Boolean(source) && !busy,
+        run: () => void runExport()
+      },
+      {
+        id: 'export.panel',
+        title: t('palette.cmd.exportPanel'),
+        group: t('palette.group.export'),
+        enabled: true,
+        run: () => {
+          setPage('home')
+          setPanelTab('export')
+        }
+      },
+      {
+        id: 'export.outputPanel',
+        title: t('palette.cmd.outputPanel'),
+        group: t('palette.group.export'),
+        keywords: ['result', 'preview'],
+        enabled: true,
+        run: () => {
+          setPage('home')
+          setPanelTab('output')
+        }
+      },
+      {
+        id: 'crop.detect',
+        title: t('palette.cmd.detectCrop'),
+        group: t('palette.group.crop'),
+        keywords: ['letterbox', 'bars', 'black'],
+        enabled: Boolean(source) && !cropBusy,
+        run: () => void detectCrop()
+      },
+      {
+        id: 'watermark.detect',
+        title: t('palette.cmd.detectWatermark'),
+        group: t('palette.group.watermark'),
+        keywords: ['logo', 'delogo', 'inpaint', 'ai'],
+        enabled: Boolean(source) && !detectBusy,
+        run: () => void detectWatermarks()
+      },
+      {
+        id: 'view.settings',
+        title: t('palette.cmd.settings'),
+        group: t('palette.group.view'),
+        keywords: ['preferences', 'theme'],
+        enabled: true,
+        run: () => setPage('settings')
+      },
+      {
+        id: 'view.workspace',
+        title: t('palette.cmd.workspace'),
+        group: t('palette.group.view'),
+        enabled: page === 'settings',
+        run: () => setPage('home')
+      },
+      {
+        id: 'view.shortcuts',
+        title: t('palette.cmd.shortcuts'),
+        group: t('palette.group.view'),
+        enabled: true,
+        run: openShortcuts
+      },
+      {
+        id: 'view.fullscreen',
+        title: t('palette.cmd.fullscreen'),
+        group: t('palette.group.view'),
+        keywords: ['f11'],
+        enabled: true,
+        run: () => void window.clipforge.toggleWindowFullscreen()
+      }
+    ],
+    [busy, cropBusy, detectBusy, detectCrop, detectWatermarks, loadMedia, openShortcuts, page, resolveUrl, runExport, source, t]
+  )
+
   const installCard = (
     <InstallCard
       dependencies={dependencies}
@@ -2369,6 +2735,9 @@ export function App({ initialSettings }: Props): JSX.Element {
                         }
                       }}
                       crop={crop}
+                      frame={source ? { width: source.width, height: source.height } : null}
+                      onCropChange={setCrop}
+                      onWatermarkChange={changeWatermark}
                       onResetCrop={() => setCrop(null)}
                       onDetectCrop={() => void detectCrop()}
                       cropBusy={cropBusy}
@@ -2442,6 +2811,7 @@ export function App({ initialSettings }: Props): JSX.Element {
 
         <DropZone visible={dropping} />
         <ShortcutSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
         <FrameCompare preview={framePreview} onClose={() => setFramePreview(null)} />
       </div>
     </TooltipProvider>

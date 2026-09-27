@@ -30,6 +30,28 @@ export const AI_INPUT = 512
 export const AI_FEATHER = 2
 
 /**
+ * The other ramp width a fill is measured against when the first one comes out worse.
+ *
+ * Deliberately a much softer edge than `AI_FEATHER`: the two failures a fill has are being too
+ * soft and leaving a visible seam, and the way to trade one for the other is the feather - a
+ * wider ramp hides a step but blurs the join. Sampling both and keeping whichever measures
+ * better is what turns the numbers from a report into a decision.
+ */
+export const AI_FEATHER_ALTERNATE = 6
+
+/**
+ * The other of the two ramp widths: given one, the other that is worth comparing it against.
+ *
+ * Named so the choice reads in one place. A feather between the two goes to whichever it is
+ * nearer, so a caller that already picked a variant is not sent back to the one it rejected.
+ */
+export function alternateFeather(feather: number): number {
+  return Math.abs(feather - AI_FEATHER) < Math.abs(feather - AI_FEATHER_ALTERNATE)
+    ? AI_FEATHER_ALTERNATE
+    : AI_FEATHER
+}
+
+/**
  * How far the model's mask is grown past the marked box, in model pixels.
  *
  * Small on purpose: enough that the fill never has to match the mark's own edge, and
